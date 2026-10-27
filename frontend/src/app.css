@@ -105,3 +105,20 @@ kbd { padding: 3px 6px; border: 1px solid #2c455e; border-radius: 4px; color: #6
 .industry-scope { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font: 500 10px 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; }
 .industry-scope select { min-width: 180px; padding: 8px 28px 8px 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--soft); background: var(--panel); font: 600 12px Manrope, sans-serif; letter-spacing: normal; text-transform: none; }
 @media (max-width: 980px) { .industry-scope span { display: none; } .industry-scope select { min-width: 145px; } }
+
+.status-bar-spacer { height: 48px; }
+.status-bar { position: fixed; left: 252px; right: 0; bottom: 0; z-index: 15; display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 7px 22px; border-top: 1px solid var(--line); color: var(--soft); background: rgba(8, 17, 31, .96); font: 11px 'DM Mono', monospace; }
+.status-text { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-text strong { color: #eef3fb; font-weight: 500; }
+.status-detail { color: var(--muted); }
+.status-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }
+.status-spinner { width: 12px; height: 12px; flex: 0 0 auto; }
+.status-done .status-dot { background: var(--mint); }
+.status-done .status-message { color: var(--mint); }
+.status-error .status-dot { background: var(--rose); }
+.status-error .status-message { color: var(--rose); }
+.status-hint { flex: 0 1 auto; overflow: hidden; color: var(--amber); text-overflow: ellipsis; white-space: nowrap; }
+.status-elapsed { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.status-dismiss { flex: 0 0 auto; padding: 0 4px; border: 0; color: var(--muted); background: none; font-size: 15px; line-height: 1; cursor: pointer; }
+.status-dismiss:hover { color: #eef3fb; }
+@media (max-width: 800px) { .status-bar { left: 0; padding: 7px 16px; } .status-hint { display: none; } }

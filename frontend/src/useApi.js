@@ -27,5 +27,15 @@ export function useApi(loader, dependencies = [], options = {}) {
     return () => { active = false; };
   }, dependencies);
 
-  return { ...state, reload };
+  // Background refresh: keeps the current data visible and ignores failures.
+  const refresh = useCallback(async () => {
+    try {
+      const data = await loader();
+      setState({ data, loading: false, error: null });
+    } catch {
+      // Keep showing the last successful data.
+    }
+  }, dependencies);
+
+  return { ...state, reload, refresh };
 }

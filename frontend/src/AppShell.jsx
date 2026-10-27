@@ -47,7 +47,11 @@ export default function AppShell() {
   const allDomains = useMemo(() => flattenDomains(data?.domains || []), [data?.domains]);
   const selectedDomain = allDomains.find((domain) => domain.slug === selectedDomainSlug) || null;
 
-  function navigate(nextView) { setView(nextView); setMobileOpen(false); }
+  function navigate(nextView) {
+    setView(nextView); setMobileOpen(false);
+    // Domains and counts load once at startup; refresh them so newly published research appears without a page reload.
+    if (!nextView.startsWith("research")) bootstrap.refresh();
+  }
   function selectDomain(domain) { setSelectedDomainSlug(domain.slug); setSelectedLevel(null); navigate("domains"); }
   function selectMatrixCell(domain, level) { setSelectedDomainSlug(domain.slug); setSelectedLevel(level.slug); navigate("domains"); }
   function openCompetency(id) { setSelectedCompetencyId(id); navigate("competencies"); }

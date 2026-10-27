@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 export function Loading({ label = "Loading intelligence" }) {
   return <div className="loading-state" role="status"><span className="spinner" />{label}</div>;
 }
@@ -50,4 +52,37 @@ export function SourceList({ sources = [], compact = false }) {
 
 export function LevelChips({ levels, selected, onSelect }) {
   return <div className="level-chips" role="group" aria-label="Career level"><button className={!selected ? "active" : ""} onClick={() => onSelect?.(null)}>All levels</button>{levels.map((level) => <button key={level.id} className={selected === level.slug ? "active" : ""} onClick={() => onSelect?.(level.slug)}>{level.name}</button>)}</div>;
+}
+
+function formatElapsed(ms) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+// Fixed footer that reports the current long-running action, its elapsed time, and its outcome.
+export function StatusBar({ activity, idleText = "Ready", onDismiss }) {
+  const [now, setNow] = useState(() => Date.now());
+  const running = activity?.state === "running";
+  useEffect(() => {
+    if (!running) return undefined;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [running, activity?.startedAt]);
+
+  const state = activity?.state || "idle";
+  const elapsed = activity ? (running ? now : activity.finishedAt) - activity.startedAt : 0;
+  const slow = running && elapsed >= 30000;
+  return <>
+    <div className="status-bar-spacer" aria-hidden="true" />
+    <footer className={`status-bar status-${state}`}>
+      {running ? <span className="spinner status-spinner" aria-hidden="true" /> : <span className="status-dot" aria-hidden="true" />}
+      <span className="status-text" role="status" aria-live="polite">
+        {activity ? <><strong>{activity.label}</strong>{activity.detail && <span className="status-detail"> · {activity.detail}</span>}{activity.message && <span className="status-message"> · {activity.message}</span>}</> : idleText}
+      </span>
+      {slow && <span className="status-hint">Still waiting on the model. Large models can take a few minutes.</span>}
+      {activity && <span className="status-elapsed" aria-label="Elapsed time">{formatElapsed(elapsed)}</span>}
+      {activity && !running && onDismiss && <button type="button" className="status-dismiss" aria-label="Dismiss status" onClick={onDismiss}>×</button>}
+    </footer>
+  </>;
 }
