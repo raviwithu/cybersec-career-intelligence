@@ -233,6 +233,100 @@ class AutomatedResearchSource(Base):
     content_versions: Mapped[list["ResearchContentVersion"]] = relationship(back_populates="registry_source", cascade="all, delete-orphan")
 
 
+
+
+class JobSearch(Base):
+    __tablename__ = "automated_job_searches"
+    __table_args__ = (UniqueConstraint("name", name="uq_automated_job_searches_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    automated_source_id: Mapped[int] = mapped_column(ForeignKey("automated_research_sources.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(200), index=True)
+    provider_type: Mapped[str] = mapped_column(String(40), default="unconfigured")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
+    location: Mapped[str] = mapped_column(String(200), default="")
+    experience_level: Mapped[str] = mapped_column(String(80), default="")
+    date_posted: Mapped[str] = mapped_column(String(40), default="any")
+    employment_type: Mapped[str] = mapped_column(String(80), default="")
+    work_mode: Mapped[str] = mapped_column(String(40), default="")
+    max_results: Mapped[int] = mapped_column(Integer, default=100)
+    search_frequency: Mapped[str] = mapped_column(String(20), default="manual")
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=1440)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_status: Mapped[str] = mapped_column(String(30), default="never", index=True)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    configuration: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(String(120), default="administrator")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    automated_source: Mapped[AutomatedResearchSource] = relationship()
+    runs: Mapped[list["JobSearchRun"]] = relationship(back_populates="search", cascade="all, delete-orphan")
+    results: Mapped[list["JobSearchResult"]] = relationship(back_populates="search", cascade="all, delete-orphan")
+
+
+class JobSearchRun(Base):
+    __tablename__ = "automated_job_search_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    search_id: Mapped[int] = mapped_column(ForeignKey("automated_job_searches.id", ondelete="CASCADE"), index=True)
+    trigger: Mapped[str] = mapped_column(String(20), default="manual", index=True)
+    status: Mapped[str] = mapped_column(String(30), default="queued", index=True)
+    provider_status: Mapped[str] = mapped_column(String(40), default="unconfigured")
+    provider_total: Mapped[int | None] = mapped_column(Integer)
+    results_retrieved: Mapped[int] = mapped_column(Integer, default=0)
+    unique_results: Mapped[int] = mapped_column(Integer, default=0)
+    results_queued: Mapped[int] = mapped_column(Integer, default=0)
+    results_unavailable: Mapped[int] = mapped_column(Integer, default=0)
+    descriptions_retrieved: Mapped[int] = mapped_column(Integer, default=0)
+    successfully_analyzed: Mapped[int] = mapped_column(Integer, default=0)
+    duplicates_skipped: Mapped[int] = mapped_column(Integer, default=0)
+    manual_review_required: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
+    requested_result_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(120), default="scheduler")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+    search: Mapped[JobSearch] = relationship(back_populates="runs")
+    results: Mapped[list["JobSearchResult"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+
+
+class JobSearchResult(Base):
+    __tablename__ = "automated_job_search_results"
+    __table_args__ = (UniqueConstraint("run_id", "canonical_url", name="uq_job_search_result_run_url"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    search_id: Mapped[int] = mapped_column(ForeignKey("automated_job_searches.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("automated_job_search_runs.id", ondelete="CASCADE"), index=True)
+    external_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    canonical_url: Mapped[str] = mapped_column(String(1000), index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    location: Mapped[str] = mapped_column(String(300), default="")
+    snippet: Mapped[str] = mapped_column(Text, default="")
+    description_url: Mapped[str | None] = mapped_column(String(1000))
+    description_text: Mapped[str | None] = mapped_column(Text)
+    content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    content_version_id: Mapped[int | None] = mapped_column(ForeignKey("research_content_versions.id", ondelete="SET NULL"), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="queued", index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    manual_review_reason: Mapped[str | None] = mapped_column(Text)
+    duplicate_of_id: Mapped[int | None] = mapped_column(ForeignKey("automated_job_search_results.id", ondelete="SET NULL"))
+    metadata_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    search: Mapped[JobSearch] = relationship(back_populates="results")
+    run: Mapped[JobSearchRun] = relationship(back_populates="results")
+    content_version: Mapped["ResearchContentVersion | None"] = relationship()
+    duplicate_of: Mapped["JobSearchResult | None"] = relationship(remote_side=[id])
+
 class ResearchSchedule(Base):
     __tablename__ = "research_schedules"
     __table_args__ = (UniqueConstraint("source_id", name="uq_research_schedule_source"),)

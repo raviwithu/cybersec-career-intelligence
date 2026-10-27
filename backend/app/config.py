@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     research_lock_ttl_seconds: int = 900
     research_allowed_user_agent: str = "CyberSecCareerIntelligenceResearch/1.0"
     research_default_respect_robots: bool = True
+    linkedin_authorized_api_base_url: str | None = None
+    linkedin_authorized_api_key: str | None = None
+    licensed_job_provider_base_url: str | None = None
+    licensed_job_provider_api_key: str | None = None
+    employer_ats_api_base_url: str | None = None
+    employer_ats_api_key: str | None = None
+    job_search_retention_days: int = 90
 
     cors_origins: str = "http://localhost:3100,http://127.0.0.1:3100"
 

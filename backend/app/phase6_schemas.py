@@ -111,6 +111,167 @@ class RunStartRequest(BaseModel):
         return self
 
 
+JOB_PROVIDER_TYPES = Literal["linkedin_authorized", "licensed_api", "import", "employer_ats"]
+DATE_POSTED = Literal["24h", "week", "month", "any"]
+WORK_MODES = Literal["remote", "hybrid", "onsite", "any"]
+
+
+class JobSearchCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    provider_type: JOB_PROVIDER_TYPES = "import"
+    keywords: list[str] = Field(min_length=1, max_length=20)
+    location: str = Field(default="", max_length=200)
+    experience_level: str = Field(default="", max_length=80)
+    date_posted: DATE_POSTED = "any"
+    employment_type: str = Field(default="", max_length=80)
+    work_mode: WORK_MODES = "any"
+    max_results: int = Field(default=100, ge=1, le=500)
+    search_frequency: FREQUENCIES = "manual"
+    interval_minutes: int = Field(default=1440, ge=5, le=10080)
+    enabled: bool = True
+    configuration: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_search(self):
+        self.keywords = [keyword.strip() for keyword in self.keywords if keyword.strip()]
+        if not self.keywords:
+            raise ValueError("at least one non-empty job keyword is required")
+        reject_secrets(self.configuration)
+        if self.provider_type == "linkedin_authorized":
+            self.configuration.pop("endpoint_url", None)
+        return self
+
+
+class JobSearchUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    provider_type: JOB_PROVIDER_TYPES | None = None
+    keywords: list[str] | None = Field(default=None, min_length=1, max_length=20)
+    location: str | None = Field(default=None, max_length=200)
+    experience_level: str | None = Field(default=None, max_length=80)
+    date_posted: DATE_POSTED | None = None
+    employment_type: str | None = Field(default=None, max_length=80)
+    work_mode: WORK_MODES | None = None
+    max_results: int | None = Field(default=None, ge=1, le=500)
+    search_frequency: FREQUENCIES | None = None
+    interval_minutes: int | None = Field(default=None, ge=5, le=10080)
+    enabled: bool | None = None
+    configuration: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_search(self):
+        if self.keywords is not None:
+            self.keywords = [keyword.strip() for keyword in self.keywords if keyword.strip()]
+            if not self.keywords:
+                raise ValueError("at least one non-empty job keyword is required")
+        if self.configuration is not None:
+            reject_secrets(self.configuration)
+        return self
+
+
+class JobSearchScheduleRequest(BaseModel):
+    frequency: Literal["manual", "daily", "weekly"] = "daily"
+    enabled: bool = True
+
+
+class JobSearchRunRequest(BaseModel):
+    max_results: int | None = Field(default=None, ge=1, le=500)
+
+
+class JobSearchImportItem(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    url: str = Field(min_length=1, max_length=1000)
+    description_url: str | None = Field(default=None, max_length=1000)
+    description: str | None = Field(default=None, max_length=500_000)
+    snippet: str = Field(default="", max_length=20_000)
+    location: str = Field(default="", max_length=300)
+    external_id: str | None = Field(default=None, max_length=255)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_item(self):
+        self.url = validate_http_url(self.url)
+        if self.description_url:
+            self.description_url = validate_http_url(self.description_url)
+        reject_secrets(self.metadata)
+        return self
+
+
+class JobSearchImportRequest(BaseModel):
+    items: list[JobSearchImportItem] = Field(min_length=1, max_length=500)
+    provider_total: int | None = Field(default=None, ge=0)
+
+
+class JobSearchResponse(BaseModel):
+    id: int
+    name: str
+    provider_type: str
+    provider_status: str
+    enabled: bool
+    keywords: list[str]
+    location: str
+    experience_level: str
+    date_posted: str
+    employment_type: str
+    work_mode: str
+    max_results: int
+    search_frequency: str
+    next_run_at: datetime | None
+    last_run_at: datetime | None
+    last_status: str
+    last_error: str | None
+    configuration: dict[str, Any]
+
+
+class JobSearchRunResponse(BaseModel):
+    id: int
+    search_id: int
+    trigger: str
+    status: str
+    provider_status: str
+    provider_total: int | None
+    results_retrieved: int
+    unique_results: int
+    results_queued: int
+    results_unavailable: int
+    descriptions_retrieved: int
+    successfully_analyzed: int
+    duplicates_skipped: int
+    manual_review_required: int
+    failed: int
+    summary: dict[str, Any]
+    error_message: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_by: str
+    created_at: datetime
+
+
+class JobSearchResultResponse(BaseModel):
+    id: int
+    search_id: int
+    run_id: int
+    title: str
+    canonical_url: str
+    description_url: str | None
+    location: str
+    status: str
+    content_hash: str | None
+    attempt_count: int
+    error_message: str | None
+    manual_review_reason: str | None
+    metadata: dict[str, Any]
+    first_seen_at: datetime
+    processed_at: datetime | None
+
+
+class JobSearchProviderResponse(BaseModel):
+    provider_type: str
+    status: Literal["configured", "unconfigured", "unsupported"]
+    display_name: str
+    limitations: list[str]
+    configured: bool
+
+
 class AutomatedSourceResponse(BaseModel):
     id: int
     name: str

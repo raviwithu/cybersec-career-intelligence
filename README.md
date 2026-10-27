@@ -333,6 +333,10 @@ The template is [`.env.example`](.env.example). Compose supplies the container-l
 | `RESEARCH_LOCK_TTL_SECONDS` | `900` | Redis source lock lifetime. |
 | `RESEARCH_ALLOWED_USER_AGENT` | `CyberSecCareerIntelligenceResearch/1.0` | Collector User-Agent. |
 | `RESEARCH_DEFAULT_RESPECT_ROBOTS` | `true` | Default robots policy for approved sources. |
+| `LINKEDIN_AUTHORIZED_API_BASE_URL` / `LINKEDIN_AUTHORIZED_API_KEY` | Empty | Optional officially authorized LinkedIn provider; empty means unconfigured, not live. |
+| `LICENSED_JOB_PROVIDER_BASE_URL` / `LICENSED_JOB_PROVIDER_API_KEY` | Empty | Optional licensed job-data provider. |
+| `EMPLOYER_ATS_API_BASE_URL` / `EMPLOYER_ATS_API_KEY` | Empty | Optional documented employer or ATS endpoint. |
+| `JOB_SEARCH_RETENTION_DAYS` | `90` | Retention for temporary job-search runs and results. |
 
 `MAX_REQUEST_BYTES` is also supported by the backend and defaults to 1 MiB when not supplied. The Compose file currently relies on that application default. `DATABASE_URL` can override the assembled PostgreSQL URL for direct/local execution.
 
@@ -404,6 +408,16 @@ curl -H "X-Admin-API-Key: $ADMIN_API_KEY" http://localhost:8100/api/v1/research/
 Collection never accepts arbitrary credentials or private literal IP destinations. Each request revalidates DNS/IP safety, pins the connection to the approved address, bounds response bytes, limits redirects, honors robots policy by default, and retries only transient failures. Source snapshots are normalized and content-hashed before analysis; unchanged content is skipped. Automated AI output is marked untrusted, retains provider/model and source provenance, and is never published without administrator review.
 
 See [`docs/phase6-automated-research.md`](docs/phase6-automated-research.md) for source permissions, configuration, scheduler operations, change detection, API routes, coverage semantics, and known limitations.
+
+
+#### LinkedIn Job Search
+
+Automated Research also provides saved **LinkedIn Job Search** criteria for cybersecurity keywords, location, experience level, date posted, employment type, work mode, maximum results, and manual/daily/weekly schedules. Search results use a pluggable provider contract. Supported modes are an officially authorized LinkedIn integration, a licensed job-data provider, a documented employer/ATS endpoint, or permitted URL/export imports.
+
+The application does **not** use undocumented LinkedIn APIs, authentication bypass, CAPTCHA circumvention, or unauthorized scraping. If `LINKEDIN_AUTHORIZED_API_BASE_URL` and `LINKEDIN_AUTHORIZED_API_KEY` are not configured, the UI clearly reports LinkedIn as unconfigured and the import alternative remains available. It never claims live LinkedIn search in that state.
+
+Each run records provider-reported totals separately from retrieved, unique, queued, full descriptions retrieved, analyzed, duplicate, manual-review, and failed counts. Snippets are not treated as complete descriptions. Every accessible description is normalized, fingerprinted, classified across security domain × career level × industry using the selected AI provider, compared with existing knowledge, and sent to Research Review. Publication still requires administrator confirmation. Temporary results honor `JOB_SEARCH_RETENTION_DAYS`; saved criteria are retained.
+
 
 
 ## Local development

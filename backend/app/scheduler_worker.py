@@ -3,6 +3,7 @@ import time
 
 from .config import get_settings
 from .logging_config import configure_logging
+from .job_search_pipeline import run_due_job_searches
 from .phase6_pipeline import run_due_schedules
 
 configure_logging()
@@ -16,7 +17,7 @@ def main() -> None:
         return
     while True:
         try:
-            processed = run_due_schedules(settings)
+            processed = run_due_schedules(settings) + run_due_job_searches(settings)
             if processed:
                 logger.info("scheduled_research_runs_completed count=%d", processed)
         except Exception:

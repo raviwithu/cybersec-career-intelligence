@@ -76,6 +76,33 @@ All Phase 6 routes require `X-Admin-API-Key`:
 
 The OpenAPI document at `/docs` is authoritative for request and response schemas.
 
+## LinkedIn Job Search integration
+
+Automated Research includes **LinkedIn Job Search** saved criteria for keywords, location, experience level, date posted, employment type, work mode, maximum results, and daily/weekly/manual scheduling. Searches are stored as criteria and temporary processing records only; the feature does not create permanent job or company tracking.
+
+Provider modes are explicit:
+
+- `linkedin_authorized`: available only when an officially authorized integration is configured through `LINKEDIN_AUTHORIZED_API_BASE_URL` and `LINKEDIN_AUTHORIZED_API_KEY`. The application does not use undocumented LinkedIn APIs, authentication bypass, CAPTCHA circumvention, or scraping. Without both settings, the UI reports **unconfigured** and no live search is attempted.
+- `licensed_api`: a licensed job-data provider with a documented JSON search contract and credentials configured outside the database.
+- `employer_ats`: a configured public employer career page or supported ATS endpoint.
+- `import`: always available for permitted result URLs or exported result datasets. Search snippets are never treated as complete job descriptions.
+
+For a configured provider, pagination continues until the saved-search limit is reached or the provider has no next cursor. Each run records the provider-reported total separately from retrieved, unique, queued, description-retrieved, analyzed, duplicate, manual-review, and failed counts. Duplicate URLs/external IDs are removed before queueing; content fingerprints and the existing Phase 6 content-version system catch unchanged or cross-source content.
+
+Every unique result is processed individually. A complete description is fetched from the permitted detail URL or supplied dataset; short snippets are marked `manual_review_required`. Complete content is normalized, fingerprinted, passed through the selected Ollama/OpenWebUI model, classified against security domain × career level × industry, and sent through the existing Research Review proposal flow. No result automatically publishes knowledge.
+
+Job-search endpoints are administrator-authenticated under `/api/v1/research/automated/job-searches`. The UI provides saved searches, provider status, Search Jobs, Schedule Search, import, run history, actual progress counts, result URLs, failures, and retry of eligible results. Search executions use per-search locks and the existing scheduler. Temporary runs/results are retained for `JOB_SEARCH_RETENTION_DAYS` (default 90); saved criteria remain.
+
+Relevant environment settings:
+
+| Setting | Purpose |
+| --- | --- |
+| `LINKEDIN_AUTHORIZED_API_BASE_URL` / `LINKEDIN_AUTHORIZED_API_KEY` | Optional permitted LinkedIn integration; empty means unconfigured. |
+| `LICENSED_JOB_PROVIDER_BASE_URL` / `LICENSED_JOB_PROVIDER_API_KEY` | Optional licensed provider endpoint and credential. |
+| `EMPLOYER_ATS_API_BASE_URL` / `EMPLOYER_ATS_API_KEY` | Optional documented employer/ATS endpoint and credential. |
+| `JOB_SEARCH_RETENTION_DAYS` | Retention period for temporary search runs and results. |
+
+
 ## Coverage semantics
 
 Coverage is computed across industry × security domain × career level cells. It is evidence coverage, not a ranking of competency importance. A cell is:

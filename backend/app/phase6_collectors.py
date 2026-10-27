@@ -121,7 +121,7 @@ class SecureResearchFetcher:
         except (httpx.HTTPError, OSError, ValueError):
             return True
 
-    def fetch(self, url: str, *, accept: str, respect_robots: bool = True) -> tuple[bytes, str, int]:
+    def fetch(self, url: str, *, accept: str, respect_robots: bool = True, headers: dict[str, str] | None = None) -> tuple[bytes, str, int]:
         try:
             current_url = normalize_url(url)
         except (ValueError, UrlImportError) as exc:
@@ -137,7 +137,9 @@ class SecureResearchFetcher:
                 raise CollectionError("The source robots policy does not permit this request", retryable=False)
             try:
                 with self._client(addresses[0]) as client:
-                    with client.stream("GET", current_url, headers={"Accept": accept, "User-Agent": getattr(self.settings, "research_allowed_user_agent", "CyberSecCareerIntelligenceResearch/1.0")}) as response:
+                    request_headers = {"Accept": accept, "User-Agent": getattr(self.settings, "research_allowed_user_agent", "CyberSecCareerIntelligenceResearch/1.0")}
+                    request_headers.update(headers or {})
+                    with client.stream("GET", current_url, headers=request_headers) as response:
                         if response.status_code in {301, 302, 303, 307, 308}:
                             location = response.headers.get("location")
                             if not location or redirects >= self.settings.url_import_max_redirects:

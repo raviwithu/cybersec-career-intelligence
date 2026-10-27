@@ -87,7 +87,7 @@ def _filters(payload: RunStartRequest) -> dict[str, Any]:
 
 @router.get("/dashboard", response_model=AutomatedDashboardResponse, dependencies=[Depends(require_admin)])
 def dashboard(db: Session = Depends(get_db)) -> AutomatedDashboardResponse:
-    source_count = db.scalar(select(func.count()).select_from(AutomatedResearchSource).where(AutomatedResearchSource.enabled.is_(True))) or 0
+    source_count = db.scalar(select(func.count()).select_from(AutomatedResearchSource).where(AutomatedResearchSource.enabled.is_(True), AutomatedResearchSource.source_type != "job_search")) or 0
     run_rows = list(db.scalars(select(ResearchRun).order_by(ResearchRun.created_at.desc()).limit(10)).all())
     last_run = db.scalar(select(ResearchRun).order_by(ResearchRun.created_at.desc()))
     next_run = db.scalar(select(func.min(ResearchSchedule.next_run_at)).where(ResearchSchedule.enabled.is_(True), ResearchSchedule.paused.is_(False)))
@@ -122,7 +122,7 @@ def _event_response(db: Session, event: ResearchChangeEvent) -> dict[str, Any]:
 
 @router.get("/sources", response_model=list[AutomatedSourceResponse], dependencies=[Depends(require_admin)])
 def list_sources(db: Session = Depends(get_db)) -> list[AutomatedSourceResponse]:
-    return [_source_response(source) for source in db.scalars(select(AutomatedResearchSource).options(selectinload(AutomatedResearchSource.schedule)).order_by(AutomatedResearchSource.name)).all()]
+    return [_source_response(source) for source in db.scalars(select(AutomatedResearchSource).options(selectinload(AutomatedResearchSource.schedule)).where(AutomatedResearchSource.source_type != "job_search").order_by(AutomatedResearchSource.name)).all()]
 
 
 @router.post("/sources", response_model=AutomatedSourceResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_admin)])

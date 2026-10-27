@@ -92,7 +92,7 @@ def _source_matches(source: AutomatedResearchSource, filters: dict[str, Any]) ->
 
 
 def select_sources(db: Session, source_ids: list[int] | None, filters: dict[str, Any], *, due_only: bool = False) -> list[AutomatedResearchSource]:
-    query = select(AutomatedResearchSource).where(AutomatedResearchSource.enabled.is_(True)).order_by(AutomatedResearchSource.name)
+    query = select(AutomatedResearchSource).where(AutomatedResearchSource.enabled.is_(True), AutomatedResearchSource.source_type != "job_search").order_by(AutomatedResearchSource.name)
     if source_ids:
         query = query.where(AutomatedResearchSource.id.in_(source_ids))
     if due_only:
