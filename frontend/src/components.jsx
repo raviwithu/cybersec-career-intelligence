@@ -35,7 +35,7 @@ export function DomainTree({ domains, selectedSlug, onSelect, counts = {} }) {
 
 export function ExpectationCard({ expectation, onCompetency }) {
   return <article className="expectation-card">
-    <div className="card-topline"><Badge tone={expectation.importance === "essential" ? "mint" : "blue"}>{expectation.importance}</Badge><Badge>{expectation.proficiency_level}</Badge><span className="card-domain">{expectation.responsibility_type}</span></div>
+    <div className="card-topline"><Badge tone={expectation.importance === "essential" ? "mint" : "blue"}>{expectation.importance}</Badge><Badge>{expectation.proficiency_level}</Badge><Badge tone={expectation.industry ? "violet" : "neutral"}>{expectation.industry?.name || "Cross-industry"}</Badge><span className="card-domain">{expectation.responsibility_type}</span></div>
     <button className="text-link competency-link" onClick={() => onCompetency?.(expectation.competency.id)}>{expectation.competency.name}</button>
     <p>{expectation.expectation_description}</p>
     {(expectation.experience_years_min !== null || expectation.experience_years_max !== null) && <div className="experience-line"><span>Experience</span><strong>{expectation.experience_years_min ?? 0}{expectation.experience_years_max !== null ? `–${expectation.experience_years_max}` : "+"} years</strong></div>}

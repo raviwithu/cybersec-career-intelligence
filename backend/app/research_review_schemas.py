@@ -17,6 +17,9 @@ class ReviewModifyRequest(BaseModel):
     domain_ids: list[int] | None = Field(default=None, min_length=1, max_length=8)
     career_level_id: int | None = Field(default=None, ge=1)
     category_id: int | None = Field(default=None, ge=1)
+    industry_id: int | None = Field(default=None, ge=1)
+    industry_classification_status: Literal["classified", "unknown", "general"] | None = None
+    industry_classification_evidence: str | None = Field(default=None, max_length=2000)
     technical_knowledge: str | None = Field(default=None, max_length=4000)
     practical_capability: str | None = Field(default=None, max_length=4000)
     qualifications: str | None = Field(default=None, max_length=4000)
@@ -79,6 +82,10 @@ class ReviewFindingResponse(BaseModel):
     career_level: dict[str, Any] | None
     category: dict[str, Any] | None
     competency: dict[str, Any] | None
+    primary_industry: dict[str, Any] | None
+    secondary_industries: list[dict[str, Any]]
+    industry_classification_status: str
+    industry_classification_evidence: str
     existing_matches: list[dict[str, Any]]
     review_change: dict[str, Any] | None
 

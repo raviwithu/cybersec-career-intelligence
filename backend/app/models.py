@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -19,6 +19,41 @@ class CareerProfile(Base):
     skills: Mapped[list[str]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
+
+
+
+class Industry(Base):
+    __tablename__ = "industries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("industries.id", ondelete="SET NULL"), index=True)
+    name: Mapped[str] = mapped_column(String(180), unique=True)
+    slug: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    parent: Mapped["Industry | None"] = relationship(remote_side=[id], back_populates="children")
+    children: Mapped[list["Industry"]] = relationship(back_populates="parent")
+    aliases: Mapped[list["IndustryAlias"]] = relationship(back_populates="industry", cascade="all, delete-orphan")
+    expectations: Mapped[list["DomainLevelExpectation"]] = relationship(back_populates="industry")
+    findings: Mapped[list["ResearchFindingIndustry"]] = relationship(back_populates="industry")
+
+
+class IndustryAlias(Base):
+    __tablename__ = "industry_aliases"
+    __table_args__ = (UniqueConstraint("normalized_alias", name="uq_industry_alias_normalized"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    industry_id: Mapped[int] = mapped_column(ForeignKey("industries.id", ondelete="CASCADE"), index=True)
+    alias: Mapped[str] = mapped_column(String(180), index=True)
+    normalized_alias: Mapped[str] = mapped_column(String(180), index=True)
+    requires_context: Mapped[bool] = mapped_column(Boolean, default=False)
+    context_hint: Mapped[str | None] = mapped_column(String(255))
+
+    industry: Mapped[Industry] = relationship(back_populates="aliases")
 
 class SecurityDomain(Base):
     __tablename__ = "security_domains"
@@ -97,6 +132,7 @@ class DomainLevelExpectation(Base):
     domain_id: Mapped[int] = mapped_column(ForeignKey("security_domains.id"), index=True)
     career_level_id: Mapped[int] = mapped_column(ForeignKey("career_levels.id"), index=True)
     competency_id: Mapped[int] = mapped_column(ForeignKey("competencies.id"), index=True)
+    industry_id: Mapped[int | None] = mapped_column(ForeignKey("industries.id"), index=True)
     technical_knowledge: Mapped[str] = mapped_column(Text, default="")
     practical_capability: Mapped[str] = mapped_column(Text, default="")
     qualifications: Mapped[str] = mapped_column(Text, default="")
@@ -113,6 +149,7 @@ class DomainLevelExpectation(Base):
     domain: Mapped[SecurityDomain] = relationship(back_populates="expectations")
     career_level: Mapped[CareerLevel] = relationship(back_populates="expectations")
     competency: Mapped[Competency] = relationship(back_populates="expectations")
+    industry: Mapped[Industry | None] = relationship(back_populates="expectations")
     sources: Mapped[list["ExpectationSource"]] = relationship(back_populates="expectation", cascade="all, delete-orphan")
 
 
@@ -233,6 +270,9 @@ class ResearchFinding(Base):
     career_level_id: Mapped[int | None] = mapped_column(ForeignKey("career_levels.id"))
     category_id: Mapped[int | None] = mapped_column(ForeignKey("competency_categories.id"))
     competency_id: Mapped[int | None] = mapped_column(ForeignKey("competencies.id"))
+    primary_industry_id: Mapped[int | None] = mapped_column(ForeignKey("industries.id"), index=True)
+    industry_classification_status: Mapped[str] = mapped_column(String(30), default="unknown", index=True)
+    industry_classification_evidence: Mapped[str] = mapped_column(Text, default="")
     candidate_name: Mapped[str] = mapped_column(String(200))
     normalized_name: Mapped[str | None] = mapped_column(String(200))
     finding_type: Mapped[str] = mapped_column(String(60))
@@ -253,7 +293,22 @@ class ResearchFinding(Base):
     career_level: Mapped[CareerLevel | None] = relationship()
     category: Mapped[CompetencyCategory | None] = relationship()
     competency: Mapped[Competency | None] = relationship()
+    primary_industry: Mapped[Industry | None] = relationship(foreign_keys=[primary_industry_id])
     domains: Mapped[list["ResearchFindingDomain"]] = relationship(back_populates="finding", cascade="all, delete-orphan")
+    industries: Mapped[list["ResearchFindingIndustry"]] = relationship(back_populates="finding", cascade="all, delete-orphan")
+
+
+class ResearchFindingIndustry(Base):
+    __tablename__ = "research_finding_industries"
+    __table_args__ = (UniqueConstraint("finding_id", "industry_id", name="uq_research_finding_industry"),)
+
+    finding_id: Mapped[int] = mapped_column(ForeignKey("research_findings.id", ondelete="CASCADE"), primary_key=True)
+    industry_id: Mapped[int] = mapped_column(ForeignKey("industries.id", ondelete="CASCADE"), primary_key=True)
+    classification_role: Mapped[str] = mapped_column(String(20), default="secondary")
+    evidence_excerpt: Mapped[str] = mapped_column(Text, default="")
+
+    finding: Mapped[ResearchFinding] = relationship(back_populates="industries")
+    industry: Mapped[Industry] = relationship(back_populates="findings")
 
 
 class ResearchFindingDomain(Base):
@@ -274,6 +329,7 @@ class DraftExpectation(Base):
     domain_id: Mapped[int] = mapped_column(ForeignKey("security_domains.id"), index=True)
     career_level_id: Mapped[int] = mapped_column(ForeignKey("career_levels.id"), index=True)
     competency_id: Mapped[int] = mapped_column(ForeignKey("competencies.id"), index=True)
+    industry_id: Mapped[int | None] = mapped_column(ForeignKey("industries.id"), index=True)
     technical_knowledge: Mapped[str] = mapped_column(Text, default="")
     practical_capability: Mapped[str] = mapped_column(Text, default="")
     qualifications: Mapped[str] = mapped_column(Text, default="")
@@ -296,6 +352,7 @@ class DraftExpectation(Base):
     domain: Mapped[SecurityDomain] = relationship()
     career_level: Mapped[CareerLevel] = relationship()
     competency: Mapped[Competency] = relationship()
+    industry: Mapped[Industry | None] = relationship()
     evidence: Mapped[list["DraftEvidence"]] = relationship(back_populates="draft", cascade="all, delete-orphan")
     published_expectation: Mapped[DomainLevelExpectation | None] = relationship(foreign_keys=[published_expectation_id])
 

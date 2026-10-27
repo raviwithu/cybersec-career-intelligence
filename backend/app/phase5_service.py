@@ -21,8 +21,10 @@ from .models import (
     DraftEvidence,
     DraftExpectation,
     ExpectationSource,
+    Industry,
     ResearchFinding,
     ResearchFindingDomain,
+    ResearchFindingIndustry,
     ResearchSource,
     ResearchSubmission,
     SecurityDomain,
@@ -91,10 +93,12 @@ def taxonomy(db: Session) -> dict[str, list[dict]]:
     domains = list(db.scalars(select(SecurityDomain).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
     levels = list(db.scalars(select(CareerLevel).order_by(CareerLevel.display_order)).all())
     categories = list(db.scalars(select(CompetencyCategory).order_by(CompetencyCategory.name)).all())
+    industries = list(db.scalars(select(Industry).where(Industry.is_active.is_(True)).order_by(Industry.display_order, Industry.name)).all())
     return {
         "domains": [{"slug": item.slug, "name": item.name, "parent_id": item.parent_id} for item in domains],
         "career_levels": [{"slug": item.slug, "name": item.name, "track": item.career_track} for item in levels],
         "categories": [{"slug": item.slug, "name": item.name} for item in categories],
+        "industries": [{"slug": item.slug, "name": item.name, "description": item.description} for item in industries],
         "competencies": [{"slug": item.slug, "name": item.name, "category_slug": item.category.slug if item.category else None} for item in db.scalars(select(Competency).options(selectinload(Competency.category)).order_by(Competency.name)).all()],
     }
 
@@ -157,16 +161,32 @@ def category_for(requirement: ExtractedRequirement, categories: list[CompetencyC
     return lookup.get((requirement.category_slug or CATEGORY_FALLBACK).casefold()) or lookup.get(CATEGORY_FALLBACK)
 
 
+def classify_industries(requirement: ExtractedRequirement, industries: list[Industry]) -> tuple[Industry | None, list[Industry], str]:
+    lookup = {item.slug.casefold(): item for item in industries} | {item.name.casefold(): item for item in industries}
+    evidence = requirement.industry_classification_evidence.strip()
+    primary = next((lookup.get(value.casefold()) for value in requirement.industry_slugs if lookup.get(value.casefold())), None)
+    secondary: list[Industry] = []
+    for value in requirement.secondary_industry_slugs:
+        item = lookup.get(value.casefold())
+        if item is not None and item.id != (primary.id if primary else None) and item not in secondary:
+            secondary.append(item)
+    if primary is None or not evidence:
+        return None, [], "unknown"
+    return primary, secondary, "classified"
+
+
 def consolidate(db: Session, submission: ResearchSubmission, extraction: ExtractionResult, settings: Settings) -> None:
     domains = list(db.scalars(select(SecurityDomain)).all())
+    industries = list(db.scalars(select(Industry).where(Industry.is_active.is_(True))).all())
     levels = list(db.scalars(select(CareerLevel)).all())
     categories = list(db.scalars(select(CompetencyCategory)).all())
     competencies = list(db.scalars(select(Competency).options(selectinload(Competency.category))).all())
-    grouped: dict[tuple[int, int, int], list[tuple[ExtractedRequirement, Competency]]] = defaultdict(list)
+    grouped: dict[tuple[int, int, int, int | None], list[tuple[ExtractedRequirement, Competency]]] = defaultdict(list)
     category_lookup = {item.slug.casefold() for item in categories} | {item.name.casefold() for item in categories}
     for requirement in extraction.requirements:
         domain_candidates = classify_domains(requirement, domains)
         domain = domain_candidates[0] if domain_candidates else None
+        primary_industry, secondary_industries, industry_status = classify_industries(requirement, industries)
         level = classify_level(requirement, levels)
         category = category_for(requirement, categories)
         competency, normalized_name = normalize_competency(requirement.competency_name, competencies)
@@ -182,6 +202,9 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
         finding = ResearchFinding(
             submission_id=submission.id, domain_id=domain.id if domain else None, career_level_id=level.id if level else None,
             category_id=category.id if category else None, competency_id=competency.id if competency else None,
+            primary_industry_id=primary_industry.id if primary_industry else None,
+            industry_classification_status=industry_status,
+            industry_classification_evidence=requirement.industry_classification_evidence,
             candidate_name=requirement.competency_name, normalized_name=normalized_name, finding_type=requirement.finding_type,
             technical_knowledge=requirement.technical_knowledge, practical_capability=requirement.practical_capability,
             responsibilities=requirement.responsibilities, proficiency_level=requirement.proficiency_level,
@@ -193,6 +216,9 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
                 "qualifications": requirement.qualifications,
                 "tools_technologies": requirement.tools_technologies,
                 "domain_ids": [item.id for item in domain_candidates],
+                "industry_ids": [item.id for item in ([primary_industry] if primary_industry else []) + secondary_industries],
+                "industry_slugs": [item.slug for item in ([primary_industry] if primary_industry else []) + secondary_industries],
+                "industry_classification_evidence": requirement.industry_classification_evidence,
                 "classification_gaps": classification_gaps,
             },
         )
@@ -200,16 +226,21 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
         db.flush()
         for candidate in domain_candidates:
             db.add(ResearchFindingDomain(finding_id=finding.id, domain_id=candidate.id))
+        if primary_industry is not None:
+            db.add(ResearchFindingIndustry(finding_id=finding.id, industry_id=primary_industry.id, classification_role="primary", evidence_excerpt=requirement.industry_classification_evidence))
+        for secondary in secondary_industries:
+            db.add(ResearchFindingIndustry(finding_id=finding.id, industry_id=secondary.id, classification_role="secondary", evidence_excerpt=requirement.industry_classification_evidence))
         if level and competency:
             for candidate in domain_candidates:
-                grouped[(candidate.id, level.id, competency.id)].append((requirement, competency))
+                grouped[(candidate.id, level.id, competency.id, primary_industry.id if primary_industry else None)].append((requirement, competency))
     db.flush()
-    for (domain_id, level_id, competency_id), items in grouped.items():
+    for (domain_id, level_id, competency_id, industry_id), items in grouped.items():
         description = _consolidated_description(items)
         existing = db.scalar(select(DomainLevelExpectation).where(
             DomainLevelExpectation.domain_id == domain_id,
             DomainLevelExpectation.career_level_id == level_id,
             DomainLevelExpectation.competency_id == competency_id,
+            DomainLevelExpectation.industry_id == industry_id,
             DomainLevelExpectation.expectation_description == description,
         ))
         if existing is not None:
@@ -219,7 +250,8 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
             continue
         existing_draft = db.scalar(select(DraftExpectation).where(
             DraftExpectation.domain_id == domain_id, DraftExpectation.career_level_id == level_id,
-            DraftExpectation.competency_id == competency_id, DraftExpectation.expectation_description == description,
+            DraftExpectation.competency_id == competency_id, DraftExpectation.industry_id == industry_id,
+            DraftExpectation.expectation_description == description,
             DraftExpectation.status.in_(["draft", "approved", "published"]),
         ))
         if existing_draft is not None:
@@ -227,7 +259,7 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
                 db.add(DraftEvidence(draft_id=existing_draft.id, source_id=submission.source_id, supporting_excerpt=requirement.evidence_excerpt))
             continue
         draft = DraftExpectation(
-            submission_id=submission.id, domain_id=domain_id, career_level_id=level_id, competency_id=competency_id,
+            submission_id=submission.id, domain_id=domain_id, career_level_id=level_id, competency_id=competency_id, industry_id=industry_id,
             technical_knowledge=_merge_text(items, "technical_knowledge"),
             practical_capability=_merge_text(items, "practical_capability"),
             qualifications=_merge_text(items, "qualifications"),

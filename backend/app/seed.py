@@ -9,10 +9,28 @@ from .models import (
     Competency,
     CompetencyCategory,
     DomainLevelExpectation,
+    Industry,
+    IndustryAlias,
     SecurityDomain,
 )
 
 ILLUSTRATIVE_PREFIX = "Illustrative development seed; not verified market research. "
+
+INDUSTRY_SEED = [
+    ("automotive", "Automotive", "Vehicle platforms, connected mobility, and automotive product security.", 1, [("Connected Vehicles", False, None), ("Mobility", True, "Use Automotive when the source explicitly addresses vehicle or mobility systems.")]),
+    ("medical-devices-healthcare-technology", "Medical Devices and Healthcare Technology", "Medical devices, clinical technology, and healthcare platforms.", 2, [("Medical Devices", False, None), ("MedTech", False, None)]),
+    ("financial-services", "Financial Services", "Banking, payments, insurance, and financial technology.", 3, [("Banking", False, None), ("FinTech", False, None)]),
+    ("aerospace-defense", "Aerospace and Defense", "Aerospace systems, defense platforms, and mission-critical security.", 4, []),
+    ("industrial-automation-ot", "Industrial Automation and Operational Technology", "Industrial control, automation, ICS, and operational technology environments.", 5, [("Industrial Automation", False, None), ("OT", True, "Use this alias when the source explicitly concerns operational technology."), ("ICS", True, "Use this alias when the source explicitly concerns industrial control systems.")]),
+    ("consumer-electronics", "Consumer Electronics", "Consumer devices, home technology, and device ecosystems.", 6, []),
+    ("telecommunications", "Telecommunications", "Telecom networks, carrier infrastructure, and communications services.", 7, []),
+    ("enterprise-software-saas", "Enterprise Software and SaaS", "Enterprise applications, software products, and SaaS platforms.", 8, []),
+    ("cloud-infrastructure-services", "Cloud Infrastructure and Services", "Cloud platforms, hosted infrastructure, and managed services.", 9, []),
+    ("energy-utilities", "Energy and Utilities", "Energy generation, distribution, utilities, and grid technology.", 10, []),
+    ("government-public-sector", "Government and Public Sector", "Government services, public infrastructure, and civic technology.", 11, []),
+    ("general-cross-industry", "General / Cross-Industry", "Evidence-backed expectations applicable across industries.", 12, [("General", False, None), ("Cross-Industry", False, None)]),
+]
+
 
 DOMAIN_SEED = [
     ("web-application-security", "Web Application Security", "Application-layer security engineering and testing.", None, 1),
@@ -69,6 +87,22 @@ COMPETENCY_SEED = [
     ("cryptographic-key-management", "Cryptographic Key Management", "technical-knowledge", "Govern key generation, storage, rotation, use, and destruction."),
 ]
 
+def seed_industries(db: Session) -> dict[str, Industry]:
+    industries: dict[str, Industry] = {}
+    for slug, name, description, display_order, aliases in INDUSTRY_SEED:
+        industry = db.scalar(select(Industry).where(Industry.slug == slug))
+        if industry is None:
+            industry = Industry(slug=slug, name=name, description=description, display_order=display_order, is_active=True)
+            db.add(industry)
+            db.flush()
+        industries[slug] = industry
+        for alias, requires_context, context_hint in aliases:
+            normalized = alias.casefold().strip()
+            if db.scalar(select(IndustryAlias).where(IndustryAlias.normalized_alias == normalized)) is None:
+                db.add(IndustryAlias(industry_id=industry.id, alias=alias, normalized_alias=normalized, requires_context=requires_context, context_hint=context_hint))
+    return industries
+
+
 EXPECTATION_SEED = [
     (
         "boot-security",
@@ -111,6 +145,7 @@ def _domain(db: Session, slug: str) -> SecurityDomain:
 
 
 def seed_reference_data(db: Session) -> None:
+    seed_industries(db)
     domains = {}
     for slug, name, description, parent_id, display_order in DOMAIN_SEED:
         domain = _domain(db, slug)
