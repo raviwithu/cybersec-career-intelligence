@@ -47,12 +47,13 @@ export function fetchDomains() { return request("/api/v1/domains"); }
 export function fetchDomain(id) { return request(`/api/v1/domains/${id}`); }
 export function fetchLevels() { return request("/api/v1/levels"); }
 export function fetchCategories() { return request("/api/v1/categories"); }
+export function fetchIndustries() { return request("/api/v1/industries"); }
 export function fetchCompetencies(params = {}) { return request(`/api/v1/competencies${queryString(params)}`); }
-export function fetchCompetency(id) { return request(`/api/v1/competencies/${id}`); }
+export function fetchCompetency(id, params = {}) { return request(`/api/v1/competencies/${id}${queryString(params)}`); }
 export function fetchExpectations(params = {}) { return request(`/api/v1/expectations${queryString(params)}`); }
-export function fetchExpectation(id) { return request(`/api/v1/expectations/${id}`); }
-export function fetchCareerMatrix() { return request("/api/v1/career-matrix"); }
-export function fetchComparison(domain, levels) { return request(`/api/v1/compare${queryString({ domain, levels: levels.join(",") })}`); }
+export function fetchExpectation(id, params = {}) { return request(`/api/v1/expectations/${id}${queryString(params)}`); }
+export function fetchCareerMatrix(params = {}) { return request(`/api/v1/career-matrix${queryString(params)}`); }
+export function fetchComparison(domain, levels, params = {}) { return request(`/api/v1/compare${queryString({ domain, levels: levels.join(","), ...params })}`); }
 export function fetchSearch(params = {}) { return request(`/api/v1/search${queryString(params)}`); }
 export function fetchResearchSources(params = {}) { return request(`/api/v1/research-sources${queryString(params)}`); }
 

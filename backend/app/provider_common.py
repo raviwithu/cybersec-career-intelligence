@@ -56,11 +56,13 @@ def build_extraction_prompt(content: str, taxonomy: dict[str, list[dict[str, Any
     taxonomy_json = json.dumps(taxonomy, separators=(",", ":"))
     return f"""Extract cybersecurity requirements from the data between the markers.
 
-Available taxonomy JSON (use only these domain slugs, career level slugs, and category slugs):
+Available taxonomy JSON (use only these domain, industry, career-level, and category slugs):
 <TAXONOMY>{taxonomy_json}</TAXONOMY>
 
+Industry rules: classify an industry only when the research text explicitly supports it. Do not infer an industry solely from a technology such as CAN, Kubernetes, or cryptography. If evidence is insufficient, return empty industry arrays and explain the uncertainty in unclassified_notes. Use one primary industry at most, optional secondary industries, and quote or closely summarize the supporting evidence.
+
 Return JSON with this exact shape:
-{{"requirements":[{{"domain_slugs":[],"security_subdomains":[],"career_level":null,"competency_name":"","category_slug":null,"technical_knowledge":"","practical_capability":"","responsibilities":"","finding_type":"technical-skills","proficiency_level":"proficient","importance":"important","experience_years_min":null,"experience_years_max":null,"evidence_excerpt":"","confidence":0.0}}],"unclassified_notes":[]}}
+{{"requirements":[{{"domain_slugs":[],"security_subdomains":[],"industry_slugs":[],"secondary_industry_slugs":[],"industry_classification_evidence":"","career_level":null,"competency_name":"","category_slug":null,"technical_knowledge":"","practical_capability":"","responsibilities":"","finding_type":"technical-skills","proficiency_level":"proficient","importance":"important","experience_years_min":null,"experience_years_max":null,"evidence_excerpt":"","confidence":0.0}}],"unclassified_notes":[]}}
 
 <UNTRUSTED_RESEARCH_DATA>
 {content}

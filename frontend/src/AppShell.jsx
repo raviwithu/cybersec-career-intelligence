@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { createProfile, fetchCategories, fetchCareerMatrix, fetchCompetencies, fetchDomains, fetchExpectations, fetchHealth, fetchLevels, fetchProfiles } from "./api";
+import { createProfile, fetchCategories, fetchCareerMatrix, fetchCompetencies, fetchDomains, fetchExpectations, fetchHealth, fetchIndustries, fetchLevels, fetchProfiles } from "./api";
 import { Badge, ErrorState, Loading } from "./components";
 import { CompetenciesPage, ComparePage, DashboardPage, DomainsPage, MatrixPage, SearchPage } from "./pages";
 import ResearchAdminPage from "./ResearchAdminPage";
@@ -38,10 +38,11 @@ export default function AppShell() {
   const [view, setView] = useState("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [selectedDomainSlug, setSelectedDomainSlug] = useState("");
+  const [selectedIndustry, setSelectedIndustry] = useState("");
   const [selectedLevel, setSelectedLevel] = useState(null);
   const [compareLevels, setCompareLevels] = useState(["senior", "architect"]);
   const [selectedCompetencyId, setSelectedCompetencyId] = useState(null);
-  const bootstrap = useApi(() => Promise.all([fetchHealth(), fetchDomains(), fetchLevels(), fetchCategories(), fetchCareerMatrix(), fetchCompetencies({ page: 1, page_size: 1 }), fetchExpectations({ page: 1, page_size: 1 })]).then(([health, domains, levels, categories, matrix, competencies, expectations]) => ({ health, domains, levels, categories, matrix, competencies, expectations })), []);
+  const bootstrap = useApi(() => Promise.all([fetchHealth(), fetchDomains(), fetchLevels(), fetchCategories(), fetchIndustries(), fetchCareerMatrix(selectedIndustry ? { industry: selectedIndustry } : {}), fetchCompetencies({ page: 1, page_size: 1, ...(selectedIndustry ? { industry: selectedIndustry } : {}) }), fetchExpectations({ page: 1, page_size: 1, ...(selectedIndustry ? { industry: selectedIndustry } : {}) })]).then(([health, domains, levels, categories, industries, matrix, competencies, expectations]) => ({ health, domains, levels, categories, industries, matrix, competencies, expectations })), [selectedIndustry]);
   const data = bootstrap.data;
   const allDomains = useMemo(() => flattenDomains(data?.domains || []), [data?.domains]);
   const selectedDomain = allDomains.find((domain) => domain.slug === selectedDomainSlug) || null;
@@ -55,17 +56,18 @@ export default function AppShell() {
   if (bootstrap.error && !data) return <div className="app-loading"><ErrorState error={bootstrap.error} onRetry={bootstrap.reload} /></div>;
 
   const content = view === "dashboard" ? <DashboardPage domains={data.domains} levels={data.levels} matrix={data.matrix} competencyTotal={data.competencies.meta.total} expectationTotal={data.expectations.meta.total} onNavigate={navigate} />
-    : view === "domains" ? <DomainsPage domains={data.domains} levels={data.levels} categories={data.categories} matrix={data.matrix} selectedDomain={selectedDomain} selectedLevel={selectedLevel} onSelectDomain={selectDomain} onSelectLevel={setSelectedLevel} onCompetency={openCompetency} />
+    : view === "domains" ? <DomainsPage domains={data.domains} levels={data.levels} categories={data.categories} matrix={data.matrix} selectedDomain={selectedDomain} selectedLevel={selectedLevel} selectedIndustry={selectedIndustry} onSelectDomain={selectDomain} onSelectLevel={setSelectedLevel} onCompetency={openCompetency} />
       : view === "matrix" ? <MatrixPage matrix={data.matrix} domains={data.domains} levels={data.levels} onCell={selectMatrixCell} />
-        : view === "compare" ? <ComparePage domains={allDomains} levels={data.levels} selectedDomain={selectedDomain || allDomains[0]} compareLevels={compareLevels} onDomainChange={(domain) => setSelectedDomainSlug(domain.slug)} onLevelsChange={setCompareLevels} onCompetency={openCompetency} />
-          : view === "competencies" ? <CompetenciesPage domains={data.domains} levels={data.levels} categories={data.categories} selectedCompetencyId={selectedCompetencyId} onSelectCompetency={setSelectedCompetencyId} />
-            : view === "search" ? <SearchPage domains={data.domains} levels={data.levels} onCompetency={openCompetency} onDomain={openDomain} />
+        : view === "compare" ? <ComparePage domains={allDomains} levels={data.levels} selectedDomain={selectedDomain || allDomains[0]} selectedIndustry={selectedIndustry} compareLevels={compareLevels} onDomainChange={(domain) => setSelectedDomainSlug(domain.slug)} onLevelsChange={setCompareLevels} onCompetency={openCompetency} />
+          : view === "competencies" ? <CompetenciesPage domains={data.domains} levels={data.levels} categories={data.categories} selectedIndustry={selectedIndustry} selectedCompetencyId={selectedCompetencyId} onSelectCompetency={setSelectedCompetencyId} />
+            : view === "search" ? <SearchPage domains={data.domains} levels={data.levels} selectedIndustry={selectedIndustry} onCompetency={openCompetency} onDomain={openDomain} />
             : view === "research" ? <ResearchAdminPage />
               : view === "research-review" ? <ResearchReviewPage />
                 : <ProfilePage />;
   return <div className="app-frame">
     <aside className={`sidebar ${mobileOpen ? "open" : ""}`}><div className="brand"><div className="brand-mark">C<span>·</span></div><div><strong>CyberSec</strong><small>Career Intelligence</small></div></div><div className="sidebar-section"><span className="sidebar-label">WORKSPACE</span><nav>{navigation.map((item) => <button className={view === item.id ? "active" : ""} key={item.id} onClick={() => navigate(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav></div><div className="sidebar-footer"><button className={`profile-nav ${view === "profile" ? "active" : ""}`} onClick={() => navigate("profile")}><span className="avatar">CI</span><span><strong>My profile</strong><small>Phase 1 baseline</small></span><span>→</span></button><div className="version-label">KNOWLEDGE BASE · PHASE 4</div></div></aside>
     {mobileOpen && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
-    <main className="main-content"><header className="topbar"><button className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileOpen(true)}>☰</button><div className="breadcrumbs"><span>Research workspace</span><b>/</b><strong>{navigation.find((item) => item.id === view)?.label || "Profile"}</strong></div><div className="topbar-actions"><button className="topbar-search" onClick={() => navigate("search")}><span>⌕</span> Search the knowledge base <kbd>⌘ K</kbd></button><div className={`health-indicator ${data.health?.status === "healthy" ? "healthy" : "degraded"}`}><i />{data.health?.status === "healthy" ? "Systems healthy" : "Systems degraded"}</div></div></header><div className="page-content">{content}</div></main>
+    <main className="main-content"><header className="topbar"><button className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileOpen(true)}>☰</button><div className="breadcrumbs"><span>Research workspace</span><b>/</b><strong>{navigation.find((item) => item.id === view)?.label || "Profile"}</strong></div><div className="topbar-actions"><label className="industry-scope"><span>Industry scope</span><select aria-label="Industry scope" value={selectedIndustry} onChange={(event) => setSelectedIndustry(event.target.value)}><option value="">All industries</option>{(Array.isArray(data.industries) ? data.industries : []).map((industry) => <option value={industry.slug} key={industry.id}>{industry.name}</option>)}</select></label><button className="topbar-search" onClick={() => navigate("search")}><span>⌕</span> Search the knowledge base <kbd>⌘ K</kbd></button><div className={`health-indicator ${data.health?.status === "healthy" ? "healthy" : "degraded"}`}><i />{data.health?.status === "healthy" ? "Systems healthy" : "Systems degraded"}</div></div>
+</header><div className="page-content">{content}</div></main>
   </div>;
 }

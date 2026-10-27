@@ -45,16 +45,16 @@ export function DashboardPage({ domains, levels, matrix, competencyTotal, expect
   </>;
 }
 
-export function DomainsPage({ domains, levels, categories, matrix, selectedDomain, selectedLevel, onSelectDomain, onSelectLevel, onCompetency }) {
+export function DomainsPage({ domains, levels, categories, matrix, selectedDomain, selectedLevel, selectedIndustry, onSelectDomain, onSelectLevel, onCompetency }) {
   const [activeCategory, setActiveCategory] = useState("all");
   const counts = useMemo(() => domainCounts(matrix, domains), [matrix, domains]);
   const domainSlug = selectedDomain?.slug;
   const { data, loading, error, reload } = useApi(
     () => selectedDomain ? Promise.all([
-      fetchExpectations({ domain: domainSlug, ...(selectedLevel ? { level: selectedLevel } : {}), page_size: 100 }),
-      fetchCompetencies({ domain: domainSlug, ...(selectedLevel ? { level: selectedLevel } : {}), page_size: 100 }),
+      fetchExpectations({ domain: domainSlug, ...(selectedLevel ? { level: selectedLevel } : {}), ...(selectedIndustry ? { industry: selectedIndustry } : {}), page_size: 100 }),
+      fetchCompetencies({ domain: domainSlug, ...(selectedLevel ? { level: selectedLevel } : {}), ...(selectedIndustry ? { industry: selectedIndustry } : {}), page_size: 100 }),
     ]).then(([expectations, competencies]) => ({ expectations, competencies })) : Promise.resolve(null),
-    [domainSlug, selectedLevel],
+    [domainSlug, selectedLevel, selectedIndustry],
     { immediate: Boolean(selectedDomain) },
   );
   const expectations = data?.expectations?.items || [];
@@ -92,9 +92,9 @@ function ComparisonGroup({ title, items, levelName, onCompetency }) {
   return <section className="comparison-section"><div className="section-title-row"><h2>{title}</h2><Badge>{items.length}</Badge></div>{items.length === 0 ? <EmptyState title={`No ${title.toLowerCase()} found`} message="The API returned no records for this comparison." /> : <div className="comparison-grid">{items.map((item) => <article className="comparison-card" key={item.competency.id}><button className="text-link" onClick={() => onCompetency(item.competency.id)}>{item.competency.name}</button><Badge tone="violet">{item.competency.category.name}</Badge><p>{item.competency.description}</p>{levelName && item.expectations_by_level[levelName]?.map((expectation) => <div className="difference-line" key={expectation.id}><strong>{expectation.proficiency_level}</strong><span>{expectation.expectation_description}</span></div>)}</article>)}</div>}</section>;
 }
 
-export function ComparePage({ domains, levels, selectedDomain, compareLevels, onDomainChange, onLevelsChange, onCompetency }) {
+export function ComparePage({ domains, levels, selectedDomain, selectedIndustry, compareLevels, onDomainChange, onLevelsChange, onCompetency }) {
   const canCompare = selectedDomain && compareLevels.length === 2 && compareLevels[0] !== compareLevels[1];
-  const { data, loading, error, reload } = useApi(() => fetchComparison(selectedDomain?.slug, compareLevels), [selectedDomain?.slug, ...compareLevels], { immediate: canCompare });
+  const { data, loading, error, reload } = useApi(() => fetchComparison(selectedDomain?.slug, compareLevels, selectedIndustry ? { industry: selectedIndustry } : {}), [selectedDomain?.slug, selectedIndustry, ...compareLevels], { immediate: canCompare });
   const levelNames = data?.levels?.map((item) => item.level.slug) || compareLevels;
   return <><PageHeader eyebrow="CAREER COMPARISON" title="Make progression visible" description="Compare the expectations that change as responsibility, proficiency, and technical depth increase within one domain." />
     <div className="compare-controls panel"><label>Security domain<select value={selectedDomain?.slug || ""} onChange={(event) => onDomainChange(domains.find((domain) => domain.slug === event.target.value))}>{domains.map((domain) => <option value={domain.slug} key={domain.id}>{domain.name}</option>)}</select></label><div><span className="filter-label">Compare levels</span><div className="compare-selects"><select value={compareLevels[0] || ""} onChange={(event) => onLevelsChange([event.target.value, compareLevels[1]])}>{levels.map((level) => <option value={level.slug} key={level.id}>{level.name}</option>)}</select><span>vs</span><select value={compareLevels[1] || ""} onChange={(event) => onLevelsChange([compareLevels[0], event.target.value])}>{levels.map((level) => <option value={level.slug} key={level.id}>{level.name}</option>)}</select></div></div></div>
@@ -103,13 +103,13 @@ export function ComparePage({ domains, levels, selectedDomain, compareLevels, on
   </>;
 }
 
-export function CompetenciesPage({ domains, levels, categories, selectedCompetencyId, onSelectCompetency }) {
+export function CompetenciesPage({ domains, levels, categories, selectedIndustry, selectedCompetencyId, onSelectCompetency }) {
   const [filters, setFilters] = useState({ search: "", domain: "", level: "", category: "" });
-  const params = { page: 1, page_size: 100, ...filters };
-  const { data, loading, error, reload } = useApi(() => fetchCompetencies(params), [filters.search, filters.domain, filters.level, filters.category]);
-  const detailState = useApi(() => selectedCompetencyId ? fetchCompetency(selectedCompetencyId) : Promise.resolve(null), [selectedCompetencyId], { immediate: Boolean(selectedCompetencyId) });
+  const params = { page: 1, page_size: 100, ...filters, ...(selectedIndustry ? { industry: selectedIndustry } : {}) };
+  const { data, loading, error, reload } = useApi(() => fetchCompetencies(params), [filters.search, filters.domain, filters.level, filters.category, selectedIndustry]);
+  const detailState = useApi(() => selectedCompetencyId ? fetchCompetency(selectedCompetencyId, selectedIndustry ? { industry: selectedIndustry } : {}) : Promise.resolve(null), [selectedCompetencyId, selectedIndustry], { immediate: Boolean(selectedCompetencyId) });
   const expectationIds = detailState.data?.expectations?.map((expectation) => expectation.id).join(",") || "";
-  const expectationDetails = useApi(() => expectationIds ? Promise.all(detailState.data.expectations.map((expectation) => fetchExpectation(expectation.id))) : Promise.resolve([]), [expectationIds], { immediate: Boolean(expectationIds) });
+  const expectationDetails = useApi(() => expectationIds ? Promise.all(detailState.data.expectations.map((expectation) => fetchExpectation(expectation.id, selectedIndustry ? { industry: selectedIndustry } : {}))) : Promise.resolve([]), [expectationIds, selectedIndustry], { immediate: Boolean(expectationIds) });
   function update(key, value) { setFilters((current) => ({ ...current, [key]: value })); }
   return <><PageHeader eyebrow="COMPETENCY EXPLORER" title="Browse the building blocks" description="Search reusable competencies and inspect where they appear across the taxonomy and career ladder." />
     <div className="filter-bar competency-filters"><label>Search competencies<input value={filters.search} onChange={(event) => update("search", event.target.value)} placeholder="Try secure boot, incident response…" /></label><label>Domain<select value={filters.domain} onChange={(event) => update("domain", event.target.value)}><option value="">All domains</option>{domains.flatMap((domain) => [domain, ...(domain.children || [])]).map((domain) => <option value={domain.slug} key={domain.id}>{domain.name}</option>)}</select></label><label>Level<select value={filters.level} onChange={(event) => update("level", event.target.value)}><option value="">All levels</option>{levels.map((level) => <option value={level.slug} key={level.id}>{level.name}</option>)}</select></label><label>Category<select value={filters.category} onChange={(event) => update("category", event.target.value)}><option value="">All categories</option>{categories.map((category) => <option value={category.slug} key={category.id}>{category.name}</option>)}</select></label></div>
@@ -121,12 +121,12 @@ function CompetencyDetail({ detail, expectationDetails }) {
   return <div className="detail-content"><div className="card-topline"><Badge tone="violet">{detail.category.name}</Badge><span className="mono-label">{detail.slug}</span></div><h2>{detail.name}</h2><p>{detail.description}</p><div className="detail-block"><span className="filter-label">ASSOCIATED DOMAINS</span><div className="tag-list">{detail.domains.map((domain) => <Badge key={domain.id} tone="blue">{domain.name}</Badge>)}</div></div><div className="detail-block"><span className="filter-label">CAREER LEVELS</span><div className="tag-list">{detail.career_levels.map((level) => <Badge key={level.id}>{level.name}</Badge>)}</div></div><div className="detail-block"><span className="filter-label">RELATED COMPETENCIES</span>{detail.related_competencies.length ? detail.related_competencies.map((relation) => <div className="related-row" key={relation.id}><span>{relation.competency_name}</span><Badge>{relation.relationship_type}</Badge></div>) : <p className="muted-copy">No related competencies have been recorded.</p>}</div><div className="detail-block"><span className="filter-label">EXPECTATIONS</span>{detail.expectations.map((expectation) => { const fullExpectation = expectationDetails.find((item) => item.id === expectation.id); return <div className="mini-expectation" key={expectation.id}><div><strong>{expectation.career_level.name}</strong><Badge tone="mint">{expectation.proficiency_level}</Badge></div><p>{expectation.expectation_description}</p><span>{expectation.responsibility_type} · {expectation.domain.name}</span>{fullExpectation?.supporting_sources?.length > 0 && <SourceList sources={fullExpectation.supporting_sources} compact />}</div>; })}</div></div>;
 }
 
-export function SearchPage({ domains, levels, onCompetency, onDomain }) {
+export function SearchPage({ domains, levels, selectedIndustry, onCompetency, onDomain }) {
   const [keyword, setKeyword] = useState("");
   const [submitted, setSubmitted] = useState("");
   const [domain, setDomain] = useState("");
   const [level, setLevel] = useState("");
-  const { data, loading, error, reload } = useApi(() => fetchSearch({ keyword: submitted, domain, level, page: 1, page_size: 50 }), [submitted, domain, level], { immediate: Boolean(submitted) });
+  const { data, loading, error, reload } = useApi(() => fetchSearch({ keyword: submitted, domain, level, ...(selectedIndustry ? { industry: selectedIndustry } : {}), page: 1, page_size: 50 }), [submitted, domain, level, selectedIndustry], { immediate: Boolean(submitted) });
   function submit(event) { event.preventDefault(); setSubmitted(keyword.trim()); }
   return <><PageHeader eyebrow="GLOBAL SEARCH" title="Find a signal across the knowledge base" description="Search domains, reusable competencies, and consolidated expectations. Results are returned by the FastAPI search endpoint." /><form className="search-form" onSubmit={submit}><input aria-label="Global search" value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Search secure boot, risk management, architecture…" /><button className="button" type="submit" aria-label="Submit search">Search <span>⌕</span></button></form><div className="search-filters"><select aria-label="Search domain" value={domain} onChange={(event) => setDomain(event.target.value)}><option value="">All domains</option>{domains.flatMap((item) => [item, ...(item.children || [])]).map((item) => <option key={item.id} value={item.slug}>{item.name}</option>)}</select><select aria-label="Search level" value={level} onChange={(event) => setLevel(event.target.value)}><option value="">All levels</option>{levels.map((item) => <option key={item.id} value={item.slug}>{item.name}</option>)}</select></div>{submitted && loading && <Loading label="Searching the knowledge base" />}{submitted && error && <ErrorState error={error} onRetry={reload} />}{submitted && !loading && !error && <section className="search-results"><div className="result-heading"><span>{data?.meta?.total || 0} results for <strong>“{submitted}”</strong></span></div>{data?.items?.length ? data.items.map((result) => <button className="search-result" key={`${result.result_type}-${result.id}`} onClick={() => result.result_type === "competency" ? onCompetency(result.competency_id || result.id) : result.domain ? onDomain(result.domain.slug) : null}><div className="result-type">{result.result_type}</div><div><strong>{result.name}</strong><p>{result.description}</p><span>{result.domain?.name || "Knowledge base"}{result.career_level ? ` · ${result.career_level.name}` : ""}</span></div><span className="result-arrow">→</span></button>) : <EmptyState title="No matching records" message="Try a broader keyword or remove a filter." />}</section>}{!submitted && <EmptyState title="Search when you are ready" message="Use the search field to explore domains, competencies, and expectations." />}</>;
 }
