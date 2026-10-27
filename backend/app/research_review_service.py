@@ -350,6 +350,8 @@ def _record(change: ReviewChange, action: str, actor: str, before: dict[str, Any
 def accept_change(db: Session, change_id: int, expected_version: int, actor: str, note: str | None) -> ReviewChange:
     change = _require_change(db, change_id)
     _check_version(change, expected_version)
+    if change.status in APPROVED_STATUSES:
+        raise HTTPException(status_code=409, detail=f"Review change is already {change.status}")
     proposed = deepcopy(change.proposed_snapshot)
     _validate_snapshot(db, proposed)
     change.status = "accepted"

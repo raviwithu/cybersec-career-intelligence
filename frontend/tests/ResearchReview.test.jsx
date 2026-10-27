@@ -53,6 +53,19 @@ describe("Research Review", () => {
     await waitFor(() => expect(global.fetch.mock.calls.some(([url, options]) => url.endsWith("/review/publish") && options.method === "POST")).toBe(true));
   });
 
+  it("opens the edit form and saves a reviewed proposal", async () => {
+    render(<ResearchReviewPage />);
+    fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open review workspace" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Firmware role brief/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Firmware role brief/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Edit decision" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Edit decision" }));
+    expect(screen.getByText("Review structured knowledge")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save reviewed proposal" }));
+    await waitFor(() => expect(global.fetch.mock.calls.some(([url, options]) => url.endsWith("/review/changes/41") && options.method === "PATCH")).toBe(true));
+  });
+
   it("reuses the administrator key within the browser session", async () => {
     sessionStorage.setItem("cybersec-career-intelligence.admin-api-key", "test-admin-key");
     render(<ResearchReviewPage />);
