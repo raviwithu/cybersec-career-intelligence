@@ -44,6 +44,12 @@ class SubmissionCreate(BaseModel):
     research_date: datetime | None = None
     source_type: Literal["pasted_text", "url_imported"] = "pasted_text"
 
+    @field_validator("source_title", "source_url", "research_date", mode="before")
+    @classmethod
+    def blank_as_none(cls, value):
+        # HTML forms send "" for untouched optional fields.
+        return None if isinstance(value, str) and not value.strip() else value
+
 
 class UrlImportRequest(BaseModel):
     url: str = Field(min_length=1, max_length=1000)

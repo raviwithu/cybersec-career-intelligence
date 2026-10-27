@@ -116,7 +116,8 @@ def create_submission(db: Session, *, content: str, source_title: str | None, so
     if len(content.encode("utf-8")) > settings.max_research_bytes:
         raise HTTPException(status_code=413, detail="research input exceeds the configured size limit")
     digest = content_digest(content)
-    if db.scalar(select(ResearchSubmission).where(ResearchSubmission.content_sha256 == digest)):
+    # Failed analyses stay in history but must not block a retry of the same content.
+    if db.scalar(select(ResearchSubmission).where(ResearchSubmission.content_sha256 == digest, ResearchSubmission.status != "failed")):
         raise HTTPException(status_code=409, detail="This research input has already been submitted")
     source = ResearchSource(
         source_type=source_type,

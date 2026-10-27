@@ -67,6 +67,16 @@ def test_openwebui_authentication_and_unavailability_are_provider_specific():
         unavailable.list_models()
 
 
+def test_openwebui_errors_include_provider_detail_and_name_missing_models():
+    missing = OpenWebUIClient(provider_settings(), httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(400, json={"detail": "Model not found"}))))
+    with pytest.raises(ProviderError, match="Model 'retired-model' is no longer available in OpenWebUI"):
+        missing.extract("research", {"domains": []}, model="retired-model")
+
+    rejected = OpenWebUIClient(provider_settings(), httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(400, json={"error": {"message": "context length exceeded"}}))))
+    with pytest.raises(ProviderError, match="HTTP 400: context length exceeded"):
+        rejected.test_model("custom-model")
+
+
 def test_combined_discovery_keeps_providers_and_marks_possible_duplicates():
     settings = provider_settings()
     ollama = OllamaClient(settings, httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"models": [{"name": "qwen2.5-coder:32b"}]}))))

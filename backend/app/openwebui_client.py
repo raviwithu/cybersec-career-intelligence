@@ -42,10 +42,25 @@ class OpenWebUIClient:
         if not self.base_url:
             raise ProviderError(self.provider, "OpenWebUI is not configured; set OPENWEBUI_BASE_URL")
 
-    def _request_error(self, response: httpx.Response) -> ProviderError:
+    @staticmethod
+    def _response_detail(response: httpx.Response) -> str | None:
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        detail = payload.get("detail") or payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(detail, dict):
+            detail = detail.get("message")
+        return " ".join(detail.split())[:200] if isinstance(detail, str) and detail.strip() else None
+
+    def _request_error(self, response: httpx.Response, model_id: str | None = None) -> ProviderError:
         if response.status_code in {401, 403}:
             return ProviderError(self.provider, "OpenWebUI authentication failed; check OPENWEBUI_API_KEY")
-        return ProviderError(self.provider, f"OpenWebUI request failed with HTTP {response.status_code}")
+        detail = self._response_detail(response)
+        if model_id and detail and "model not found" in detail.lower():
+            return ProviderError(self.provider, f"Model '{model_id}' is no longer available in OpenWebUI; select another model")
+        message = f"OpenWebUI request failed with HTTP {response.status_code}"
+        return ProviderError(self.provider, f"{message}: {detail}" if detail else message)
 
     def list_model_records(self) -> list[AIModel]:
         self._ensure_configured()
@@ -103,7 +118,7 @@ class OpenWebUIClient:
                 json={"model": model_id, "messages": messages, "stream": False},
             )
             if response.status_code >= 400:
-                raise self._request_error(response)
+                raise self._request_error(response, model_id)
             payload = response.json()
         except ProviderError:
             raise
