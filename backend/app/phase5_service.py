@@ -95,7 +95,7 @@ def taxonomy(db: Session) -> dict[str, list[dict]]:
     categories = list(db.scalars(select(CompetencyCategory).order_by(CompetencyCategory.name)).all())
     industries = list(db.scalars(select(Industry).where(Industry.is_active.is_(True)).order_by(Industry.display_order, Industry.name)).all())
     return {
-        "domains": [{"slug": item.slug, "name": item.name, "parent_id": item.parent_id} for item in domains],
+        "domains": [{"slug": item.slug, "name": item.name, "description": item.description, "parent_id": item.parent_id} for item in domains],
         "career_levels": [{"slug": item.slug, "name": item.name, "track": item.career_track} for item in levels],
         "categories": [{"slug": item.slug, "name": item.name} for item in categories],
         "industries": [{"slug": item.slug, "name": item.name, "description": item.description} for item in industries],

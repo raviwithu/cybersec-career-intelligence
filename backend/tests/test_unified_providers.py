@@ -153,3 +153,18 @@ def test_unified_selection_persists_provider_and_model(client, monkeypatch):
         assert selection.selected_model == "remote-model"
         db.delete(selection)
         db.commit()
+
+
+def test_extraction_prompt_requests_qualifications_and_tools():
+    from app.provider_common import build_extraction_prompt, parse_extraction
+
+    prompt = build_extraction_prompt("Requires CISSP and Splunk.", {"domains": []})
+    assert '"qualifications":""' in prompt
+    assert '"tools_technologies":""' in prompt
+
+    result = parse_extraction(json.dumps({"requirements": [{
+        "competency_name": "Detection engineering", "evidence_excerpt": "Requires CISSP and Splunk.",
+        "qualifications": ["CISSP"], "tools_technologies": ["Splunk", "Sentinel"],
+    }]}))
+    assert result.requirements[0].qualifications == "CISSP"
+    assert result.requirements[0].tools_technologies == "Splunk, Sentinel"

@@ -10,7 +10,7 @@ It is **not** a job board, job tracker, job aggregator, applicant-tracking syste
 
 ### Knowledge base and exploration
 
-- Hierarchical cybersecurity competency taxonomy with five top-level domains and embedded-security subdomains.
+- Hierarchical cybersecurity competency taxonomy with eight top-level domains (including governance, risk, and compliance; identity and access management; and security operations) and embedded-security subdomains.
 - Six seeded career levels with explicit shared, technical, and management tracks.
 - Reusable competency definitions, categories, relationships, and domain/level expectations.
 - Supporting research-source references and bounded evidence excerpts.
