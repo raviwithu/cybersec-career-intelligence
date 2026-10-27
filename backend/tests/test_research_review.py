@@ -186,3 +186,23 @@ def test_submission_accepts_blank_optional_form_fields(client, monkeypatch):
         "research_date": "", "source_type": "url_imported",
     })
     assert response.status_code == 201, response.text
+
+
+def test_failed_submission_can_be_retried_with_same_content(client, monkeypatch):
+    from app.provider_common import ProviderError
+
+    def unavailable(provider, model_id, content, taxonomy):
+        raise ProviderError("openwebui", f"Model '{model_id}' is no longer available in OpenWebUI; select another model")
+
+    payload = {"content": "retry after provider failure", "source_title": "Retry source"}
+    monkeypatch.setattr(providers, "extract_selected", unavailable)
+    failed = client.post("/api/v1/research/submissions", headers=ADMIN_HEADERS, json=payload)
+    assert failed.status_code == 201, failed.text
+    assert failed.json()["status"] == "failed"
+    assert "no longer available" in failed.json()["error_message"]
+
+    monkeypatch.setattr(providers, "extract_selected", lambda provider, model_id, content, taxonomy: result_for(content))
+    retried = client.post("/api/v1/research/submissions", headers=ADMIN_HEADERS, json=payload)
+    assert retried.status_code == 201, retried.text
+    assert retried.json()["status"] != "failed"
+    assert client.post("/api/v1/research/submissions", headers=ADMIN_HEADERS, json=payload).status_code == 409

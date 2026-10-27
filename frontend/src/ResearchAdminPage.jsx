@@ -98,7 +98,9 @@ export default function ResearchAdminPage() {
   async function submitText(event) {
     event.preventDefault(); setSaving(true); setError(null); setSubmitError(null);
     try {
-      await submitResearchText({ ...form, content: form.content.trim(), research_date: form.research_date || null, source_type: method === "url" && preview ? "url_imported" : "pasted_text" }, adminKey);
+      const result = await submitResearchText({ ...form, content: form.content.trim(), research_date: form.research_date || null, source_type: method === "url" && preview ? "url_imported" : "pasted_text" }, adminKey);
+      // The API records provider failures as a "failed" submission; keep the form so it can be retried.
+      if (result.status === "failed") { setSubmitError(new Error(result.error_message || "The AI provider could not analyze this content.")); await load(); return; }
       setForm(emptyForm); setPreview(null); setUrl(""); await load();
     } catch (requestError) { setSubmitError(requestError); } finally { setSaving(false); }
   }
@@ -111,7 +113,9 @@ export default function ResearchAdminPage() {
       if (form.source_title) data.append("source_title", form.source_title);
       if (form.source_url) data.append("source_url", form.source_url);
       if (form.research_date) data.append("research_date", form.research_date);
-      await submitResearchFile(data, adminKey); setSelectedFile(null); event.target.reset(); await load();
+      const result = await submitResearchFile(data, adminKey);
+      if (result.status === "failed") { setSubmitError(new Error(result.error_message || "The AI provider could not analyze this file.")); await load(); return; }
+      setSelectedFile(null); event.target.reset(); await load();
     } catch (requestError) { setSubmitError(requestError); } finally { setSaving(false); }
   }
 
@@ -125,7 +129,9 @@ export default function ResearchAdminPage() {
   }
 
   const activeProviderLabel = models?.active_provider === "openwebui" ? "OpenWebUI" : "Ollama";
-  const submitErrorNote = submitError && <p className="error-copy" role="alert">Analysis failed: {submitError.message}</p>;
+  const activeCatalog = models?.providers?.find((provider) => provider.provider === models.active_provider);
+  const activeModelMissing = activeCatalog?.status === "connected" && !activeCatalog.models.some((model) => model.id === models.active_model_id);
+  const submitErrorNote = <>{activeModelMissing && !submitError && <p className="error-copy" role="alert">The active model "{models.active_model_id}" is not offered by {activeProviderLabel}. Select another model above before analyzing.</p>}{submitError && <p className="error-copy" role="alert">Analysis failed: {submitError.message}</p>}</>;
 
   function editValue(draft, field) { return edits[draft.id]?.[field] ?? draft[field]; }
   function setEdit(draft, field, value) { setEdits((current) => ({ ...current, [draft.id]: { ...current[draft.id], [field]: value } })); }
