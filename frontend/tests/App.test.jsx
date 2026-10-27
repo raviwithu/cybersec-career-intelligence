@@ -99,6 +99,14 @@ describe("Phase 4 knowledge workspace", () => {
     expect(await screen.findByText("1 results for")).toBeTruthy();
   });
 
+  it("opens the authenticated automated research workspace", async () => {
+    sessionStorage.clear();
+    render(<App />);
+    fireEvent.click(await screen.findByText("Automated Research"));
+    expect(await screen.findByText("Unlock automated research")).toBeTruthy();
+  });
+
+
   it("shows empty states and API errors", async () => {
     global.fetch = mockApi({ empty: true });
     render(<App />);

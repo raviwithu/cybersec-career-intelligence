@@ -322,7 +322,17 @@ The template is [`.env.example`](.env.example). Compose supplies the container-l
 | `URL_IMPORT_MAX_REDIRECTS` | `5` | Maximum URL redirects revalidated by the importer. |
 | `CORS_ORIGINS` | Compose sets frontend origins | Comma-separated allowed frontend origins for direct backend use. |
 | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | Compose-managed | PostgreSQL connection settings. |
-| `REDIS_URL` | `redis://redis:6379/0` in Compose | Redis connection used by readiness checks. |
+| `REDIS_URL` | `redis://redis:6379/0` in Compose | Redis connection used by readiness checks and research source locks. |
+| `RESEARCH_REQUEST_TIMEOUT_SECONDS` | `15` | Research collector request timeout. |
+| `RESEARCH_RESPONSE_MAX_BYTES` | `1000000` | Maximum response bytes retained by a collector. |
+| `RESEARCH_RETRY_COUNT` | `2` | Maximum transient collection retries. |
+| `RESEARCH_RETRY_BASE_SECONDS` | `1` | Exponential retry backoff base. |
+| `RESEARCH_MAX_ITEMS_PER_RUN` | `50` | Per-source item limit. |
+| `RESEARCH_SCHEDULER_ENABLED` | `true` | Enables the scheduler worker. |
+| `RESEARCH_SCHEDULER_POLL_SECONDS` | `30` | Scheduler polling interval. |
+| `RESEARCH_LOCK_TTL_SECONDS` | `900` | Redis source lock lifetime. |
+| `RESEARCH_ALLOWED_USER_AGENT` | `CyberSecCareerIntelligenceResearch/1.0` | Collector User-Agent. |
+| `RESEARCH_DEFAULT_RESPECT_ROBOTS` | `true` | Default robots policy for approved sources. |
 
 `MAX_REQUEST_BYTES` is also supported by the backend and defaults to 1 MiB when not supplied. The Compose file currently relies on that application default. `DATABASE_URL` can override the assembled PostgreSQL URL for direct/local execution.
 
@@ -377,6 +387,24 @@ curl -X POST \
 ```
 
 The interactive API reference at `/docs` is the authoritative request/response contract.
+
+### Phase 6 automated research
+
+Phase 6 adds administrator-controlled collection from explicitly approved public APIs, HTML pages, RSS/Atom feeds, and URL collections. Open **Automated Research** to register sources, pause/resume schedules, start a run, inspect execution history, review three-dimensional coverage, and hand proposed findings to **Research Review**. A separate `research-scheduler` Compose service evaluates due schedules; it reuses the project Redis instance for source locks and the project PostgreSQL database for provenance.
+
+```bash
+# Run the Phase 6 worker locally when Compose is not being used
+cd backend
+PYTHONPATH=. python -m app.scheduler_worker
+
+# Inspect the Phase 6 API contract
+curl -H "X-Admin-API-Key: $ADMIN_API_KEY" http://localhost:8100/api/v1/research/automated/dashboard
+```
+
+Collection never accepts arbitrary credentials or private literal IP destinations. Each request revalidates DNS/IP safety, pins the connection to the approved address, bounds response bytes, limits redirects, honors robots policy by default, and retries only transient failures. Source snapshots are normalized and content-hashed before analysis; unchanged content is skipped. Automated AI output is marked untrusted, retains provider/model and source provenance, and is never published without administrator review.
+
+See [`docs/phase6-automated-research.md`](docs/phase6-automated-research.md) for source permissions, configuration, scheduler operations, change detection, API routes, coverage semantics, and known limitations.
+
 
 ## Local development
 

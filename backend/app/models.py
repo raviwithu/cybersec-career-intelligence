@@ -204,6 +204,166 @@ class AnalysisVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class AutomatedResearchSource(Base):
+    __tablename__ = "automated_research_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    source_type: Mapped[str] = mapped_column(String(30), index=True)
+    endpoint_url: Mapped[str] = mapped_column(String(1000))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    collection_frequency: Mapped[str] = mapped_column(String(20), default="manual")
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=1440)
+    applicable_industries: Mapped[list[str]] = mapped_column(JSON, default=list)
+    applicable_domains: Mapped[list[str]] = mapped_column(JSON, default=list)
+    applicable_career_levels: Mapped[list[str]] = mapped_column(JSON, default=list)
+    keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
+    configuration: Mapped[dict] = mapped_column(JSON, default=dict)
+    collection_status: Mapped[str] = mapped_column(String(30), default="never", index=True)
+    last_successful_collection: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_attempted_collection: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(120), default="administrator")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    schedule: Mapped["ResearchSchedule | None"] = relationship(back_populates="source", uselist=False, cascade="all, delete-orphan")
+    attempts: Mapped[list["ResearchCollectionAttempt"]] = relationship(back_populates="source", cascade="all, delete-orphan")
+    content_versions: Mapped[list["ResearchContentVersion"]] = relationship(back_populates="registry_source", cascade="all, delete-orphan")
+
+
+class ResearchSchedule(Base):
+    __tablename__ = "research_schedules"
+    __table_args__ = (UniqueConstraint("source_id", name="uq_research_schedule_source"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("automated_research_sources.id", ondelete="CASCADE"), index=True)
+    frequency: Mapped[str] = mapped_column(String(20), default="manual")
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=1440)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    paused: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    source: Mapped[AutomatedResearchSource] = relationship(back_populates="schedule")
+
+
+class ResearchRun(Base):
+    __tablename__ = "research_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    trigger: Mapped[str] = mapped_column(String(20), default="manual", index=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    requested_source_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    target_filters: Mapped[dict] = mapped_column(JSON, default=dict)
+    sources_collected: Mapped[int] = mapped_column(Integer, default=0)
+    sources_analyzed: Mapped[int] = mapped_column(Integer, default=0)
+    duplicates_skipped: Mapped[int] = mapped_column(Integer, default=0)
+    failed_collections: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(String(120), default="scheduler")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+    attempts: Mapped[list["ResearchCollectionAttempt"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+
+
+class ResearchCollectionAttempt(Base):
+    __tablename__ = "research_collection_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("research_runs.id", ondelete="CASCADE"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("automated_research_sources.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="running", index=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    items_discovered: Mapped[int] = mapped_column(Integer, default=0)
+    items_collected: Mapped[int] = mapped_column(Integer, default=0)
+    items_analyzed: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    run: Mapped[ResearchRun] = relationship(back_populates="attempts")
+    source: Mapped[AutomatedResearchSource] = relationship(back_populates="attempts")
+
+
+class ResearchContentVersion(Base):
+    __tablename__ = "research_content_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    registry_source_id: Mapped[int] = mapped_column(ForeignKey("automated_research_sources.id", ondelete="CASCADE"), index=True)
+    research_source_id: Mapped[int | None] = mapped_column(ForeignKey("research_sources.id", ondelete="SET NULL"), index=True)
+    canonical_url: Mapped[str] = mapped_column(String(1000), index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    normalized_content: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    content_size: Mapped[int] = mapped_column(Integer)
+    version_number: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(30), default="collected", index=True)
+    duplicate_of_id: Mapped[int | None] = mapped_column(ForeignKey("research_content_versions.id", ondelete="SET NULL"))
+    metadata_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    registry_source: Mapped[AutomatedResearchSource] = relationship(back_populates="content_versions")
+    research_source: Mapped[ResearchSource | None] = relationship()
+    duplicate_of: Mapped["ResearchContentVersion | None"] = relationship(remote_side=[id])
+    analysis: Mapped["ResearchAutomationAnalysis | None"] = relationship(back_populates="content_version", uselist=False, cascade="all, delete-orphan")
+
+
+class ResearchAutomationAnalysis(Base):
+    __tablename__ = "research_automation_analyses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_version_id: Mapped[int] = mapped_column(ForeignKey("research_content_versions.id", ondelete="CASCADE"), unique=True, index=True)
+    submission_id: Mapped[int | None] = mapped_column(ForeignKey("research_submissions.id", ondelete="SET NULL"), index=True)
+    provider: Mapped[str | None] = mapped_column(String(30))
+    model_id: Mapped[str | None] = mapped_column(String(255))
+    prompt_version: Mapped[str] = mapped_column(String(80), default="phase6-v1")
+    analysis_version: Mapped[str] = mapped_column(String(80), default="phase6-v1")
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    finding_count: Mapped[int] = mapped_column(Integer, default=0)
+    result_payload: Mapped[dict | None] = mapped_column(JSON)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    content_version: Mapped[ResearchContentVersion] = relationship(back_populates="analysis")
+    submission: Mapped["ResearchSubmission | None"] = relationship()
+
+
+class ResearchChangeEvent(Base):
+    __tablename__ = "research_change_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    registry_source_id: Mapped[int] = mapped_column(ForeignKey("automated_research_sources.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("research_runs.id", ondelete="SET NULL"), index=True)
+    previous_version_id: Mapped[int | None] = mapped_column(ForeignKey("research_content_versions.id", ondelete="SET NULL"))
+    current_version_id: Mapped[int] = mapped_column(ForeignKey("research_content_versions.id", ondelete="CASCADE"))
+    change_type: Mapped[str] = mapped_column(String(30), index=True)
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="detected", index=True)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ResearchAutomationAudit(Base):
+    __tablename__ = "research_automation_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    actor: Mapped[str] = mapped_column(String(120))
+    action: Mapped[str] = mapped_column(String(40))
+    source_id: Mapped[int | None] = mapped_column(ForeignKey("automated_research_sources.id", ondelete="SET NULL"))
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("research_runs.id", ondelete="SET NULL"))
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class ModelSelection(Base):
     __tablename__ = "model_selection"
 
