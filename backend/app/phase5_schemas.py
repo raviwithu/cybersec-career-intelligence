@@ -12,6 +12,8 @@ class ExtractedRequirement(BaseModel):
     category_slug: str | None = Field(default=None, max_length=120)
     technical_knowledge: str = Field(default="", max_length=4000)
     practical_capability: str = Field(default="", max_length=4000)
+    qualifications: str = Field(default="", max_length=4000)
+    tools_technologies: str = Field(default="", max_length=4000)
     responsibilities: str = Field(default="", max_length=4000)
     finding_type: str = Field(default="technical-skills", max_length=60)
     proficiency_level: str = Field(default="proficient", max_length=40)
@@ -19,7 +21,7 @@ class ExtractedRequirement(BaseModel):
     experience_years_min: int | None = Field(default=None, ge=0, le=80)
     experience_years_max: int | None = Field(default=None, ge=0, le=80)
     evidence_excerpt: str = Field(min_length=1, max_length=3000)
-    confidence: float = Field(default=0.5, ge=0, le=1)
+    confidence: float | None = Field(default=None, ge=0, le=1)
 
     @field_validator("experience_years_max")
     @classmethod
@@ -114,6 +116,10 @@ class DraftExpectationResponse(BaseModel):
     career_level_name: str
     competency_id: int
     competency_name: str
+    technical_knowledge: str
+    practical_capability: str
+    qualifications: str
+    tools_technologies: str
     expectation_description: str
     proficiency_level: str
     importance: str
@@ -134,6 +140,10 @@ class DraftPage(BaseModel):
 
 
 class DraftUpdate(BaseModel):
+    technical_knowledge: str | None = Field(default=None, max_length=4000)
+    practical_capability: str | None = Field(default=None, max_length=4000)
+    qualifications: str | None = Field(default=None, max_length=4000)
+    tools_technologies: str | None = Field(default=None, max_length=4000)
     expectation_description: str = Field(min_length=1, max_length=4000)
     proficiency_level: str = Field(min_length=1, max_length=40)
     importance: str = Field(min_length=1, max_length=40)
@@ -160,6 +170,8 @@ class ModelEvaluationResponse(BaseModel):
     model_name: str
     evaluation_version: str
     extraction_accuracy: float
+    domain_accuracy: float
+    career_level_accuracy: float
     classification_accuracy: float
     json_validity: float
     hallucination_rate: float

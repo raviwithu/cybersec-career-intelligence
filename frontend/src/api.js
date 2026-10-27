@@ -1,4 +1,10 @@
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8100").replace(/\/$/, "");
+const ADMIN_SESSION_KEY = "cybersec-career-intelligence.admin-api-key";
+
+export function getAdminSessionKey() { return typeof window === "undefined" ? "" : window.sessionStorage.getItem(ADMIN_SESSION_KEY) || ""; }
+export function setAdminSessionKey(value) { if (typeof window !== "undefined") window.sessionStorage.setItem(ADMIN_SESSION_KEY, value); }
+export function clearAdminSessionKey() { if (typeof window !== "undefined") window.sessionStorage.removeItem(ADMIN_SESSION_KEY); }
+
 
 export class ApiError extends Error {
   constructor(message, status = 0, detail = null) {
@@ -72,28 +78,46 @@ function normalizeLegacyModels(status) {
     active_model_name: status.active_model || status.model || "",
     mode: status.mode || "fallback",
     evaluation_version: status.evaluation_version || null,
-    evaluations: (status.evaluations || []).map((evaluation) => ({ ...evaluation, provider: "ollama", model_id: evaluation.model_name })),
+    evaluations: (status.evaluations || []).map((evaluation) => ({ ...evaluation, provider: "ollama", model_id: evaluation.model_name, domain_accuracy: evaluation.domain_accuracy ?? evaluation.classification_accuracy ?? 0, career_level_accuracy: evaluation.career_level_accuracy ?? evaluation.classification_accuracy ?? 0 })),
   };
 }
 
-export async function fetchAIModels(adminKey) {
-  const result = await request("/api/v1/research/models", { headers: adminHeaders(adminKey) });
-  return Array.isArray(result.providers) ? result : normalizeLegacyModels(await fetchOllamaStatus(adminKey));
+async function unifiedOrLegacy(unifiedRequest, legacyRequest) {
+  try {
+    const result = await unifiedRequest();
+    return Array.isArray(result.providers) ? result : normalizeLegacyModels(await legacyRequest());
+  } catch (error) {
+    if (error.status !== 404) throw error;
+    return normalizeLegacyModels(await legacyRequest());
+  }
 }
 
-export async function refreshAIModels(adminKey) {
-  const result = await request("/api/v1/research/models/refresh", { method: "POST", headers: adminHeaders(adminKey) });
-  return Array.isArray(result.providers) ? result : normalizeLegacyModels(await refreshOllamaModels(adminKey));
+export function fetchAIModels(adminKey) {
+  return unifiedOrLegacy(
+    () => request("/api/v1/research/models", { headers: adminHeaders(adminKey) }),
+    () => fetchOllamaStatus(adminKey),
+  );
 }
 
-export async function evaluateAIModels(adminKey) {
-  const result = await request("/api/v1/research/models/evaluate", { method: "POST", headers: adminHeaders(adminKey) });
-  return Array.isArray(result.providers) ? result : normalizeLegacyModels(await evaluateOllamaModels(adminKey));
+export function refreshAIModels(adminKey) {
+  return unifiedOrLegacy(
+    () => request("/api/v1/research/models/refresh", { method: "POST", headers: adminHeaders(adminKey) }),
+    () => refreshOllamaModels(adminKey),
+  );
 }
 
-export async function selectAIModel(provider, modelId, adminKey) {
-  const result = await request("/api/v1/research/models/select", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify({ provider, model_id: modelId }) });
-  return Array.isArray(result.providers) ? result : normalizeLegacyModels(await selectOllamaModel(modelId, adminKey));
+export function evaluateAIModels(adminKey) {
+  return unifiedOrLegacy(
+    () => request("/api/v1/research/models/evaluate", { method: "POST", headers: adminHeaders(adminKey) }),
+    () => evaluateOllamaModels(adminKey),
+  );
+}
+
+export function selectAIModel(provider, modelId, adminKey) {
+  return unifiedOrLegacy(
+    () => request("/api/v1/research/models/select", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify({ provider, model_id: modelId }) }),
+    () => selectOllamaModel(modelId, adminKey),
+  );
 }
 
 export async function testAIModel(provider, modelId, adminKey) {
@@ -110,3 +134,13 @@ export function approveResearchDraft(id, reviewer_note, adminKey) { return reque
 export function rejectResearchDraft(id, reviewer_note, adminKey) { return request(`/api/v1/research/drafts/${id}/reject`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify({ reviewer_note }) }); }
 export function publishResearchDraft(id, adminKey) { return request(`/api/v1/research/drafts/${id}/publish`, { method: "POST", headers: adminHeaders(adminKey) }); }
 
+
+export function fetchResearchReviewDashboard(params = {}, adminKey) { return request(`/api/v1/research/review/dashboard${queryString(params)}`, { headers: adminHeaders(adminKey) }); }
+export function fetchResearchReviewSubmission(id, adminKey) { return request(`/api/v1/research/review/submissions/${id}`, { headers: adminHeaders(adminKey) }); }
+export function fetchResearchReviewComparison(id, adminKey) { return request(`/api/v1/research/review/changes/${id}/comparison`, { headers: adminHeaders(adminKey) }); }
+export function acceptResearchReviewChange(id, expected_version, reviewer_note, adminKey) { return request(`/api/v1/research/review/changes/${id}/accept`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify({ expected_version, reviewer_note: reviewer_note || null }) }); }
+export function modifyResearchReviewChange(id, payload, adminKey) { return request(`/api/v1/research/review/changes/${id}`, { method: "PATCH", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function rejectResearchReviewChange(id, expected_version, reviewer_note, adminKey) { return request(`/api/v1/research/review/changes/${id}/reject`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify({ expected_version, reviewer_note: reviewer_note || null }) }); }
+export function fetchResearchPublicationPreview(adminKey) { return request("/api/v1/research/review/publication-preview", { headers: adminHeaders(adminKey) }); }
+export function publishResearchReview(payload, adminKey) { return request("/api/v1/research/review/publish", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function fetchResearchReviewHistory(adminKey) { return request("/api/v1/research/review/history", { headers: adminHeaders(adminKey) }); }

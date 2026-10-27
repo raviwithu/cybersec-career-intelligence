@@ -4,6 +4,7 @@ import { createProfile, fetchCategories, fetchCareerMatrix, fetchCompetencies, f
 import { Badge, ErrorState, Loading } from "./components";
 import { CompetenciesPage, ComparePage, DashboardPage, DomainsPage, MatrixPage, SearchPage } from "./pages";
 import ResearchAdminPage from "./ResearchAdminPage";
+import ResearchReviewPage from "./ResearchReviewPage";
 import { useApi } from "./useApi";
 
 const navigation = [
@@ -14,6 +15,7 @@ const navigation = [
   { id: "competencies", label: "Competencies", icon: "◎" },
   { id: "search", label: "Global search", icon: "⌕" },
   { id: "research", label: "Research admin", icon: "✦" },
+  { id: "research-review", label: "Research Review", icon: "✓" },
 ];
 
 function flattenDomains(domains) { return domains.flatMap((domain) => [domain, ...(domain.children || [])]); }
@@ -59,7 +61,8 @@ export default function AppShell() {
           : view === "competencies" ? <CompetenciesPage domains={data.domains} levels={data.levels} categories={data.categories} selectedCompetencyId={selectedCompetencyId} onSelectCompetency={setSelectedCompetencyId} />
             : view === "search" ? <SearchPage domains={data.domains} levels={data.levels} onCompetency={openCompetency} onDomain={openDomain} />
             : view === "research" ? <ResearchAdminPage />
-              : <ProfilePage />;
+              : view === "research-review" ? <ResearchReviewPage />
+                : <ProfilePage />;
   return <div className="app-frame">
     <aside className={`sidebar ${mobileOpen ? "open" : ""}`}><div className="brand"><div className="brand-mark">C<span>·</span></div><div><strong>CyberSec</strong><small>Career Intelligence</small></div></div><div className="sidebar-section"><span className="sidebar-label">WORKSPACE</span><nav>{navigation.map((item) => <button className={view === item.id ? "active" : ""} key={item.id} onClick={() => navigate(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav></div><div className="sidebar-footer"><button className={`profile-nav ${view === "profile" ? "active" : ""}`} onClick={() => navigate("profile")}><span className="avatar">CI</span><span><strong>My profile</strong><small>Phase 1 baseline</small></span><span>→</span></button><div className="version-label">KNOWLEDGE BASE · PHASE 4</div></div></aside>
     {mobileOpen && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}

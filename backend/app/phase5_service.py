@@ -22,6 +22,7 @@ from .models import (
     DraftExpectation,
     ExpectationSource,
     ResearchFinding,
+    ResearchFindingDomain,
     ResearchSource,
     ResearchSubmission,
     SecurityDomain,
@@ -29,6 +30,7 @@ from .models import (
 from .ai_providers import AIProviderRegistry
 from .ollama_client import OllamaClient
 from .phase5_schemas import DraftUpdate, ExtractionResult, ExtractedRequirement
+from .research_review_service import ensure_submission_changes
 
 logger = logging.getLogger("cybersec.research")
 ALLOWED_EXTENSIONS = {".txt", ".json", ".csv"}
@@ -111,13 +113,21 @@ def normalize_competency(candidate: str, competencies: list[Competency]) -> tupl
     return None, cleaned
 
 
-def classify_domain(requirement: ExtractedRequirement, domains: list[SecurityDomain]) -> SecurityDomain | None:
+def classify_domains(requirement: ExtractedRequirement, domains: list[SecurityDomain]) -> list[SecurityDomain]:
     lookup = {item.slug.casefold(): item for item in domains} | {item.name.casefold(): item for item in domains}
+    matches: list[SecurityDomain] = []
     for value in [*requirement.domain_slugs, *requirement.security_subdomains]:
-        if value.casefold() in lookup:
-            return lookup[value.casefold()]
+        item = lookup.get(value.casefold())
+        if item is not None and item not in matches:
+            matches.append(item)
+    if matches:
+        return matches
     haystack = f"{requirement.competency_name} {requirement.technical_knowledge} {requirement.practical_capability}".casefold()
-    return next((item for item in domains if item.name.casefold() in haystack or item.slug.replace("-", " ") in haystack), None)
+    return [item for item in domains if item.name.casefold() in haystack or item.slug.replace("-", " ") in haystack]
+
+
+def classify_domain(requirement: ExtractedRequirement, domains: list[SecurityDomain]) -> SecurityDomain | None:
+    return next(iter(classify_domains(requirement, domains)), None)
 
 
 def classify_level(requirement: ExtractedRequirement, levels: list[CareerLevel]) -> CareerLevel | None:
@@ -153,11 +163,22 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
     categories = list(db.scalars(select(CompetencyCategory)).all())
     competencies = list(db.scalars(select(Competency).options(selectinload(Competency.category))).all())
     grouped: dict[tuple[int, int, int], list[tuple[ExtractedRequirement, Competency]]] = defaultdict(list)
+    category_lookup = {item.slug.casefold() for item in categories} | {item.name.casefold() for item in categories}
     for requirement in extraction.requirements:
-        domain = classify_domain(requirement, domains)
+        domain_candidates = classify_domains(requirement, domains)
+        domain = domain_candidates[0] if domain_candidates else None
         level = classify_level(requirement, levels)
         category = category_for(requirement, categories)
         competency, normalized_name = normalize_competency(requirement.competency_name, competencies)
+        classification_gaps = []
+        if not domain_candidates:
+            classification_gaps.append("domain")
+        if level is None:
+            classification_gaps.append("career_level")
+        if not requirement.category_slug or requirement.category_slug.casefold() not in category_lookup:
+            classification_gaps.append("category")
+        if competency is None:
+            classification_gaps.append("competency")
         finding = ResearchFinding(
             submission_id=submission.id, domain_id=domain.id if domain else None, career_level_id=level.id if level else None,
             category_id=category.id if category else None, competency_id=competency.id if competency else None,
@@ -166,12 +187,22 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
             responsibilities=requirement.responsibilities, proficiency_level=requirement.proficiency_level,
             importance=requirement.importance, experience_years_min=requirement.experience_years_min,
             experience_years_max=requirement.experience_years_max, evidence_excerpt=requirement.evidence_excerpt,
-            confidence=requirement.confidence, status="normalized" if domain and level and competency else "unmapped",
-            details={"security_subdomains": requirement.security_subdomains},
+            confidence=requirement.confidence, status="normalized" if domain_candidates and level and competency else "unmapped",
+            details={
+                "security_subdomains": requirement.security_subdomains,
+                "qualifications": requirement.qualifications,
+                "tools_technologies": requirement.tools_technologies,
+                "domain_ids": [item.id for item in domain_candidates],
+                "classification_gaps": classification_gaps,
+            },
         )
         db.add(finding)
-        if domain and level and competency:
-            grouped[(domain.id, level.id, competency.id)].append((requirement, competency))
+        db.flush()
+        for candidate in domain_candidates:
+            db.add(ResearchFindingDomain(finding_id=finding.id, domain_id=candidate.id))
+        if level and competency:
+            for candidate in domain_candidates:
+                grouped[(candidate.id, level.id, competency.id)].append((requirement, competency))
     db.flush()
     for (domain_id, level_id, competency_id), items in grouped.items():
         description = _consolidated_description(items)
@@ -197,6 +228,10 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
             continue
         draft = DraftExpectation(
             submission_id=submission.id, domain_id=domain_id, career_level_id=level_id, competency_id=competency_id,
+            technical_knowledge=_merge_text(items, "technical_knowledge"),
+            practical_capability=_merge_text(items, "practical_capability"),
+            qualifications=_merge_text(items, "qualifications"),
+            tools_technologies=_merge_text(items, "tools_technologies"),
             expectation_description=description, proficiency_level=_highest(items, "proficiency_level", ("basic", "proficient", "advanced", "expert")),
             importance=_highest(items, "importance", ("optional", "important", "essential")),
             responsibility_type=_responsibility(items),
@@ -207,6 +242,15 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
         db.flush()
         for requirement, _ in items:
             db.add(DraftEvidence(draft_id=draft.id, source_id=submission.source_id, supporting_excerpt=requirement.evidence_excerpt))
+
+
+def _merge_text(items: list[tuple[ExtractedRequirement, Competency]], field: str) -> str:
+    values: list[str] = []
+    for requirement, _ in items:
+        value = getattr(requirement, field).strip()
+        if value and value not in values:
+            values.append(value)
+    return "; ".join(values)
 
 
 def _consolidated_description(items: list[tuple[ExtractedRequirement, Competency]]) -> str:
@@ -252,6 +296,7 @@ def process_submission(db: Session, submission: ResearchSubmission, content: str
             result = client.extract(content, taxonomy(db), model=selected_model)
         submission.extraction_payload = result.model_dump(mode="json")
         consolidate(db, submission, result, settings)
+        ensure_submission_changes(db, submission.id)
         submission.status = "draft_ready"
         submission.completed_at = datetime.now(timezone.utc)
         submission.error_message = None

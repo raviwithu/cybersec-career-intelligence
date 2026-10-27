@@ -100,6 +100,10 @@ class ExpectationSummary(BaseModel):
     id: int
     domain: DomainRef
     career_level: LevelRef
+    technical_knowledge: str
+    practical_capability: str
+    qualifications: str
+    tools_technologies: str
     expectation_description: str
     proficiency_level: str
     importance: str
@@ -130,6 +134,10 @@ class ExpectationRead(BaseModel):
     domain: DomainRef
     career_level: LevelRef
     competency: CompetencyListItem
+    technical_knowledge: str
+    practical_capability: str
+    qualifications: str
+    tools_technologies: str
     expectation_description: str
     proficiency_level: str
     importance: str

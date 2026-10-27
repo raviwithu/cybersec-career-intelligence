@@ -61,7 +61,7 @@ def ollama_status_response(db: Session, available_models: list[str] | None = Non
             available_models = []
             detail = detail or str(exc)
     configured = active_model in available_models
-    evaluations = model_selection.recent_evaluations(db)
+    evaluations = model_selection.recent_evaluations(db, provider="ollama")
     return OllamaStatusResponse(
         status="configured" if configured else ("unavailable" if detail else "unconfigured"),
         model=active_model, active_model=active_model,
@@ -166,7 +166,9 @@ def draft_response(item: DraftExpectation) -> DraftExpectationResponse:
     return DraftExpectationResponse(
         id=item.id, submission_id=item.submission_id, domain_id=item.domain_id, domain_name=item.domain.name,
         career_level_id=item.career_level_id, career_level_name=item.career_level.name, competency_id=item.competency_id,
-        competency_name=item.competency.name, expectation_description=item.expectation_description,
+        competency_name=item.competency.name, technical_knowledge=item.technical_knowledge,
+        practical_capability=item.practical_capability, qualifications=item.qualifications,
+        tools_technologies=item.tools_technologies, expectation_description=item.expectation_description,
         proficiency_level=item.proficiency_level, importance=item.importance, responsibility_type=item.responsibility_type,
         experience_years_min=item.experience_years_min, experience_years_max=item.experience_years_max,
         status=item.status, reviewer_note=item.reviewer_note, reviewed_by=item.reviewed_by,
@@ -230,7 +232,7 @@ def refresh_ollama_models(db: Session = Depends(get_db)) -> OllamaStatusResponse
 @router.post("/ollama/evaluate", response_model=OllamaStatusResponse, dependencies=[Depends(require_admin)])
 def evaluate_ollama_models(db: Session = Depends(get_db)) -> OllamaStatusResponse:
     try:
-        model_selection.evaluate_and_select(db)
+        model_selection.evaluate_and_select(db, provider="ollama")
         return ollama_status_response(db)
     except ModelSelectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -239,7 +241,7 @@ def evaluate_ollama_models(db: Session = Depends(get_db)) -> OllamaStatusRespons
 @router.post("/ollama/select", response_model=OllamaStatusResponse, dependencies=[Depends(require_admin)])
 def select_ollama_model(payload: ModelSelectRequest, db: Session = Depends(get_db)) -> OllamaStatusResponse:
     try:
-        model_selection.set_manual(db, provider=payload.provider, model_id=payload.model_id, model_name=payload.model_name)
+        model_selection.set_manual(db, provider="ollama", model_id=payload.model_id, model_name=payload.model_name)
         return ollama_status_response(db)
     except ModelSelectionError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -320,6 +322,14 @@ def update_draft(draft_id: int, payload: DraftUpdate, db: Session = Depends(get_
         raise HTTPException(status_code=404, detail="Draft expectation was not found")
     if item.status not in {"draft", "rejected"}:
         raise HTTPException(status_code=409, detail="Only draft or rejected expectations can be edited")
+    if payload.technical_knowledge is not None:
+        item.technical_knowledge = payload.technical_knowledge
+    if payload.practical_capability is not None:
+        item.practical_capability = payload.practical_capability
+    if payload.qualifications is not None:
+        item.qualifications = payload.qualifications
+    if payload.tools_technologies is not None:
+        item.tools_technologies = payload.tools_technologies
     item.expectation_description = payload.expectation_description
     item.proficiency_level = payload.proficiency_level
     item.importance = payload.importance
@@ -369,6 +379,8 @@ def publish_draft(draft_id: int, db: Session = Depends(get_db)) -> WorkflowRespo
     if published is None:
         published = DomainLevelExpectation(
             domain_id=item.domain_id, career_level_id=item.career_level_id, competency_id=item.competency_id,
+            technical_knowledge=item.technical_knowledge, practical_capability=item.practical_capability,
+            qualifications=item.qualifications, tools_technologies=item.tools_technologies,
             expectation_description=item.expectation_description, proficiency_level=item.proficiency_level,
             importance=item.importance, responsibility_type=item.responsibility_type,
             experience_years_min=item.experience_years_min, experience_years_max=item.experience_years_max,

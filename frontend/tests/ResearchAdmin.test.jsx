@@ -29,7 +29,7 @@ beforeEach(() => {
     return response({});
   });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); sessionStorage.clear(); });
 
 describe("Phase 5 research console", () => {
   it("requires a key, submits text, and renders evidence review", async () => {

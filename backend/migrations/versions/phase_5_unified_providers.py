@@ -32,12 +32,29 @@ def upgrade() -> None:
         op.add_column("model_evaluations", sa.Column("provider", sa.String(length=30), nullable=True, server_default="ollama"))
     if "model_id" not in evaluation_columns:
         op.add_column("model_evaluations", sa.Column("model_id", sa.String(length=255), nullable=True, server_default=""))
+    if "domain_accuracy" not in evaluation_columns:
+        op.add_column("model_evaluations", sa.Column("domain_accuracy", sa.Float(), nullable=True, server_default="0"))
+    if "career_level_accuracy" not in evaluation_columns:
+        op.add_column("model_evaluations", sa.Column("career_level_accuracy", sa.Float(), nullable=True, server_default="0"))
 
     submission_columns = _columns("research_submissions")
     if "model_provider" not in submission_columns:
         op.add_column("research_submissions", sa.Column("model_provider", sa.String(length=30), nullable=True))
     if "model_id" not in submission_columns:
         op.add_column("research_submissions", sa.Column("model_id", sa.String(length=255), nullable=True))
+
+    op.execute("UPDATE model_selection SET selected_provider = 'ollama' WHERE selected_provider IS NULL")
+    op.execute("UPDATE model_evaluations SET provider = 'ollama' WHERE provider IS NULL")
+    op.execute("UPDATE model_evaluations SET model_id = model_name WHERE model_id IS NULL OR model_id = ''")
+    op.execute("UPDATE model_evaluations SET domain_accuracy = classification_accuracy WHERE domain_accuracy IS NULL")
+    op.execute("UPDATE model_evaluations SET career_level_accuracy = classification_accuracy WHERE career_level_accuracy IS NULL")
+    with op.batch_alter_table("model_selection") as batch:
+        batch.alter_column("selected_provider", existing_type=sa.String(length=30), nullable=False)
+    with op.batch_alter_table("model_evaluations") as batch:
+        batch.alter_column("provider", existing_type=sa.String(length=30), nullable=False)
+        batch.alter_column("model_id", existing_type=sa.String(length=255), nullable=False)
+        batch.alter_column("domain_accuracy", existing_type=sa.Float(), nullable=False)
+        batch.alter_column("career_level_accuracy", existing_type=sa.Float(), nullable=False)
 
     for table, name, column in (
         ("model_evaluations", "ix_model_evaluations_provider", "provider"),
@@ -52,6 +69,8 @@ def downgrade() -> None:
     op.drop_index("ix_model_evaluations_provider", table_name="model_evaluations")
     op.drop_column("research_submissions", "model_id")
     op.drop_column("research_submissions", "model_provider")
+    op.drop_column("model_evaluations", "career_level_accuracy")
+    op.drop_column("model_evaluations", "domain_accuracy")
     op.drop_column("model_evaluations", "model_id")
     op.drop_column("model_evaluations", "provider")
     op.drop_column("model_selection", "selected_provider")

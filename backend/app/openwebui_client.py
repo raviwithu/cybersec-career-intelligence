@@ -75,7 +75,11 @@ class OpenWebUIClient:
                 continue
             name = item.get("name") or item.get("title") or item.get("label") or model_id
             provider_info = item.get("owned_by") or item.get("provider") or item.get("source")
-            metadata = {key: value for key, value in item.items() if key not in {"id", "model", "name", "title", "label"}}
+            metadata = {
+                key: value for key, value in item.items()
+                if key not in {"id", "model", "name", "title", "label"}
+                and not any(secret in key.lower() for secret in ("api_key", "apikey", "token", "authorization", "password", "secret"))
+            }
             records.append(AIModel(
                 provider=self.provider,
                 model_id=model_id,

@@ -158,6 +158,20 @@ def test_url_import_html_fallback_and_missing_fields():
         extract_job("https://jobs.example.test/security", b"<html><h1>Security Engineer</h1></html>", 50000)
 
 
+def test_url_import_keeps_padding_containers_and_prefers_description():
+    body = "Design secure boot and chain-of-trust controls for embedded platforms. " * 5
+    html = f"""<html><body><main><h1 class="top-card-layout__title">Security Architect</h1>
+    <div class="ad-banner">Sponsored</div><div class="sign-in-modal">Sign in with Email. Join now to apply. {"Similar jobs. " * 40}</div>
+    <div class="details mx-details-container-padding"><section class="description">
+    <div class="description__text description__text--rich"><div class="show-more-less-html__markup">{body}</div></div>
+    </section></div></main></body></html>"""
+    result = extract_job("https://www.linkedin.com/jobs/view/1/", html.encode(), 50000)
+    assert result.job_title == "Security Architect"
+    assert "chain-of-trust controls" in result.job_description
+    assert "Similar jobs" not in result.job_description
+    assert "Sponsored" not in result.job_description
+
+
 def test_url_import_blocks_private_ips_and_revalidates_redirects():
     with pytest.raises(UrlImportError, match="Private"):
         validate_url("http://127.0.0.1/internal")

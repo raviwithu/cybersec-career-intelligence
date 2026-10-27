@@ -97,6 +97,10 @@ class DomainLevelExpectation(Base):
     domain_id: Mapped[int] = mapped_column(ForeignKey("security_domains.id"), index=True)
     career_level_id: Mapped[int] = mapped_column(ForeignKey("career_levels.id"), index=True)
     competency_id: Mapped[int] = mapped_column(ForeignKey("competencies.id"), index=True)
+    technical_knowledge: Mapped[str] = mapped_column(Text, default="")
+    practical_capability: Mapped[str] = mapped_column(Text, default="")
+    qualifications: Mapped[str] = mapped_column(Text, default="")
+    tools_technologies: Mapped[str] = mapped_column(Text, default="")
     expectation_description: Mapped[str] = mapped_column(Text)
     proficiency_level: Mapped[str] = mapped_column(String(40))
     importance: Mapped[str] = mapped_column(String(40))
@@ -183,6 +187,8 @@ class ModelEvaluation(Base):
     model_id: Mapped[str] = mapped_column(String(255), default="", index=True)
     model_name: Mapped[str] = mapped_column(String(255), index=True)
     extraction_accuracy: Mapped[float] = mapped_column(default=0.0)
+    domain_accuracy: Mapped[float] = mapped_column(default=0.0)
+    career_level_accuracy: Mapped[float] = mapped_column(default=0.0)
     classification_accuracy: Mapped[float] = mapped_column(default=0.0)
     json_validity: Mapped[float] = mapped_column(default=0.0)
     hallucination_rate: Mapped[float] = mapped_column(default=0.0)
@@ -214,6 +220,8 @@ class ResearchSubmission(Base):
     source: Mapped[ResearchSource] = relationship()
     findings: Mapped[list["ResearchFinding"]] = relationship(back_populates="submission", cascade="all, delete-orphan")
     drafts: Mapped[list["DraftExpectation"]] = relationship(back_populates="submission")
+    review_changes: Mapped[list["ReviewChange"]] = relationship(back_populates="submission", cascade="all, delete-orphan")
+    publication_batches: Mapped[list["PublicationBatch"]] = relationship(back_populates="submission", cascade="all, delete-orphan")
 
 
 class ResearchFinding(Base):
@@ -236,7 +244,7 @@ class ResearchFinding(Base):
     experience_years_min: Mapped[int | None] = mapped_column(Integer)
     experience_years_max: Mapped[int | None] = mapped_column(Integer)
     evidence_excerpt: Mapped[str] = mapped_column(Text)
-    confidence: Mapped[float] = mapped_column(default=0.0)
+    confidence: Mapped[float | None] = mapped_column()
     status: Mapped[str] = mapped_column(String(30), default="normalized")
     details: Mapped[dict | None] = mapped_column(JSON)
 
@@ -245,6 +253,17 @@ class ResearchFinding(Base):
     career_level: Mapped[CareerLevel | None] = relationship()
     category: Mapped[CompetencyCategory | None] = relationship()
     competency: Mapped[Competency | None] = relationship()
+    domains: Mapped[list["ResearchFindingDomain"]] = relationship(back_populates="finding", cascade="all, delete-orphan")
+
+
+class ResearchFindingDomain(Base):
+    __tablename__ = "research_finding_domains"
+
+    finding_id: Mapped[int] = mapped_column(ForeignKey("research_findings.id", ondelete="CASCADE"), primary_key=True)
+    domain_id: Mapped[int] = mapped_column(ForeignKey("security_domains.id", ondelete="CASCADE"), primary_key=True)
+
+    finding: Mapped[ResearchFinding] = relationship(back_populates="domains")
+    domain: Mapped[SecurityDomain] = relationship()
 
 
 class DraftExpectation(Base):
@@ -255,6 +274,10 @@ class DraftExpectation(Base):
     domain_id: Mapped[int] = mapped_column(ForeignKey("security_domains.id"), index=True)
     career_level_id: Mapped[int] = mapped_column(ForeignKey("career_levels.id"), index=True)
     competency_id: Mapped[int] = mapped_column(ForeignKey("competencies.id"), index=True)
+    technical_knowledge: Mapped[str] = mapped_column(Text, default="")
+    practical_capability: Mapped[str] = mapped_column(Text, default="")
+    qualifications: Mapped[str] = mapped_column(Text, default="")
+    tools_technologies: Mapped[str] = mapped_column(Text, default="")
     expectation_description: Mapped[str] = mapped_column(Text)
     proficiency_level: Mapped[str] = mapped_column(String(40))
     importance: Mapped[str] = mapped_column(String(40))
@@ -276,6 +299,85 @@ class DraftExpectation(Base):
     evidence: Mapped[list["DraftEvidence"]] = relationship(back_populates="draft", cascade="all, delete-orphan")
     published_expectation: Mapped[DomainLevelExpectation | None] = relationship(foreign_keys=[published_expectation_id])
 
+
+
+
+class PublicationBatch(Base):
+    __tablename__ = "publication_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    submission_id: Mapped[int | None] = mapped_column(ForeignKey("research_submissions.id", ondelete="SET NULL"), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    created_by: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+    submission: Mapped[ResearchSubmission | None] = relationship(back_populates="publication_batches")
+    changes: Mapped[list["ReviewChange"]] = relationship(back_populates="publication_batch")
+
+
+class ReviewChange(Base):
+    __tablename__ = "review_changes"
+    __table_args__ = (UniqueConstraint("finding_id", name="uq_review_change_finding"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    submission_id: Mapped[int] = mapped_column(ForeignKey("research_submissions.id", ondelete="CASCADE"), index=True)
+    finding_id: Mapped[int] = mapped_column(ForeignKey("research_findings.id", ondelete="CASCADE"), index=True)
+    draft_id: Mapped[int | None] = mapped_column(ForeignKey("draft_expectations.id", ondelete="SET NULL"), index=True)
+    target_competency_id: Mapped[int | None] = mapped_column(ForeignKey("competencies.id"), index=True)
+    target_expectation_id: Mapped[int | None] = mapped_column(ForeignKey("domain_level_expectations.id"), index=True)
+    merge_target_competency_id: Mapped[int | None] = mapped_column(ForeignKey("competencies.id"), index=True)
+    publication_batch_id: Mapped[int | None] = mapped_column(ForeignKey("publication_batches.id", ondelete="SET NULL"), index=True)
+    change_type: Mapped[str] = mapped_column(String(30))
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    original_snapshot: Mapped[dict] = mapped_column(JSON)
+    proposed_snapshot: Mapped[dict] = mapped_column(JSON)
+    reviewer_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    reviewer_note: Mapped[str | None] = mapped_column(Text)
+    reviewed_by: Mapped[str | None] = mapped_column(String(120))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    submission: Mapped[ResearchSubmission] = relationship(back_populates="review_changes")
+    finding: Mapped[ResearchFinding] = relationship()
+    draft: Mapped[DraftExpectation | None] = relationship()
+    target_competency: Mapped[Competency | None] = relationship(foreign_keys=[target_competency_id])
+    target_expectation: Mapped[DomainLevelExpectation | None] = relationship(foreign_keys=[target_expectation_id])
+    merge_target_competency: Mapped[Competency | None] = relationship(foreign_keys=[merge_target_competency_id])
+    publication_batch: Mapped[PublicationBatch | None] = relationship(back_populates="changes")
+    audits: Mapped[list["ReviewAudit"]] = relationship(back_populates="change", cascade="all, delete-orphan")
+
+
+class ReviewAudit(Base):
+    __tablename__ = "review_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    change_id: Mapped[int] = mapped_column(ForeignKey("review_changes.id", ondelete="CASCADE"), index=True)
+    action: Mapped[str] = mapped_column(String(30))
+    actor: Mapped[str] = mapped_column(String(120))
+    before_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    after_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    change: Mapped[ReviewChange] = relationship(back_populates="audits")
+
+
+class ExpectationRevision(Base):
+    __tablename__ = "expectation_revisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    expectation_id: Mapped[int] = mapped_column(ForeignKey("domain_level_expectations.id", ondelete="CASCADE"), index=True)
+    change_id: Mapped[int | None] = mapped_column(ForeignKey("review_changes.id", ondelete="SET NULL"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    expectation: Mapped[DomainLevelExpectation] = relationship()
+    change: Mapped[ReviewChange | None] = relationship()
 
 class DraftEvidence(Base):
     __tablename__ = "draft_evidence"

@@ -97,9 +97,13 @@ def score_result(result: ExtractionResult, case: EvaluationCase) -> dict[str, fl
     levels = {canonical_label(requirement.career_level or "") for requirement in result.requirements}
     domain_correct = bool(domains & set(case.expected_domains))
     level_correct = case.expected_level in levels
-    classification_accuracy = (int(domain_correct) + int(level_correct)) / 2
+    domain_accuracy = float(domain_correct)
+    career_level_accuracy = float(level_correct)
+    classification_accuracy = (domain_accuracy + career_level_accuracy) / 2
     return {
         "extraction_accuracy": extraction_accuracy,
+        "domain_accuracy": domain_accuracy,
+        "career_level_accuracy": career_level_accuracy,
         "classification_accuracy": classification_accuracy,
         "json_validity": 1.0,
         "hallucination_rate": hallucination_rate,
@@ -119,7 +123,7 @@ def overall_score(metrics: dict[str, float]) -> float:
 
 
 def evaluate_model(client: OllamaClient, model_name: str) -> dict[str, Any]:
-    totals = {"extraction_accuracy": 0.0, "classification_accuracy": 0.0, "json_validity": 0.0, "hallucination_rate": 0.0}
+    totals = {"extraction_accuracy": 0.0, "domain_accuracy": 0.0, "career_level_accuracy": 0.0, "classification_accuracy": 0.0, "json_validity": 0.0, "hallucination_rate": 0.0}
     durations: list[float] = []
     failures: list[str] = []
     for case in EVALUATION_CASES:
@@ -128,7 +132,7 @@ def evaluate_model(client: OllamaClient, model_name: str) -> dict[str, Any]:
             result = client.extract(case.content, EVALUATION_TAXONOMY, model=model_name)
             metrics = score_result(result, case)
         except Exception as exc:
-            metrics = {"extraction_accuracy": 0.0, "classification_accuracy": 0.0, "json_validity": 0.0, "hallucination_rate": 1.0}
+            metrics = {"extraction_accuracy": 0.0, "domain_accuracy": 0.0, "career_level_accuracy": 0.0, "classification_accuracy": 0.0, "json_validity": 0.0, "hallucination_rate": 1.0}
             failures.append(f"{case.case_id}: {type(exc).__name__}")
         durations.append((time.perf_counter() - started) * 1000)
         for key in totals:
@@ -211,9 +215,9 @@ class ModelSelectionService:
         db.commit()
         return selection
 
-    def _evaluation_targets(self):
+    def _evaluation_targets(self, provider: str | None = None):
         if self.providers:
-            return [(catalog.provider, model.model_id, model.name) for catalog in self.providers.discover() if catalog.status == "connected" for model in catalog.models]
+            return [(catalog.provider, model.model_id, model.name) for catalog in self.providers.discover() if catalog.status == "connected" and (provider is None or catalog.provider == provider) for model in catalog.models]
         return [("ollama", model, model) for model in self.list_models()]
 
     def _evaluate_target(self, provider: str, model_id: str) -> dict[str, Any]:
@@ -221,8 +225,8 @@ class ModelSelectionService:
             return evaluate_model(self.providers.client(provider), model_id)
         return evaluate_model(self.client, model_id)
 
-    def evaluate_and_select(self, db: Session) -> list[ModelEvaluation]:
-        targets = self._evaluation_targets()
+    def evaluate_and_select(self, db: Session, provider: str | None = None) -> list[ModelEvaluation]:
+        targets = self._evaluation_targets(provider)
         if not targets:
             raise ModelSelectionError("No models are available through configured providers.")
         evaluations: list[ModelEvaluation] = []
@@ -230,7 +234,8 @@ class ModelSelectionService:
             metrics = self._evaluate_target(provider, model_id)
             evaluation = ModelEvaluation(
                 evaluation_version=EVALUATION_VERSION, provider=provider, model_id=model_id, model_name=model_name,
-                extraction_accuracy=metrics["extraction_accuracy"], classification_accuracy=metrics["classification_accuracy"],
+                extraction_accuracy=metrics["extraction_accuracy"], domain_accuracy=metrics["domain_accuracy"],
+                career_level_accuracy=metrics["career_level_accuracy"], classification_accuracy=metrics["classification_accuracy"],
                 json_validity=metrics["json_validity"], hallucination_rate=metrics["hallucination_rate"],
                 average_processing_ms=metrics["average_processing_ms"], overall_score=metrics["overall_score"],
                 error_message=metrics["error_message"], evaluated_at=datetime.now(timezone.utc),
@@ -252,5 +257,8 @@ class ModelSelectionService:
         db.commit()
         return evaluations
 
-    def recent_evaluations(self, db: Session) -> list[ModelEvaluation]:
-        return list(db.scalars(select(ModelEvaluation).where(ModelEvaluation.evaluation_version == EVALUATION_VERSION).order_by(ModelEvaluation.overall_score.desc(), ModelEvaluation.evaluated_at.desc())).all())
+    def recent_evaluations(self, db: Session, provider: str | None = None) -> list[ModelEvaluation]:
+        query = select(ModelEvaluation).where(ModelEvaluation.evaluation_version == EVALUATION_VERSION)
+        if provider:
+            query = query.where(ModelEvaluation.provider == provider)
+        return list(db.scalars(query.order_by(ModelEvaluation.overall_score.desc(), ModelEvaluation.evaluated_at.desc())).all())

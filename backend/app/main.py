@@ -14,6 +14,7 @@ from .database import SessionLocal, get_db, init_db
 from .health import service_status
 from .knowledge import router as knowledge_router
 from .phase5_api import router as phase5_router
+from .research_review_api import router as research_review_router
 from .logging_config import configure_logging
 from .models import CareerProfile
 from .read_api import router as read_router
@@ -45,12 +46,13 @@ app = FastAPI(
 app.include_router(knowledge_router, prefix=settings.api_prefix)
 app.include_router(read_router, prefix=settings.api_prefix)
 app.include_router(phase5_router, prefix=settings.api_prefix)
+app.include_router(research_review_router, prefix=settings.api_prefix)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
 
