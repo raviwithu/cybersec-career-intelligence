@@ -96,6 +96,7 @@ class ResearchSubmissionResponse(BaseModel):
     error_message: str | None
     submitted_at: datetime
     completed_at: datetime | None
+    review_status: str = "pending"
     finding_count: int = 0
     draft_count: int = 0
 

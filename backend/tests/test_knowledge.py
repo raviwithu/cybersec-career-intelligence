@@ -3,6 +3,7 @@ ADMIN_HEADERS = {"X-Admin-API-Key": "test-admin-key"}
 from pathlib import Path
 import os
 import subprocess
+import sys
 
 
 def test_taxonomy_matches_revised_domain_and_track_requirements(client):
@@ -115,7 +116,7 @@ def test_alembic_migration_creates_revised_tables():
     temp_database.unlink(missing_ok=True)
     environment = {**os.environ, "DATABASE_URL": f"sqlite:///{temp_database}"}
     result = subprocess.run(
-        [str(backend / ".venv/bin/alembic"), "-c", str(backend / "alembic.ini"), "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "-c", str(backend / "alembic.ini"), "upgrade", "head"],
         cwd=backend,
         env=environment,
         capture_output=True,
@@ -131,7 +132,7 @@ def test_alembic_migration_creates_revised_tables():
             "security_domains", "career_levels", "competency_categories", "competencies",
             "domain_level_expectations", "competency_relationships", "research_sources",
             "expectation_sources", "analysis_versions", "research_submissions", "research_findings",
-            "draft_expectations", "draft_evidence",
+            "draft_expectations", "draft_evidence", "research_submission_audits",
         } <= tables
     finally:
         temp_database.unlink(missing_ok=True)
