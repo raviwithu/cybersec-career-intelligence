@@ -177,3 +177,12 @@ def test_accept_reports_missing_domain_as_classification_gap(client, monkeypatch
     assert cleared.status_code == 422
     still_pending = client.get(f"/api/v1/research/review/submissions/{submission_id}", headers=ADMIN_HEADERS).json()["findings"][0]["review_change"]
     assert still_pending["status"] == "pending"
+
+
+def test_submission_accepts_blank_optional_form_fields(client, monkeypatch):
+    monkeypatch.setattr(providers, "extract_selected", lambda provider, model_id, content, taxonomy: result_for(content))
+    response = client.post("/api/v1/research/submissions", headers=ADMIN_HEADERS, json={
+        "content": "blank date source", "source_title": "Imported role", "source_url": "https://example.test/role",
+        "research_date": "", "source_type": "url_imported",
+    })
+    assert response.status_code == 201, response.text

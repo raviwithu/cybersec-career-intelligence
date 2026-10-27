@@ -15,6 +15,12 @@ export class ApiError extends Error {
   }
 }
 
+function errorMessage(detail) {
+  // FastAPI validation errors arrive as a list of { loc, msg } objects.
+  if (Array.isArray(detail)) return detail.map((item) => `${(item.loc || []).filter((part) => part !== "body").join(".")}: ${item.msg}`).join("; ");
+  return typeof detail === "string" ? detail : null;
+}
+
 async function request(path, options = {}) {
   const isFormData = options.body instanceof FormData;
   const headers = isFormData ? { ...options.headers } : { "Content-Type": "application/json", ...options.headers };
@@ -26,7 +32,7 @@ async function request(path, options = {}) {
     } catch {
       detail = null;
     }
-    throw new ApiError(detail?.detail || `Request failed with status ${response.status}`, response.status, detail);
+    throw new ApiError(errorMessage(detail?.detail) || `Request failed with status ${response.status}`, response.status, detail);
   }
   return response.json();
 }

@@ -62,6 +62,28 @@ describe("Phase 5 research console", () => {
     await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/research/submissions"), expect.objectContaining({ method: "POST", body: expect.stringContaining("url_imported") })));
   });
 
+  it("sends a missing posted date as null and shows analysis errors next to the button", async () => {
+    const baseFetch = global.fetch;
+    global.fetch = vi.fn((url, options = {}) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/import-url")) return response({ source_url: "https://jobs.example.test/security", job_title: "Senior Security Engineer", job_description: "Secure product releases.", extraction_method: "json_ld", date_posted: null, status: "success" });
+      if (path.endsWith("/submissions") && options.method === "POST") return response({ detail: [{ loc: ["body", "content"], msg: "String should have at least 1 character" }] }, false, 422);
+      return baseFetch(url, options);
+    });
+    render(<ResearchAdminPage />);
+    fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open research console" }));
+    await waitFor(() => expect(screen.getByText("Research consolidation")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Import from URL" }));
+    fireEvent.change(screen.getByLabelText("Job Posting URL"), { target: { value: "https://jobs.example.test/security" } });
+    fireEvent.click(screen.getByRole("button", { name: "Fetch Job Description" }));
+    await waitFor(() => expect(screen.getByDisplayValue("Senior Security Engineer")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Analyze with/ }));
+    await waitFor(() => expect(screen.getByText("Analysis failed: content: String should have at least 1 character")).toBeTruthy());
+    const [, submitOptions] = global.fetch.mock.calls.find(([requestUrl, options]) => requestUrl.endsWith("/research/submissions") && options?.method === "POST");
+    expect(JSON.parse(submitOptions.body).research_date).toBeNull();
+  });
+
   it("refreshes, evaluates, and manually selects an installed model", async () => {
     render(<ResearchAdminPage />);
     fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });
