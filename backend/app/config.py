@@ -30,6 +30,23 @@ class Settings(BaseSettings):
     url_import_timeout_seconds: float = 10.0
     url_import_max_bytes: int = 1_000_000
     url_import_max_redirects: int = 5
+    research_request_timeout_seconds: float = 15.0
+    research_response_max_bytes: int = 1_000_000
+    research_retry_count: int = 2
+    research_retry_base_seconds: float = 1.0
+    research_max_items_per_run: int = 50
+    research_scheduler_enabled: bool = True
+    research_scheduler_poll_seconds: int = 30
+    research_lock_ttl_seconds: int = 900
+    research_allowed_user_agent: str = "CyberSecCareerIntelligenceResearch/1.0"
+    research_default_respect_robots: bool = True
+    linkedin_authorized_api_base_url: str | None = None
+    linkedin_authorized_api_key: str | None = None
+    licensed_job_provider_base_url: str | None = None
+    licensed_job_provider_api_key: str | None = None
+    employer_ats_api_base_url: str | None = None
+    employer_ats_api_key: str | None = None
+    job_search_retention_days: int = 90
 
     cors_origins: str = "http://localhost:3100,http://127.0.0.1:3100"
 

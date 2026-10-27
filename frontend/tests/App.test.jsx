@@ -37,6 +37,8 @@ function mockApi({ fail = false, empty = false } = {}) {
     if (path.endsWith("/compare")) return response({ domain: { id: 2, name: "Boot Security", slug: "boot-security" }, levels: [{ level: levels[2], competency_ids: [1], competency_count: 1 }, { level: levels[4], competency_ids: [1], competency_count: 1 }], shared_competencies: [{ competency, expectations_by_level: { senior: [expectation], architect: [expectation] }, proficiency_by_level: { senior: ["advanced"], architect: ["expert"] }, responsibilities_by_level: { senior: ["implement"], architect: ["design"] } }], unique_competencies: { senior: [], architect: [] }, differences: [] });
     if (path.endsWith("/search")) return response(page(empty ? [] : [{ result_type: "competency", id: 1, name: "Secure Boot", description: competency.description, competency_id: 1 }], empty ? 0 : 1));
     if (path.endsWith("/profiles")) return response([]);
+    if (path.endsWith("/job-searches/provider-status")) return response([{ provider_type: "linkedin_authorized", status: "unconfigured", display_name: "Authorized LinkedIn integration", limitations: ["Requires authorized access"], configured: false }, { provider_type: "import", status: "configured", display_name: "Permitted import", limitations: ["Uses permitted URLs or datasets"], configured: true }]);
+    if (path.endsWith("/job-searches")) return response([]);
     return response({});
   });
 }
@@ -98,6 +100,23 @@ describe("Phase 4 knowledge workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit search" }));
     expect(await screen.findByText("1 results for")).toBeTruthy();
   });
+
+  it("opens the authenticated automated research workspace", async () => {
+    sessionStorage.clear();
+    render(<App />);
+    fireEvent.click(await screen.findByText("Automated Research"));
+    expect(await screen.findByText("Unlock automated research")).toBeTruthy();
+  });
+
+  it("renders the LinkedIn Job Search workspace with provider status", async () => {
+    sessionStorage.setItem("cybersec-career-intelligence.admin-api-key", "test-admin-key");
+    render(<App />);
+    fireEvent.click(await screen.findByText("Automated Research"));
+    fireEvent.click(await screen.findByText("LinkedIn Job Search"));
+    expect(await screen.findByText("Authorized search results integration")).toBeTruthy();
+    expect(screen.getByText("No undocumented APIs")).toBeTruthy();
+  });
+
 
   it("shows empty states and API errors", async () => {
     global.fetch = mockApi({ empty: true });

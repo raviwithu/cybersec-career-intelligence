@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createProfile, fetchCategories, fetchCareerMatrix, fetchCompetencies, fetchDomains, fetchExpectations, fetchHealth, fetchIndustries, fetchLevels, fetchProfiles } from "./api";
 import { Badge, ErrorState, Loading } from "./components";
 import { CompetenciesPage, ComparePage, DashboardPage, DomainsPage, MatrixPage, SearchPage } from "./pages";
+import AutomatedResearchPage from "./AutomatedResearchPage";
 import ResearchAdminPage from "./ResearchAdminPage";
 import ResearchReviewPage from "./ResearchReviewPage";
 import { useApi } from "./useApi";
@@ -15,6 +16,7 @@ const navigation = [
   { id: "competencies", label: "Competencies", icon: "◎" },
   { id: "search", label: "Global search", icon: "⌕" },
   { id: "research", label: "Research admin", icon: "✦" },
+  { id: "automated-research", label: "Automated Research", icon: "↻" },
   { id: "research-review", label: "Research Review", icon: "✓" },
 ];
 
@@ -66,8 +68,9 @@ export default function AppShell() {
           : view === "competencies" ? <CompetenciesPage domains={data.domains} levels={data.levels} categories={data.categories} selectedIndustry={selectedIndustry} selectedCompetencyId={selectedCompetencyId} onSelectCompetency={setSelectedCompetencyId} />
             : view === "search" ? <SearchPage domains={data.domains} levels={data.levels} selectedIndustry={selectedIndustry} onCompetency={openCompetency} onDomain={openDomain} />
             : view === "research" ? <ResearchAdminPage />
-              : view === "research-review" ? <ResearchReviewPage />
-                : <ProfilePage />;
+              : view === "automated-research" ? <AutomatedResearchPage onOpenReview={() => navigate("research-review")} />
+                : view === "research-review" ? <ResearchReviewPage />
+                  : <ProfilePage />;
   return <div className="app-frame">
     <aside className={`sidebar ${mobileOpen ? "open" : ""}`}><div className="brand"><div className="brand-mark">C<span>·</span></div><div><strong>CyberSec</strong><small>Career Intelligence</small></div></div><div className="sidebar-section"><span className="sidebar-label">WORKSPACE</span><nav>{navigation.map((item) => <button className={view === item.id ? "active" : ""} key={item.id} onClick={() => navigate(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav></div><div className="sidebar-footer"><button className={`profile-nav ${view === "profile" ? "active" : ""}`} onClick={() => navigate("profile")}><span className="avatar">CI</span><span><strong>My profile</strong><small>Phase 1 baseline</small></span><span>→</span></button><div className="version-label">KNOWLEDGE BASE · PHASE 4</div></div></aside>
     {mobileOpen && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}

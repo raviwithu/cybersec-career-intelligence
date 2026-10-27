@@ -153,3 +153,28 @@ export function rejectResearchReviewChange(id, expected_version, reviewer_note, 
 export function fetchResearchPublicationPreview(adminKey) { return request("/api/v1/research/review/publication-preview", { headers: adminHeaders(adminKey) }); }
 export function publishResearchReview(payload, adminKey) { return request("/api/v1/research/review/publish", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
 export function fetchResearchReviewHistory(adminKey) { return request("/api/v1/research/review/history", { headers: adminHeaders(adminKey) }); }
+
+export function fetchAutomatedResearchDashboard(adminKey) { return request("/api/v1/research/automated/dashboard", { headers: adminHeaders(adminKey) }); }
+export function fetchAutomatedResearchSources(adminKey) { return request("/api/v1/research/automated/sources", { headers: adminHeaders(adminKey) }); }
+export function createAutomatedResearchSource(payload, adminKey) { return request("/api/v1/research/automated/sources", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function updateAutomatedResearchSource(id, payload, adminKey) { return request(`/api/v1/research/automated/sources/${id}`, { method: "PATCH", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function configureAutomatedResearchSchedule(id, payload, adminKey) { return request(`/api/v1/research/automated/sources/${id}/schedule`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function pauseAutomatedResearchSchedule(id, adminKey) { return request(`/api/v1/research/automated/sources/${id}/pause`, { method: "POST", headers: adminHeaders(adminKey) }); }
+export function resumeAutomatedResearchSchedule(id, adminKey) { return request(`/api/v1/research/automated/sources/${id}/resume`, { method: "POST", headers: adminHeaders(adminKey) }); }
+export function disableAutomatedResearchSource(id, adminKey) { return request(`/api/v1/research/automated/sources/${id}`, { method: "DELETE", headers: adminHeaders(adminKey) }); }
+export function startAutomatedResearchRun(payload, adminKey) { return request("/api/v1/research/automated/runs", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function fetchAutomatedResearchRuns(adminKey) { return request("/api/v1/research/automated/runs", { headers: adminHeaders(adminKey) }); }
+export function fetchAutomatedResearchCoverage(adminKey) { return request("/api/v1/research/automated/coverage", { headers: adminHeaders(adminKey) }); }
+export function fetchAutomatedResearchChanges(adminKey) { return request("/api/v1/research/automated/changes", { headers: adminHeaders(adminKey) }); }
+export function fetchAutomatedResearchFindings(adminKey) { return request("/api/v1/research/automated/findings", { headers: adminHeaders(adminKey) }); }
+
+export function fetchJobSearchProviders(adminKey) { return request("/api/v1/research/automated/job-searches/provider-status", { headers: adminHeaders(adminKey) }); }
+export function fetchJobSearches(adminKey) { return request("/api/v1/research/automated/job-searches", { headers: adminHeaders(adminKey) }); }
+export function createJobSearch(payload, adminKey) { return request("/api/v1/research/automated/job-searches", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function updateJobSearch(id, payload, adminKey) { return request(`/api/v1/research/automated/job-searches/${id}`, { method: "PATCH", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function scheduleJobSearch(id, payload, adminKey) { return request(`/api/v1/research/automated/job-searches/${id}/schedule`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function runJobSearch(id, payload, adminKey) { return request(`/api/v1/research/automated/job-searches/${id}/runs`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload || {}) }); }
+export function importJobSearchResults(id, payload, adminKey) { return request(`/api/v1/research/automated/job-searches/${id}/import`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function fetchJobSearchRuns(id, adminKey) { return request(`/api/v1/research/automated/job-searches/${id}/runs`, { headers: adminHeaders(adminKey) }); }
+export function fetchJobSearchRunResults(runId, adminKey) { return request(`/api/v1/research/automated/job-searches/runs/${runId}/results`, { headers: adminHeaders(adminKey) }); }
+export function retryJobSearchRun(runId, adminKey) { return request(`/api/v1/research/automated/job-searches/runs/${runId}/retry`, { method: "POST", headers: adminHeaders(adminKey) }); }
