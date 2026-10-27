@@ -38,6 +38,9 @@ DOMAIN_SEED = [
     ("cloud-infrastructure-security", "Cloud Infrastructure Security", "Security architecture and operations for cloud infrastructure.", None, 3),
     ("traditional-server-infrastructure-security", "Traditional Server Infrastructure Security", "Security of conventional server, operating system, and network infrastructure.", None, 4),
     ("embedded-systems-security", "Embedded Systems Security", "Security of embedded devices, firmware, hardware, and connected systems.", None, 5),
+    ("governance-risk-compliance", "Governance, Risk, and Compliance", "Security governance, risk assessment and management, third-party and transaction risk, policy, audit, and regulatory or framework compliance such as NIST, ISO 27001, and CMMC.", None, 6),
+    ("identity-access-management", "Identity and Access Management", "Identity lifecycle, authentication, authorization, privileged access, and directory or identity-provider security.", None, 7),
+    ("security-operations", "Security Operations", "Threat detection, monitoring, incident response, vulnerability management, and security tooling operations.", None, 8),
 ]
 
 EMBEDDED_SUBDOMAINS = [

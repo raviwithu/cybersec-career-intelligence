@@ -61,8 +61,10 @@ Available taxonomy JSON (use only these domain, industry, career-level, and cate
 
 Industry rules: classify an industry only when the research text explicitly supports it. Do not infer an industry solely from a technology such as CAN, Kubernetes, or cryptography. If evidence is insufficient, return empty industry arrays and explain the uncertainty in unclassified_notes. Use one primary industry at most, optional secondary industries, and quote or closely summarize the supporting evidence.
 
+Field rules: put degrees, certifications, clearances, and years of experience in "qualifications", and named tools, products, platforms, languages, and frameworks in "tools_technologies", as comma-separated text. Copy job-wide qualifications into each requirement they apply to. Do not create a separate requirement only for a degree, certification, experience range, or tool list. Set experience_years_min/max when the text states years of experience. Leave domain_slugs empty when no supplied domain fits.
+
 Return JSON with this exact shape:
-{{"requirements":[{{"domain_slugs":[],"security_subdomains":[],"industry_slugs":[],"secondary_industry_slugs":[],"industry_classification_evidence":"","career_level":null,"competency_name":"","category_slug":null,"technical_knowledge":"","practical_capability":"","responsibilities":"","finding_type":"technical-skills","proficiency_level":"proficient","importance":"important","experience_years_min":null,"experience_years_max":null,"evidence_excerpt":"","confidence":0.0}}],"unclassified_notes":[]}}
+{{"requirements":[{{"domain_slugs":[],"security_subdomains":[],"industry_slugs":[],"secondary_industry_slugs":[],"industry_classification_evidence":"","career_level":null,"competency_name":"","category_slug":null,"technical_knowledge":"","practical_capability":"","qualifications":"","tools_technologies":"","responsibilities":"","finding_type":"technical-skills","proficiency_level":"proficient","importance":"important","experience_years_min":null,"experience_years_max":null,"evidence_excerpt":"","confidence":0.0}}],"unclassified_notes":[]}}
 
 <UNTRUSTED_RESEARCH_DATA>
 {content}

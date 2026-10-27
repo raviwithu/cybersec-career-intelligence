@@ -8,7 +8,7 @@ The database stores normalized knowledge extracted from research or future AI an
 
 ## Taxonomy
 
-- Five top-level domains: Web Application Security, Cloud API Security, Cloud Infrastructure Security, Traditional Server Infrastructure Security, and Embedded Systems Security.
+- Eight top-level domains: Web Application Security, Cloud API Security, Cloud Infrastructure Security, Traditional Server Infrastructure Security, Embedded Systems Security, Governance, Risk, and Compliance, Identity and Access Management, and Security Operations.
 - Embedded Systems Security has five child domains: Embedded Application Security, Operating System Security, Boot Security, Hardware Security, and Wireless Security.
 - Six career levels are seeded: Junior, Intermediate, Senior, Manager, Architect, and Director.
 - Manager and Director use the management track; Architect uses the technical track; Junior, Intermediate, and Senior are shared. The data model does not impose a hierarchy between technical and management tracks.

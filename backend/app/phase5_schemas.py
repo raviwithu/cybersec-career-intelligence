@@ -26,6 +26,14 @@ class ExtractedRequirement(BaseModel):
     evidence_excerpt: str = Field(min_length=1, max_length=3000)
     confidence: float | None = Field(default=None, ge=0, le=1)
 
+    @field_validator("qualifications", "tools_technologies", mode="before")
+    @classmethod
+    def join_text_lists(cls, value):
+        # Models sometimes return these as arrays despite the string schema.
+        if isinstance(value, list):
+            return ", ".join(str(item).strip() for item in value if str(item).strip())
+        return "" if value is None else value
+
     @field_validator("experience_years_max")
     @classmethod
     def max_years_is_reasonable(cls, value: int | None) -> int | None:

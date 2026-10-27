@@ -11,7 +11,7 @@ def test_domain_hierarchy_and_missing_resource(client):
     response = client.get("/api/v1/domains")
     assert response.status_code == 200
     domains = response.json()
-    assert len(domains) == 5
+    assert len(domains) == 8
     embedded = next(item for item in domains if item["slug"] == "embedded-systems-security")
     assert len(embedded["children"]) == 5
     assert all(child["parent_id"] == embedded["id"] for child in embedded["children"])
