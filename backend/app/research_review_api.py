@@ -240,7 +240,12 @@ def change_comparison(change_id: int, db: Session = Depends(get_db)) -> ReviewCo
 
 @router.post("/changes/{change_id}/accept", response_model=ReviewMutationResponse, dependencies=[Depends(require_admin)])
 def accept_review_change(change_id: int, payload: ReviewActionRequest, actor: str = Depends(require_admin), db: Session = Depends(get_db)) -> ReviewMutationResponse:
-    return ReviewMutationResponse(status="accepted", change=change_response(accept_change(db, change_id, payload.expected_version, actor, payload.reviewer_note)))
+    try:
+        change = accept_change(db, change_id, payload.expected_version, actor, payload.reviewer_note, payload.publish)
+    except HTTPException:
+        db.rollback()
+        raise
+    return ReviewMutationResponse(status=change.status, change=change_response(change))
 
 
 @router.patch("/changes/{change_id}", response_model=ReviewMutationResponse, dependencies=[Depends(require_admin)])

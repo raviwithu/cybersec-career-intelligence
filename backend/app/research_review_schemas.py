@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 class ReviewActionRequest(BaseModel):
     expected_version: int = Field(ge=1)
     reviewer_note: str | None = Field(default=None, max_length=2000)
+    publish: bool = False
 
 
 class ReviewModifyRequest(BaseModel):

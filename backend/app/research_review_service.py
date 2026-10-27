@@ -190,6 +190,33 @@ def ensure_all_changes(db: Session) -> list[ReviewChange]:
     return changes
 
 
+def snapshot_gaps(snapshot: dict[str, Any]) -> list[str]:
+    gaps = []
+    if not snapshot.get("domain_ids"):
+        gaps.append("domain")
+    if snapshot.get("career_level_id") is None:
+        gaps.append("career_level")
+    if snapshot.get("category_id") is None:
+        gaps.append("category")
+    if not (snapshot.get("competency_name") or "").strip():
+        gaps.append("competency_name")
+    if not (snapshot.get("expectation_description") or "").strip():
+        gaps.append("expectation_description")
+    return gaps
+
+
+def review_gaps(finding: ResearchFinding, change: ReviewChange | None) -> list[str]:
+    stored = (finding.details or {}).get("classification_gaps", [])
+    if change is None:
+        return stored
+    # Gaps that would block acceptance come from the current proposal; extraction-time gaps (e.g. a fallback
+    # category) still apply until a reviewer saves the proposal. "competency" only means no existing match.
+    gaps = snapshot_gaps(change.proposed_snapshot)
+    if change.reviewer_snapshot is None:
+        gaps += [gap for gap in stored if gap not in gaps and gap not in {"domain", "career_level", "competency"}]
+    return gaps
+
+
 def finding_response(finding: ResearchFinding, change: ReviewChange | None = None) -> dict[str, Any]:
     details = finding.details or {}
     domains = _domain_items(finding)
@@ -211,7 +238,7 @@ def finding_response(finding: ResearchFinding, change: ReviewChange | None = Non
         "confidence": finding.confidence,
         "confidence_meaningful": finding.confidence is not None and 0 <= finding.confidence <= 1,
         "status": finding.status,
-        "classification_gaps": details.get("classification_gaps", []),
+        "classification_gaps": review_gaps(finding, change),
         "domains": [_ref(domain) for domain in domains],
         "career_level": _ref(finding.career_level),
         "category": _ref(finding.category),
@@ -347,17 +374,22 @@ def _record(change: ReviewChange, action: str, actor: str, before: dict[str, Any
     change.audits.append(ReviewAudit(action=action, actor=actor, before_snapshot=before, after_snapshot=after, note=note))
 
 
-def accept_change(db: Session, change_id: int, expected_version: int, actor: str, note: str | None) -> ReviewChange:
+def accept_change(db: Session, change_id: int, expected_version: int, actor: str, note: str | None, publish: bool = False) -> ReviewChange:
     change = _require_change(db, change_id)
     _check_version(change, expected_version)
-    if change.status in APPROVED_STATUSES:
+    if change.status in APPROVED_STATUSES and not publish:
         raise HTTPException(status_code=409, detail=f"Review change is already {change.status}")
-    proposed = deepcopy(change.proposed_snapshot)
-    _validate_snapshot(db, proposed)
-    change.status = "accepted"
-    change.reviewer_snapshot = proposed
-    _record(change, "accepted", actor, change.proposed_snapshot, proposed, note)
-    db.commit()
+    if change.status not in APPROVED_STATUSES:
+        proposed = deepcopy(change.proposed_snapshot)
+        _validate_snapshot(db, proposed)
+        change.status = "accepted"
+        change.reviewer_snapshot = proposed
+        _record(change, "accepted", actor, change.proposed_snapshot, proposed, note)
+        db.commit()
+    if publish:
+        # Accept-and-merge: publish this single change into the domain knowledge base right away.
+        publish_changes(db, [change.id], {change.id: change.version}, actor)
+        change = _require_change(db, change_id)
     return change
 
 
@@ -485,10 +517,6 @@ def publication_preview(db: Session, change_ids: list[int] | None = None, expect
             _validate_snapshot(db, change.proposed_snapshot)
         except HTTPException as exc:
             blockers.append(f"Change {change.id}: {exc.detail}")
-        if change.change_type == "new_competency":
-            duplicate = db.scalar(select(Competency).where(Competency.name == change.proposed_snapshot.get("competency_name")))
-            if duplicate is not None:
-                blockers.append(f"Change {change.id} now duplicates competency {duplicate.id}; merge it instead")
     impact = domain_impact(db, changes)
     levels = {}
     for change in changes:
@@ -588,8 +616,6 @@ def publish_changes(db: Session, change_ids: list[int] | None, expected_versions
         if expected_versions.get(change.id) != change.version:
             raise HTTPException(status_code=409, detail=f"Change {change.id} changed; refresh the publication preview")
         _validate_snapshot(db, change.proposed_snapshot)
-        if change.change_type == "new_competency" and db.scalar(select(Competency).where(Competency.name == change.proposed_snapshot.get("competency_name"))):
-            raise HTTPException(status_code=409, detail=f"Change {change.id} now duplicates an existing competency")
     batch = PublicationBatch(submission_id=changes[0].submission_id if len({item.submission_id for item in changes}) == 1 else None, status="pending", created_by=actor, created_at=now())
     db.add(batch)
     db.flush()
@@ -598,10 +624,14 @@ def publish_changes(db: Session, change_ids: list[int] | None, expected_versions
     for change in changes:
         snapshot = change.proposed_snapshot
         if change.change_type == "new_competency":
-            category = db.get(CompetencyCategory, snapshot["category_id"])
-            competency = Competency(name=snapshot["competency_name"], slug=_make_slug_unique(db, snapshot["competency_name"]), description=snapshot.get("competency_description", ""), category_id=category.id)
-            db.add(competency)
-            db.flush()
+            # A competency with the same name may already exist (published earlier); merge into it instead of duplicating.
+            competency = db.scalar(select(Competency).where(func.lower(Competency.name) == snapshot["competency_name"].strip().lower()))
+            if competency is None:
+                category = db.get(CompetencyCategory, snapshot["category_id"])
+                competency = Competency(name=snapshot["competency_name"].strip(), slug=_make_slug_unique(db, snapshot["competency_name"]), description=snapshot.get("competency_description", ""), category_id=category.id)
+                db.add(competency)
+                db.flush()
+            change.target_competency_id = competency.id
             competency_ids.append(competency.id)
         else:
             competency_id = change.merge_target_competency_id or change.target_competency_id
