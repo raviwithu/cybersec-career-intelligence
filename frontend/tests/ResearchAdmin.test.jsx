@@ -116,6 +116,29 @@ describe("Phase 5 research console", () => {
     expect(screen.getByDisplayValue("Cloud security role")).toBeTruthy();
   });
 
+  it("shows analysis progress and the outcome in the status bar", async () => {
+    const baseFetch = global.fetch;
+    let finishSubmit;
+    global.fetch = vi.fn((url, options = {}) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/submissions") && options.method === "POST") return new Promise((resolve) => { finishSubmit = () => resolve({ ok: true, status: 201, json: () => Promise.resolve({ id: 4, status: "draft_ready", finding_count: 6, draft_count: 3 }) }); });
+      return baseFetch(url, options);
+    });
+    render(<ResearchAdminPage />);
+    fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open research console" }));
+    await waitFor(() => expect(screen.getByText(/^Ready · Active model:/)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Job description"), { target: { value: "Cloud security role" } });
+    fireEvent.click(screen.getByRole("button", { name: "Analyze pasted text" }));
+    await waitFor(() => expect(screen.getByText(/^Analyzing with /)).toBeTruthy());
+    expect(screen.getByLabelText("Elapsed time").textContent).toMatch(/^0:0\d$/);
+    finishSubmit();
+    await waitFor(() => expect(screen.getByText(/^Analyzed with /)).toBeTruthy());
+    expect(screen.getByText(/6 findings · 3 drafts/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss status" }));
+    expect(screen.getByText(/^Ready · Active model:/)).toBeTruthy();
+  });
+
   it("refreshes, evaluates, and manually selects an installed model", async () => {
     render(<ResearchAdminPage />);
     fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });

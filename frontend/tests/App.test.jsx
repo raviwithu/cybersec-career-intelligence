@@ -52,6 +52,16 @@ describe("Phase 4 knowledge workspace", () => {
     expect(screen.getByText("1/6")).toBeTruthy();
   });
 
+  it("refreshes domains when navigating so newly published research appears without a reload", async () => {
+    render(<App />);
+    expect(await screen.findByText("Cybersecurity career intelligence")).toBeTruthy();
+    const grc = { ...domain, id: 11, name: "Governance, Risk, and Compliance", slug: "governance-risk-compliance", display_order: 6, children: [] };
+    const baseFetch = global.fetch;
+    global.fetch = vi.fn((url, options) => new URL(url).pathname.endsWith("/domains") ? response([domain, grc]) : baseFetch(url, options));
+    fireEvent.click(screen.getByText("Domain Explorer"));
+    expect(await screen.findByText("Governance, Risk, and Compliance")).toBeTruthy();
+  });
+
   it("navigates domains, selects a subdomain and career level", async () => {
     render(<App />);
     fireEvent.click(await screen.findByText("Domain Explorer"));

@@ -21,9 +21,11 @@ import {
   getAdminSessionKey,
   setAdminSessionKey,
 } from "./api";
-import { Badge, EmptyState, ErrorState, Loading, PageHeader } from "./components";
+import { Badge, EmptyState, ErrorState, Loading, PageHeader, StatusBar } from "./components";
 
 const emptyForm = { source_title: "", source_url: "", research_date: "", content: "" };
+
+function analysisSummary(result) { return `${result.finding_count ?? 0} findings · ${result.draft_count ?? 0} drafts`; }
 
 export default function ResearchAdminPage() {
   const [enteredKey, setEnteredKey] = useState(() => getAdminSessionKey());
@@ -48,6 +50,12 @@ export default function ResearchAdminPage() {
   const [submissionToDelete, setSubmissionToDelete] = useState(null);
   const [pendingReviewCount, setPendingReviewCount] = useState(0);
   const [notice, setNotice] = useState(null);
+  const [activity, setActivity] = useState(null);
+
+  // doneLabel/errorLabel replace the in-progress label once the action settles.
+  function startActivity(label, detail, doneLabel = label, errorLabel = `${label} failed`) { setActivity({ label, detail, doneLabel, errorLabel, state: "running", startedAt: Date.now() }); }
+  function finishActivity(state, message) { setActivity((current) => current && { ...current, label: state === "error" ? current.errorLabel : current.doneLabel, state, message, finishedAt: Date.now() }); }
+  function activeModelDetail() { return models?.active_model_id || models?.active_model_name || undefined; }
 
   async function load() {
     if (!adminKey) return;
@@ -70,68 +78,75 @@ export default function ResearchAdminPage() {
   const pendingModels = providerCatalog?.models || [];
 
   async function refreshModels() {
-    setSaving(true); setError(null);
+    setSaving(true); setError(null); startActivity("Refreshing models", "querying Ollama and OpenWebUI", "Models refreshed", "Model refresh failed");
     try {
       const result = await refreshAIModels(adminKey);
       setModels(result); setPendingProvider(result.active_provider || "ollama"); setPendingModelId(result.active_model_id || "");
-    } catch (requestError) { setError(requestError); } finally { setSaving(false); }
+      finishActivity("done", `${result.providers.reduce((total, provider) => total + provider.models.length, 0)} models found`);
+    } catch (requestError) { setError(requestError); finishActivity("error", requestError.message); } finally { setSaving(false); }
   }
 
   async function evaluateModels() {
-    setSaving(true); setError(null);
+    setSaving(true); setError(null); startActivity("Evaluating models", "running the benchmark on every discovered model", "Evaluation finished", "Evaluation failed");
     try {
       const result = await evaluateAIModels(adminKey);
       setModels(result); setPendingProvider(result.active_provider || "ollama"); setPendingModelId(result.active_model_id || "");
-    } catch (requestError) { setError(requestError); } finally { setSaving(false); }
+      finishActivity("done", `selected ${result.active_model_id || result.active_model_name}`);
+    } catch (requestError) { setError(requestError); finishActivity("error", requestError.message); } finally { setSaving(false); }
   }
 
   async function selectModel(event) {
     event.preventDefault(); if (!pendingModelId) return;
-    setSaving(true); setError(null);
+    setSaving(true); setError(null); startActivity("Selecting model", `${pendingProvider} → ${pendingModelId}`, "Model selected", "Model selection failed");
     try {
       const result = await selectAIModel(pendingProvider, pendingModelId, adminKey);
-      setModels(result);
-    } catch (requestError) { setError(requestError); } finally { setSaving(false); }
+      setModels(result); finishActivity("done", "now active");
+    } catch (requestError) { setError(requestError); finishActivity("error", requestError.message); } finally { setSaving(false); }
   }
 
   async function testModel() {
     if (!pendingModelId) return;
-    setSaving(true); setError(null); setTestResult(null);
-    try { setTestResult(await testAIModel(pendingProvider, pendingModelId, adminKey)); }
-    catch (requestError) { setError(requestError); } finally { setSaving(false); }
+    setSaving(true); setError(null); setTestResult(null); startActivity("Testing model", `${pendingProvider} → ${pendingModelId}`, "Model test finished", "Model test failed");
+    try {
+      const result = await testAIModel(pendingProvider, pendingModelId, adminKey);
+      setTestResult(result); finishActivity(result.reachable ? "done" : "error", result.reachable ? "reachable" : result.detail);
+    } catch (requestError) { setError(requestError); finishActivity("error", requestError.message); } finally { setSaving(false); }
   }
 
   async function submitText(event) {
-    event.preventDefault(); setSaving(true); setError(null); setSubmitError(null);
+    event.preventDefault(); setSaving(true); setError(null); setSubmitError(null); startActivity(`Analyzing with ${activeProviderLabel}`, activeModelDetail(), `Analyzed with ${activeProviderLabel}`, "Analysis failed");
     try {
       const result = await submitResearchText({ ...form, content: form.content.trim(), research_date: form.research_date || null, source_type: method === "url" && preview ? "url_imported" : "pasted_text" }, adminKey);
       // The API records provider failures as a "failed" submission; keep the form so it can be retried.
-      if (result.status === "failed") { setSubmitError(new Error(result.error_message || "The AI provider could not analyze this content.")); await load(); return; }
+      if (result.status === "failed") { const message = result.error_message || "The AI provider could not analyze this content."; setSubmitError(new Error(message)); finishActivity("error", message); await load(); return; }
+      finishActivity("done", analysisSummary(result));
       setForm(emptyForm); setPreview(null); setUrl(""); await load();
-    } catch (requestError) { setSubmitError(requestError); } finally { setSaving(false); }
+    } catch (requestError) { setSubmitError(requestError); finishActivity("error", requestError.message); } finally { setSaving(false); }
   }
 
   async function submitFile(event) {
     event.preventDefault(); if (!selectedFile) return;
-    setSaving(true); setError(null); setSubmitError(null);
+    setSaving(true); setError(null); setSubmitError(null); startActivity(`Analyzing ${selectedFile.name} with ${activeProviderLabel}`, activeModelDetail(), `Analyzed ${selectedFile.name}`, "Analysis failed");
     try {
       const data = new FormData(); data.append("file", selectedFile);
       if (form.source_title) data.append("source_title", form.source_title);
       if (form.source_url) data.append("source_url", form.source_url);
       if (form.research_date) data.append("research_date", form.research_date);
       const result = await submitResearchFile(data, adminKey);
-      if (result.status === "failed") { setSubmitError(new Error(result.error_message || "The AI provider could not analyze this file.")); await load(); return; }
+      if (result.status === "failed") { const message = result.error_message || "The AI provider could not analyze this file."; setSubmitError(new Error(message)); finishActivity("error", message); await load(); return; }
+      finishActivity("done", analysisSummary(result));
       setSelectedFile(null); event.target.reset(); await load();
-    } catch (requestError) { setSubmitError(requestError); } finally { setSaving(false); }
+    } catch (requestError) { setSubmitError(requestError); finishActivity("error", requestError.message); } finally { setSaving(false); }
   }
 
   async function fetchUrlPreview(event) {
-    event.preventDefault(); setSaving(true); setImportError(null); setPreview(null);
+    event.preventDefault(); setSaving(true); setImportError(null); setPreview(null); startActivity("Fetching job description", url.trim(), "Job description fetched", "Fetch failed");
     try {
       const result = await importResearchUrl(url.trim(), adminKey);
       setPreview(result);
       setForm({ source_title: result.job_title, source_url: result.source_url, research_date: result.date_posted ? result.date_posted.slice(0, 10) : "", content: result.job_description });
-    } catch (requestError) { setImportError(requestError); } finally { setSaving(false); }
+      finishActivity("done", "preview ready for review");
+    } catch (requestError) { setImportError(requestError); finishActivity("error", requestError.message); } finally { setSaving(false); }
   }
 
 
@@ -197,6 +212,7 @@ export default function ResearchAdminPage() {
       <section className="panel"><div className="panel-title-row"><div><p className="eyebrow">INGESTION HISTORY</p><h2>Submissions</h2><span className="muted-copy">Pending reviews: {pendingReviewCount}</span></div><Badge>{submissions.length}</Badge></div>{loading && !submissions.length ? <Loading label="Loading submissions" /> : submissions.length ? <div className="submission-list">{submissions.map((item) => <article className="submission-row" key={item.id}><div><strong>{item.source_title}</strong><span>{item.source_type} · {new Date(item.submitted_at).toLocaleString()}</span></div><div className="submission-actions"><Badge tone={item.status === "failed" ? "rose" : item.status === "draft_ready" ? "mint" : "blue"}>{item.status}</Badge><Badge tone={item.review_status === "published" ? "mint" : item.review_status === "rejected" ? "rose" : "violet"}>Review: {item.review_status}</Badge><button type="button" className="button button-danger" disabled={saving} aria-label={`Delete submission ${item.source_title}`} onClick={() => { setNotice(null); setSubmissionToDelete(item); }}>Delete</button></div><small>{item.finding_count} findings · {item.draft_count} drafts</small></article>)}</div> : <EmptyState title="No research submitted" message="Your analyzed sources will appear here." />}</section>
     </div>
     <section className="panel research-drafts"><div className="panel-title-row"><div><p className="eyebrow">REVIEW QUEUE</p><h2>Draft expectations</h2></div><Badge>{drafts.filter((draft) => draft.status === "draft").length} awaiting review</Badge></div>{drafts.length ? <div className="draft-list">{drafts.map((draft) => <article className="draft-card" key={draft.id}><div className="draft-heading"><div><Badge tone="violet">{draft.domain_name}</Badge><Badge>{draft.career_level_name}</Badge><h3>{draft.competency_name}</h3></div><Badge tone={draft.status === "published" ? "mint" : draft.status === "rejected" ? "rose" : "amber"}>{draft.status}</Badge></div><label>Expectation<textarea rows="3" value={editValue(draft, "expectation_description")} disabled={draft.status === "published"} onChange={(event) => setEdit(draft, "expectation_description", event.target.value)} /></label><div className="draft-fields"><label>Proficiency<input value={editValue(draft, "proficiency_level")} disabled={draft.status === "published"} onChange={(event) => setEdit(draft, "proficiency_level", event.target.value)} /></label><label>Importance<input value={editValue(draft, "importance")} disabled={draft.status === "published"} onChange={(event) => setEdit(draft, "importance", event.target.value)} /></label><label>Reviewer note<input value={editValue(draft, "reviewer_note") || ""} disabled={draft.status === "published"} onChange={(event) => setEdit(draft, "reviewer_note", event.target.value)} /></label></div><div className="evidence-list"><span className="source-label">Evidence excerpts</span>{draft.evidence.map((evidence) => <blockquote key={`${draft.id}-${evidence.supporting_excerpt}`}>“{evidence.supporting_excerpt}” <small>{evidence.source_title}</small></blockquote>)}</div><div className="draft-actions">{["draft", "rejected"].includes(draft.status) && <><button className="button button-secondary" disabled={saving} onClick={() => update(draft)}>Save edits</button><button className="button" disabled={saving} onClick={() => review(draft, "approve")}>Approve</button></>}{draft.status === "draft" && <button className="button button-danger" disabled={saving} onClick={() => review(draft, "reject")}>Reject</button>}{draft.status === "approved" && <><button className="button button-danger" disabled={saving} onClick={() => review(draft, "reject")}>Reject</button><button className="button" disabled={saving} onClick={() => review(draft, "publish")}>Publish to taxonomy</button></>}{draft.status === "published" && <span className="muted-copy">Published expectation ID {draft.published_expectation_id}</span>}</div></article>)}</div> : <EmptyState title="Review queue is empty" message="Submit research to generate taxonomy-aware draft expectations." />}</section>
+    <StatusBar activity={activity} idleText={`Ready · Active model: ${models?.active_provider || "—"} → ${models?.active_model_name || "—"}`} onDismiss={() => setActivity(null)} />
     {submissionToDelete && <div className="review-modal-backdrop" role="presentation"><section className="panel review-modal" role="dialog" aria-modal="true" aria-labelledby="delete-submission-title"><p className="eyebrow">DELETE SUBMISSION</p><h2 id="delete-submission-title">Delete {submissionToDelete.source_title}?</h2><p className="muted-copy">Are you sure you want to delete this research submission? Its unpublished findings, draft expectations, and associated review data will also be deleted. This action cannot be undone.</p><div className="review-card-actions"><button type="button" className="button button-secondary" disabled={saving} onClick={() => setSubmissionToDelete(null)}>Cancel</button><button type="button" className="button button-danger" disabled={saving} onClick={removeSubmission}>{saving ? "Deleting…" : "Delete Submission"}</button></div></section></div>}
   </>;
 }
