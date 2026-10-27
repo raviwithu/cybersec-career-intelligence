@@ -17,9 +17,11 @@ from .models import (
     DomainLevelExpectation,
     ExpectationRevision,
     ExpectationSource,
+    Industry,
     PublicationBatch,
     ResearchFinding,
     ResearchFindingDomain,
+    ResearchFindingIndustry,
     ResearchSubmission,
     ReviewAudit,
     ReviewChange,
@@ -66,6 +68,7 @@ def _expectation_snapshot(item: DomainLevelExpectation) -> dict[str, Any]:
         "domain_id": item.domain_id,
         "career_level_id": item.career_level_id,
         "competency_id": item.competency_id,
+        "industry_id": item.industry_id,
         "technical_knowledge": item.technical_knowledge,
         "practical_capability": item.practical_capability,
         "qualifications": item.qualifications,
@@ -101,6 +104,7 @@ def _find_expectations(db: Session, finding: ResearchFinding) -> list[DomainLeve
     return list(db.scalars(select(DomainLevelExpectation).where(
         DomainLevelExpectation.competency_id == finding.competency_id,
         DomainLevelExpectation.career_level_id == finding.career_level_id,
+        DomainLevelExpectation.industry_id == finding.primary_industry_id,
         DomainLevelExpectation.domain_id.in_(domain_ids),
     ).options(selectinload(DomainLevelExpectation.domain))).all())
 
@@ -116,6 +120,11 @@ def _incoming_snapshot(finding: ResearchFinding, domains: list[SecurityDomain]) 
         "career_level": _ref(finding.career_level),
         "category_id": finding.category_id,
         "category": _ref(finding.category),
+        "industry_id": finding.primary_industry_id,
+        "industry": _ref(finding.primary_industry),
+        "industry_classification_status": finding.industry_classification_status,
+        "industry_classification_evidence": finding.industry_classification_evidence,
+        "secondary_industries": [_ref(link.industry) for link in finding.industries if link.classification_role == "secondary"],
         "technical_knowledge": finding.technical_knowledge,
         "practical_capability": finding.practical_capability,
         "qualifications": details.get("qualifications", ""),
@@ -172,7 +181,9 @@ def ensure_submission_changes(db: Session, submission_id: int) -> list[ReviewCha
     findings = list(db.scalars(select(ResearchFinding).where(ResearchFinding.submission_id == submission_id).options(
         selectinload(ResearchFinding.domains).selectinload(ResearchFindingDomain.domain),
         selectinload(ResearchFinding.domain), selectinload(ResearchFinding.career_level),
-        selectinload(ResearchFinding.category), selectinload(ResearchFinding.competency).selectinload(Competency.category),
+        selectinload(ResearchFinding.category), selectinload(ResearchFinding.primary_industry),
+        selectinload(ResearchFinding.industries).selectinload(ResearchFindingIndustry.industry),
+        selectinload(ResearchFinding.competency).selectinload(Competency.category),
         selectinload(ResearchFinding.submission).selectinload(ResearchSubmission.source),
     )).all())
     return [ensure_review_change(db, finding) for finding in findings]
@@ -182,12 +193,41 @@ def ensure_all_changes(db: Session) -> list[ReviewChange]:
     findings = list(db.scalars(select(ResearchFinding).order_by(ResearchFinding.id).options(
         selectinload(ResearchFinding.domains).selectinload(ResearchFindingDomain.domain),
         selectinload(ResearchFinding.domain), selectinload(ResearchFinding.career_level),
-        selectinload(ResearchFinding.category), selectinload(ResearchFinding.competency).selectinload(Competency.category),
+        selectinload(ResearchFinding.category), selectinload(ResearchFinding.primary_industry),
+        selectinload(ResearchFinding.industries).selectinload(ResearchFindingIndustry.industry),
+        selectinload(ResearchFinding.competency).selectinload(Competency.category),
         selectinload(ResearchFinding.submission).selectinload(ResearchSubmission.source),
     )).all())
     changes = [ensure_review_change(db, finding) for finding in findings]
     db.commit()
     return changes
+
+
+def snapshot_gaps(snapshot: dict[str, Any]) -> list[str]:
+    gaps = []
+    if not snapshot.get("domain_ids"):
+        gaps.append("domain")
+    if snapshot.get("career_level_id") is None:
+        gaps.append("career_level")
+    if snapshot.get("category_id") is None:
+        gaps.append("category")
+    if not (snapshot.get("competency_name") or "").strip():
+        gaps.append("competency_name")
+    if not (snapshot.get("expectation_description") or "").strip():
+        gaps.append("expectation_description")
+    return gaps
+
+
+def review_gaps(finding: ResearchFinding, change: ReviewChange | None) -> list[str]:
+    stored = (finding.details or {}).get("classification_gaps", [])
+    if change is None:
+        return stored
+    # Gaps that would block acceptance come from the current proposal; extraction-time gaps (e.g. a fallback
+    # category) still apply until a reviewer saves the proposal. "competency" only means no existing match.
+    gaps = snapshot_gaps(change.proposed_snapshot)
+    if change.reviewer_snapshot is None:
+        gaps += [gap for gap in stored if gap not in gaps and gap not in {"domain", "career_level", "competency"}]
+    return gaps
 
 
 def finding_response(finding: ResearchFinding, change: ReviewChange | None = None) -> dict[str, Any]:
@@ -211,11 +251,15 @@ def finding_response(finding: ResearchFinding, change: ReviewChange | None = Non
         "confidence": finding.confidence,
         "confidence_meaningful": finding.confidence is not None and 0 <= finding.confidence <= 1,
         "status": finding.status,
-        "classification_gaps": details.get("classification_gaps", []),
+        "classification_gaps": review_gaps(finding, change),
         "domains": [_ref(domain) for domain in domains],
         "career_level": _ref(finding.career_level),
         "category": _ref(finding.category),
         "competency": _competency_snapshot(finding.competency),
+        "primary_industry": _ref(finding.primary_industry),
+        "secondary_industries": [_ref(link.industry) for link in finding.industries if link.classification_role == "secondary"],
+        "industry_classification_status": finding.industry_classification_status,
+        "industry_classification_evidence": finding.industry_classification_evidence,
         "existing_matches": [_expectation_snapshot(item) for item in []],
         "review_change": change_response(change) if change else None,
     }
@@ -330,6 +374,10 @@ def _validate_snapshot(db: Session, snapshot: dict[str, Any]) -> None:
         value = snapshot.get(key)
         if value is None or db.get(model, value) is None:
             raise HTTPException(status_code=422, detail=f"A valid {label} is required")
+    if snapshot.get("industry_id") is not None and db.get(Industry, snapshot["industry_id"]) is None:
+        raise HTTPException(status_code=422, detail="A valid industry is required")
+    if snapshot.get("industry_classification_status") == "classified" and (snapshot.get("industry_id") is None or not snapshot.get("industry_classification_evidence", "").strip()):
+        raise HTTPException(status_code=422, detail="Classified industry findings require an industry and supporting evidence")
     if not snapshot.get("competency_name", "").strip():
         raise HTTPException(status_code=422, detail="Competency name is required")
     if not snapshot.get("expectation_description", "").strip():
@@ -347,17 +395,22 @@ def _record(change: ReviewChange, action: str, actor: str, before: dict[str, Any
     change.audits.append(ReviewAudit(action=action, actor=actor, before_snapshot=before, after_snapshot=after, note=note))
 
 
-def accept_change(db: Session, change_id: int, expected_version: int, actor: str, note: str | None) -> ReviewChange:
+def accept_change(db: Session, change_id: int, expected_version: int, actor: str, note: str | None, publish: bool = False) -> ReviewChange:
     change = _require_change(db, change_id)
     _check_version(change, expected_version)
-    if change.status in APPROVED_STATUSES:
+    if change.status in APPROVED_STATUSES and not publish:
         raise HTTPException(status_code=409, detail=f"Review change is already {change.status}")
-    proposed = deepcopy(change.proposed_snapshot)
-    _validate_snapshot(db, proposed)
-    change.status = "accepted"
-    change.reviewer_snapshot = proposed
-    _record(change, "accepted", actor, change.proposed_snapshot, proposed, note)
-    db.commit()
+    if change.status not in APPROVED_STATUSES:
+        proposed = deepcopy(change.proposed_snapshot)
+        _validate_snapshot(db, proposed)
+        change.status = "accepted"
+        change.reviewer_snapshot = proposed
+        _record(change, "accepted", actor, change.proposed_snapshot, proposed, note)
+        db.commit()
+    if publish:
+        # Accept-and-merge: publish this single change into the domain knowledge base right away.
+        publish_changes(db, [change.id], {change.id: change.version}, actor)
+        change = _require_change(db, change_id)
     return change
 
 
@@ -375,6 +428,24 @@ def modify_change(db: Session, change_id: int, payload: ReviewModifyRequest, act
         proposed["career_level"] = _ref(db.get(CareerLevel, payload.career_level_id))
     if payload.category_id is not None:
         proposed["category"] = _ref(db.get(CompetencyCategory, payload.category_id))
+    if payload.industry_classification_status is not None:
+        proposed["industry_classification_status"] = payload.industry_classification_status
+        if payload.industry_classification_status in {"unknown", "general"}:
+            proposed["industry_id"] = None
+            proposed["industry"] = None
+        elif payload.industry_id is not None:
+            industry = db.get(Industry, payload.industry_id)
+            if industry is None or not industry.is_active:
+                raise HTTPException(status_code=422, detail="A valid active industry is required")
+            proposed["industry_id"] = industry.id
+            proposed["industry"] = _ref(industry)
+    elif payload.industry_id is not None:
+        industry = db.get(Industry, payload.industry_id)
+        if industry is None or not industry.is_active:
+            raise HTTPException(status_code=422, detail="A valid active industry is required")
+        proposed["industry_id"] = industry.id
+        proposed["industry"] = _ref(industry)
+        proposed["industry_classification_status"] = "classified"
     _validate_snapshot(db, proposed)
     change.proposed_snapshot = proposed
     change.reviewer_snapshot = proposed
@@ -485,10 +556,6 @@ def publication_preview(db: Session, change_ids: list[int] | None = None, expect
             _validate_snapshot(db, change.proposed_snapshot)
         except HTTPException as exc:
             blockers.append(f"Change {change.id}: {exc.detail}")
-        if change.change_type == "new_competency":
-            duplicate = db.scalar(select(Competency).where(Competency.name == change.proposed_snapshot.get("competency_name")))
-            if duplicate is not None:
-                blockers.append(f"Change {change.id} now duplicates competency {duplicate.id}; merge it instead")
     impact = domain_impact(db, changes)
     levels = {}
     for change in changes:
@@ -534,16 +601,17 @@ def _attach_evidence(db: Session, expectation: DomainLevelExpectation, change: R
             exists.supporting_excerpt = f"{exists.supporting_excerpt}; {excerpt}" if exists.supporting_excerpt else excerpt
 
 
-def _publish_expectation(db: Session, change: ReviewChange, competency_id: int, domain_id: int, level_id: int) -> DomainLevelExpectation:
+def _publish_expectation(db: Session, change: ReviewChange, competency_id: int, domain_id: int, level_id: int, industry_id: int | None) -> DomainLevelExpectation:
     snapshot = change.proposed_snapshot
     expectation = db.scalar(select(DomainLevelExpectation).where(
         DomainLevelExpectation.domain_id == domain_id,
         DomainLevelExpectation.career_level_id == level_id,
         DomainLevelExpectation.competency_id == competency_id,
+        DomainLevelExpectation.industry_id == industry_id,
     ))
     if expectation is None:
         expectation = DomainLevelExpectation(
-            domain_id=domain_id, career_level_id=level_id, competency_id=competency_id,
+            domain_id=domain_id, career_level_id=level_id, competency_id=competency_id, industry_id=industry_id,
             technical_knowledge=snapshot.get("technical_knowledge") or "",
             practical_capability=snapshot.get("practical_capability") or "",
             qualifications=snapshot.get("qualifications") or "",
@@ -588,8 +656,6 @@ def publish_changes(db: Session, change_ids: list[int] | None, expected_versions
         if expected_versions.get(change.id) != change.version:
             raise HTTPException(status_code=409, detail=f"Change {change.id} changed; refresh the publication preview")
         _validate_snapshot(db, change.proposed_snapshot)
-        if change.change_type == "new_competency" and db.scalar(select(Competency).where(Competency.name == change.proposed_snapshot.get("competency_name"))):
-            raise HTTPException(status_code=409, detail=f"Change {change.id} now duplicates an existing competency")
     batch = PublicationBatch(submission_id=changes[0].submission_id if len({item.submission_id for item in changes}) == 1 else None, status="pending", created_by=actor, created_at=now())
     db.add(batch)
     db.flush()
@@ -598,10 +664,14 @@ def publish_changes(db: Session, change_ids: list[int] | None, expected_versions
     for change in changes:
         snapshot = change.proposed_snapshot
         if change.change_type == "new_competency":
-            category = db.get(CompetencyCategory, snapshot["category_id"])
-            competency = Competency(name=snapshot["competency_name"], slug=_make_slug_unique(db, snapshot["competency_name"]), description=snapshot.get("competency_description", ""), category_id=category.id)
-            db.add(competency)
-            db.flush()
+            # A competency with the same name may already exist (published earlier); merge into it instead of duplicating.
+            competency = db.scalar(select(Competency).where(func.lower(Competency.name) == snapshot["competency_name"].strip().lower()))
+            if competency is None:
+                category = db.get(CompetencyCategory, snapshot["category_id"])
+                competency = Competency(name=snapshot["competency_name"].strip(), slug=_make_slug_unique(db, snapshot["competency_name"]), description=snapshot.get("competency_description", ""), category_id=category.id)
+                db.add(competency)
+                db.flush()
+            change.target_competency_id = competency.id
             competency_ids.append(competency.id)
         else:
             competency_id = change.merge_target_competency_id or change.target_competency_id
@@ -612,7 +682,7 @@ def publish_changes(db: Session, change_ids: list[int] | None, expected_versions
                 competency.description = snapshot["competency_description"]
             competency_ids.append(competency.id)
         for domain_id in snapshot["domain_ids"]:
-            expectation = _publish_expectation(db, change, competency.id, domain_id, snapshot["career_level_id"])
+            expectation = _publish_expectation(db, change, competency.id, domain_id, snapshot["career_level_id"], snapshot.get("industry_id"))
             expectation_ids.append(expectation.id)
         before = deepcopy(change.original_snapshot)
         change.status = "published"

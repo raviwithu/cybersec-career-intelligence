@@ -37,18 +37,54 @@ describe("Research Review", () => {
     expect(screen.getAllByText("Embedded Systems Security").length).toBeGreaterThan(0);
   });
 
-  it("accepts a finding and requires an explicit atomic publication confirmation", async () => {
+  it("accepts and merges a finding into the domain in one step", async () => {
     render(<ResearchReviewPage />);
     fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });
     fireEvent.click(screen.getByRole("button", { name: "Open review workspace" }));
     await waitFor(() => expect(screen.getByRole("button", { name: /Firmware role brief/ })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: /Firmware role brief/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Accept" })).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
-    await waitFor(() => expect(global.fetch.mock.calls.some(([url, options]) => url.endsWith("/review/changes/41/accept") && options.method === "POST")).toBe(true));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Accept & merge" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Accept & merge" }));
+    await waitFor(() => expect(global.fetch.mock.calls.some(([url, options]) => url.endsWith("/review/changes/41/accept") && options.method === "POST" && JSON.parse(options.body).publish === true)).toBe(true));
+  });
+
+  it("shows a failed action next to the finding instead of silently doing nothing", async () => {
+    const baseFetch = global.fetch;
+    global.fetch = vi.fn((url, options = {}) => url.endsWith("/review/changes/41/accept") ? response({ detail: "At least one valid security domain is required" }, false, 422) : baseFetch(url, options));
+    render(<ResearchReviewPage />);
+    fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open review workspace" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Firmware role brief/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Firmware role brief/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Accept & merge" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Accept & merge" }));
+    await waitFor(() => expect(screen.getByText("At least one valid security domain is required")).toBeTruthy());
+    expect(screen.getByText("Action failed")).toBeTruthy();
+  });
+
+  it("requires classification before a finding without a domain can be merged", async () => {
+    const unclassified = { ...finding, domains: [], classification_gaps: ["domain"], review_change: { ...change, proposed: { ...change.proposed, domain_ids: [] } } };
+    const baseFetch = global.fetch;
+    global.fetch = vi.fn((url, options = {}) => new URL(url).pathname.endsWith("/review/submissions/12") ? response({ ...detail, findings: [unclassified] }) : baseFetch(url, options));
+    render(<ResearchReviewPage />);
+    fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open review workspace" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Firmware role brief/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Firmware role brief/ }));
+    await waitFor(() => expect(screen.getByText("Missing security domain")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Accept & merge" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Complete fields to accept" }));
+    expect(screen.getByText("Review structured knowledge")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save & merge into domain" }).disabled).toBe(true);
+  });
+
+  it("still supports publishing an approved batch", async () => {
+    render(<ResearchReviewPage />);
+    fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open review workspace" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Review publication batch" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Review publication batch" }));
     await waitFor(() => expect(screen.getByText("Confirm knowledge-base changes")).toBeTruthy());
-    expect(screen.getByText(/This batch publishes all approved changes together/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Publish approved batch" }));
     await waitFor(() => expect(global.fetch.mock.calls.some(([url, options]) => url.endsWith("/review/publish") && options.method === "POST")).toBe(true));
   });

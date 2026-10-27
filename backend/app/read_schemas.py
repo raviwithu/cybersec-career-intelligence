@@ -31,6 +31,27 @@ class CategoryRef(BaseModel):
     slug: str
 
 
+class IndustryRef(BaseModel):
+    id: int
+    name: str
+    slug: str
+    description: str = ""
+
+
+
+
+class IndustryAliasRead(BaseModel):
+    alias: str
+    requires_context: bool
+    context_hint: str | None = None
+
+
+class IndustryRead(IndustryRef):
+    parent_id: int | None = None
+    is_active: bool = True
+    display_order: int = 0
+    aliases: list[IndustryAliasRead] = Field(default_factory=list)
+
 class DomainRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -110,6 +131,7 @@ class ExpectationSummary(BaseModel):
     responsibility_type: str
     experience_years_min: int | None
     experience_years_max: int | None
+    industry: IndustryRef | None = None
 
 
 class CompetencyDetail(CompetencyListItem):
@@ -147,6 +169,7 @@ class ExpectationRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     supporting_sources: list[ExpectationSourceRead]
+    industry: IndustryRef | None = None
 
 
 class ExpectationPage(BaseModel):

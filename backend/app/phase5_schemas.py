@@ -7,6 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 class ExtractedRequirement(BaseModel):
     domain_slugs: list[str] = Field(default_factory=list, max_length=8)
     security_subdomains: list[str] = Field(default_factory=list, max_length=8)
+    industry_slugs: list[str] = Field(default_factory=list, max_length=4)
+    secondary_industry_slugs: list[str] = Field(default_factory=list, max_length=4)
+    industry_classification_evidence: str = Field(default="", max_length=2000)
     career_level: str | None = Field(default=None, max_length=80)
     competency_name: str = Field(min_length=1, max_length=200)
     category_slug: str | None = Field(default=None, max_length=120)

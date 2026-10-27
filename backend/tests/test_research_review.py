@@ -144,3 +144,36 @@ def test_review_invalid_merge_target_and_atomic_conflict(client, monkeypatch):
     assert failed.status_code == 409
     current = client.get(f"/api/v1/research/review/submissions/{submission_id}", headers=ADMIN_HEADERS).json()
     assert current["findings"][0]["review_change"]["status"] == "accepted"
+
+
+def test_accept_with_publish_merges_into_domain_and_reuses_existing_competency(client, monkeypatch):
+    from app.database import SessionLocal
+
+    first_id = submit_review_source(client, monkeypatch, content="first merge source")
+    first = client.get(f"/api/v1/research/review/submissions/{first_id}", headers=ADMIN_HEADERS).json()["findings"][0]
+    assert first["classification_gaps"] == []
+    merged = client.post(f"/api/v1/research/review/changes/{first['review_change']['id']}/accept", headers=ADMIN_HEADERS, json={"expected_version": first["review_change"]["version"], "publish": True})
+    assert merged.status_code == 200, merged.text
+    assert merged.json()["status"] == "published"
+    assert merged.json()["change"]["status"] == "published"
+
+    second_id = submit_review_source(client, monkeypatch, content="second merge source")
+    second = client.get(f"/api/v1/research/review/submissions/{second_id}", headers=ADMIN_HEADERS).json()["findings"][0]
+    again = client.post(f"/api/v1/research/review/changes/{second['review_change']['id']}/accept", headers=ADMIN_HEADERS, json={"expected_version": second["review_change"]["version"], "publish": True})
+    assert again.status_code == 200, again.text
+
+    with SessionLocal() as db:
+        competencies = db.query(Competency).filter(Competency.name == "Firmware Integrity Controls").all()
+        assert len(competencies) == 1
+        expectations = db.query(DomainLevelExpectation).filter(DomainLevelExpectation.competency_id == competencies[0].id).all()
+        assert {item.domain.slug for item in expectations} >= {"boot-security", "hardware-security"}
+
+
+def test_accept_reports_missing_domain_as_classification_gap(client, monkeypatch):
+    submission_id = submit_review_source(client, monkeypatch, content="review gap source")
+    findings = client.get(f"/api/v1/research/review/submissions/{submission_id}", headers=ADMIN_HEADERS).json()["findings"]
+    change = findings[0]["review_change"]
+    cleared = client.patch(f"/api/v1/research/review/changes/{change['id']}", headers=ADMIN_HEADERS, json={"expected_version": change["version"], "domain_ids": [999999]})
+    assert cleared.status_code == 422
+    still_pending = client.get(f"/api/v1/research/review/submissions/{submission_id}", headers=ADMIN_HEADERS).json()["findings"][0]["review_change"]
+    assert still_pending["status"] == "pending"

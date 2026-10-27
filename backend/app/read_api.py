@@ -4,9 +4,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, selectinload, with_loader_criteria
 
 from .database import get_db
+from .industry_service import expectation_scope_clause, resolve_industry
 from .knowledge_schemas import ExpectationResponse
 from .models import (
     CareerLevel,
@@ -15,6 +16,7 @@ from .models import (
     CompetencyRelationship,
     DomainLevelExpectation,
     ExpectationSource,
+    Industry,
     ResearchSource,
     SecurityDomain,
 )
@@ -33,6 +35,8 @@ from .read_schemas import (
     ExpectationRead,
     ExpectationSourceRead,
     ExpectationSummary,
+    IndustryRead,
+    IndustryRef,
     LevelRead,
     MatrixCell,
     MatrixDomain,
@@ -96,27 +100,39 @@ def domain_tree(items: list[SecurityDomain], selected_id: int | None = None) -> 
     return [build(item) for item in roots] if selected_id is None else [build(item) for item in items if item.id == selected_id]
 
 
-def competency_options(detail: bool = False):
+def industry_ref(item) -> IndustryRef | None:
+    return IndustryRef(id=item.id, name=item.name, slug=item.slug, description=item.description) if item is not None else None
+
+
+def competency_options(industry_id: int | None = None, detail: bool = False):
     options = [
         selectinload(Competency.category),
         selectinload(Competency.expectations).selectinload(DomainLevelExpectation.domain),
         selectinload(Competency.expectations).selectinload(DomainLevelExpectation.career_level),
+        selectinload(Competency.expectations).selectinload(DomainLevelExpectation.industry),
         selectinload(Competency.source_relationships).selectinload(CompetencyRelationship.target_competency),
         selectinload(Competency.target_relationships).selectinload(CompetencyRelationship.source_competency),
     ]
+    if industry_id is not None:
+        options.append(with_loader_criteria(DomainLevelExpectation, expectation_scope_clause(industry_id), include_aliases=True))
     return options
 
 
-def expectation_options():
-    return (
+def expectation_options(industry_id: int | None = None):
+    options = [
         selectinload(DomainLevelExpectation.domain),
         selectinload(DomainLevelExpectation.career_level),
+        selectinload(DomainLevelExpectation.industry),
         selectinload(DomainLevelExpectation.competency).selectinload(Competency.category),
         selectinload(DomainLevelExpectation.competency).selectinload(Competency.expectations).selectinload(DomainLevelExpectation.domain),
         selectinload(DomainLevelExpectation.competency).selectinload(Competency.expectations).selectinload(DomainLevelExpectation.career_level),
+        selectinload(DomainLevelExpectation.competency).selectinload(Competency.expectations).selectinload(DomainLevelExpectation.industry),
         selectinload(DomainLevelExpectation.sources).selectinload(ExpectationSource.source),
         selectinload(DomainLevelExpectation.sources).selectinload(ExpectationSource.source).selectinload(ResearchSource.expectations),
-    )
+    ]
+    if industry_id is not None:
+        options.append(with_loader_criteria(DomainLevelExpectation, expectation_scope_clause(industry_id), include_aliases=True))
+    return tuple(options)
 
 
 def competency_item(item: Competency) -> CompetencyListItem:
@@ -148,6 +164,7 @@ def expectation_summary(item: DomainLevelExpectation) -> ExpectationSummary:
         responsibility_type=item.responsibility_type,
         experience_years_min=item.experience_years_min,
         experience_years_max=item.experience_years_max,
+        industry=industry_ref(item.industry),
     )
 
 
@@ -186,6 +203,7 @@ def expectation_read(item: DomainLevelExpectation) -> ExpectationRead:
         created_at=item.created_at,
         updated_at=item.updated_at,
         supporting_sources=sources,
+        industry=industry_ref(item.industry),
     )
 
 
@@ -232,7 +250,14 @@ def descendant_domain_ids(db: Session, requested: str) -> list[int]:
             continue
         result.add(item_id)
         pending.extend(children_by_parent[item_id])
+
     return sorted(result)
+
+
+@router.get("/industries", response_model=list[IndustryRead], tags=["industries"])
+def list_industries(db: Session = Depends(get_db)) -> list[IndustryRead]:
+    items = list(db.scalars(select(Industry).where(Industry.is_active.is_(True)).options(selectinload(Industry.aliases)).order_by(Industry.display_order, Industry.name)).all())
+    return [IndustryRead(id=item.id, name=item.name, slug=item.slug, description=item.description, parent_id=item.parent_id, is_active=item.is_active, display_order=item.display_order, aliases=[{"alias": alias.alias, "requires_context": alias.requires_context, "context_hint": alias.context_hint} for alias in item.aliases]) for item in items]
 
 
 @router.get("/categories", response_model=list[CategoryRead], tags=["categories"])
@@ -245,12 +270,17 @@ def list_competencies(
     category: str | None = Query(default=None, min_length=1, max_length=120),
     domain: str | None = Query(default=None, min_length=1, max_length=160),
     level: str | None = Query(default=None, min_length=1, max_length=80),
+    industry: str | None = Query(default=None, min_length=1, max_length=160),
+    context: str | None = Query(default=None, min_length=1, max_length=500),
     search: str | None = Query(default=None, min_length=1, max_length=120),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> CompetencyPage:
-    query = select(Competency).options(*competency_options())
+    industry_id = resolve_industry(db, industry, context).id if industry else None
+    query = select(Competency).options(*competency_options(industry_id))
+    if industry_id is not None:
+        query = query.where(Competency.expectations.any(expectation_scope_clause(industry_id)))
     if category:
         query = query.where(Competency.category.has(or_(CompetencyCategory.slug == category, func.lower(CompetencyCategory.name) == category.casefold())))
     if domain:
@@ -270,8 +300,14 @@ def list_competencies(
 
 
 @router.get("/competencies/{competency_id}", response_model=CompetencyDetail, tags=["competencies"])
-def get_competency(competency_id: int, db: Session = Depends(get_db)) -> CompetencyDetail:
-    query = select(Competency).where(Competency.id == competency_id).options(*competency_options(detail=True))
+def get_competency(
+    competency_id: int,
+    industry: str | None = Query(default=None, min_length=1, max_length=160),
+    context: str | None = Query(default=None, min_length=1, max_length=500),
+    db: Session = Depends(get_db),
+) -> CompetencyDetail:
+    industry_id = resolve_industry(db, industry, context).id if industry else None
+    query = select(Competency).where(Competency.id == competency_id).options(*competency_options(industry_id, detail=True))
     item = db.scalar(query)
     if item is None:
         raise not_found("Competency", competency_id)
@@ -298,13 +334,16 @@ def list_expectations(
     domain_id: int | None = Query(default=None, ge=1),
     career_level_id: int | None = Query(default=None, ge=1),
     category: str | None = Query(default=None, min_length=1, max_length=120),
+    industry: str | None = Query(default=None, min_length=1, max_length=160),
+    context: str | None = Query(default=None, min_length=1, max_length=500),
     importance: str | None = Query(default=None, min_length=1, max_length=40),
     proficiency: str | None = Query(default=None, min_length=1, max_length=40),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> ExpectationPage | list[ExpectationResponse]:
-    legacy_id_filter = (domain_id is not None or career_level_id is not None) and not any((domain, level, category, importance, proficiency)) and page == 1 and page_size == 25
+    industry_id = resolve_industry(db, industry, context).id if industry else None
+    legacy_id_filter = (domain_id is not None or career_level_id is not None) and not any((domain, level, category, industry, importance, proficiency)) and page == 1 and page_size == 25
     if legacy_id_filter:
         legacy_query = select(DomainLevelExpectation).options(
             selectinload(DomainLevelExpectation.domain),
@@ -338,7 +377,9 @@ def list_expectations(
             for item in db.scalars(legacy_query.order_by(DomainLevelExpectation.id)).all()
         ]
 
-    query = select(DomainLevelExpectation).join(DomainLevelExpectation.domain).join(DomainLevelExpectation.career_level).join(DomainLevelExpectation.competency).join(Competency.category).options(*expectation_options())
+    query = select(DomainLevelExpectation).join(DomainLevelExpectation.domain).join(DomainLevelExpectation.career_level).join(DomainLevelExpectation.competency).join(Competency.category).options(*expectation_options(industry_id))
+    if industry_id is not None:
+        query = query.where(expectation_scope_clause(industry_id))
     if domain_id is not None:
         query = query.where(DomainLevelExpectation.domain_id == domain_id)
     if career_level_id is not None:
@@ -361,18 +402,35 @@ def list_expectations(
 
 
 @router.get("/expectations/{expectation_id}", response_model=ExpectationRead, tags=["expectations"])
-def get_expectation(expectation_id: int, db: Session = Depends(get_db)) -> ExpectationRead:
-    item = db.scalar(select(DomainLevelExpectation).where(DomainLevelExpectation.id == expectation_id).options(*expectation_options()))
+def get_expectation(
+    expectation_id: int,
+    industry: str | None = Query(default=None, min_length=1, max_length=160),
+    context: str | None = Query(default=None, min_length=1, max_length=500),
+    db: Session = Depends(get_db),
+) -> ExpectationRead:
+    industry_id = resolve_industry(db, industry, context).id if industry else None
+    query = select(DomainLevelExpectation).where(DomainLevelExpectation.id == expectation_id).options(*expectation_options(industry_id))
+    if industry_id is not None:
+        query = query.where(expectation_scope_clause(industry_id))
+    item = db.scalar(query)
     if item is None:
         raise not_found("Expectation", expectation_id)
     return expectation_read(item)
 
 
 @router.get("/career-matrix", response_model=CareerMatrixResponse, tags=["career-matrix"])
-def career_matrix(db: Session = Depends(get_db)) -> CareerMatrixResponse:
+def career_matrix(
+    industry: str | None = Query(default=None, min_length=1, max_length=160),
+    context: str | None = Query(default=None, min_length=1, max_length=500),
+    db: Session = Depends(get_db),
+) -> CareerMatrixResponse:
+    industry_id = resolve_industry(db, industry, context).id if industry else None
     domains = list(db.scalars(select(SecurityDomain).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
     levels = list(db.scalars(select(CareerLevel).order_by(CareerLevel.display_order)).all())
-    expectations = list(db.scalars(select(DomainLevelExpectation).options(selectinload(DomainLevelExpectation.domain), selectinload(DomainLevelExpectation.career_level), selectinload(DomainLevelExpectation.competency).selectinload(Competency.category))).all())
+    expectation_query = select(DomainLevelExpectation).options(selectinload(DomainLevelExpectation.domain), selectinload(DomainLevelExpectation.career_level), selectinload(DomainLevelExpectation.competency).selectinload(Competency.category))
+    if industry_id is not None:
+        expectation_query = expectation_query.where(expectation_scope_clause(industry_id))
+    expectations = list(db.scalars(expectation_query).all())
     grouped: dict[tuple[int, int], list[DomainLevelExpectation]] = defaultdict(list)
     for item in expectations:
         grouped[(item.domain_id, item.career_level_id)].append(item)
@@ -394,11 +452,14 @@ def career_matrix(db: Session = Depends(get_db)) -> CareerMatrixResponse:
 def compare_levels(
     domain: str = Query(min_length=1, max_length=160),
     levels: str = Query(min_length=1, max_length=400, description="Comma-separated career-level slugs or names."),
+    industry: str | None = Query(default=None, min_length=1, max_length=160),
+    context: str | None = Query(default=None, min_length=1, max_length=500),
     db: Session = Depends(get_db),
 ) -> CareerComparisonResponse:
     requested_levels = [item.strip() for item in levels.split(",") if item.strip()]
     if len(requested_levels) < 2 or len(requested_levels) > 6 or len(set(item.casefold() for item in requested_levels)) != len(requested_levels):
         raise HTTPException(status_code=422, detail="levels must contain between two and six distinct comma-separated levels")
+    industry_id = resolve_industry(db, industry, context).id if industry else None
     domain_item = db.scalar(select(SecurityDomain).where(domain_filter(SecurityDomain, domain)))
     if domain_item is None:
         raise not_found("Security domain", domain)
@@ -409,10 +470,13 @@ def compare_levels(
         if level_item is None:
             raise not_found("Career level", requested)
         chosen_levels.append(level_item)
-    rows = list(db.scalars(select(DomainLevelExpectation).where(
+    comparison_query = select(DomainLevelExpectation).where(
         DomainLevelExpectation.domain_id == domain_item.id,
         DomainLevelExpectation.career_level_id.in_([level.id for level in chosen_levels]),
-    ).options(*expectation_options())).all())
+    ).options(*expectation_options(industry_id))
+    if industry_id is not None:
+        comparison_query = comparison_query.where(expectation_scope_clause(industry_id))
+    rows = list(db.scalars(comparison_query).all())
     by_level: dict[int, list[DomainLevelExpectation]] = defaultdict(list)
     for row in rows:
         by_level[row.career_level_id].append(row)
@@ -455,10 +519,13 @@ def search(
     keyword: str = Query(min_length=1, max_length=120),
     domain: str | None = Query(default=None, min_length=1, max_length=160),
     level: str | None = Query(default=None, min_length=1, max_length=80),
+    industry: str | None = Query(default=None, min_length=1, max_length=160),
+    context: str | None = Query(default=None, min_length=1, max_length=500),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> SearchPage:
+    industry_id = resolve_industry(db, industry, context).id if industry else None
     term = f"%{keyword}%"
     results: list[SearchResult] = []
     domain_query = select(SecurityDomain).where(or_(SecurityDomain.name.ilike(term), SecurityDomain.description.ilike(term))).order_by(SecurityDomain.name)
@@ -466,23 +533,27 @@ def search(
         domain_query = domain_query.where(domain_filter(SecurityDomain, domain))
     results.extend(SearchResult(result_type="domain", id=item.id, name=item.name, description=item.description) for item in db.scalars(domain_query).all())
 
-    expectation_query = select(DomainLevelExpectation).join(DomainLevelExpectation.domain).join(DomainLevelExpectation.career_level).join(DomainLevelExpectation.competency).options(*expectation_options()).where(
+    expectation_query = select(DomainLevelExpectation).join(DomainLevelExpectation.domain).join(DomainLevelExpectation.career_level).join(DomainLevelExpectation.competency).options(*expectation_options(industry_id)).where(
         or_(Competency.name.ilike(term), Competency.description.ilike(term), DomainLevelExpectation.expectation_description.ilike(term), SecurityDomain.name.ilike(term))
     )
     if domain:
         expectation_query = expectation_query.where(DomainLevelExpectation.domain_id.in_(descendant_domain_ids(db, domain)))
     if level:
         expectation_query = expectation_query.where(or_(CareerLevel.slug == level, func.lower(CareerLevel.name) == level.casefold()))
+    if industry_id is not None:
+        expectation_query = expectation_query.where(expectation_scope_clause(industry_id))
     for item in db.scalars(expectation_query.order_by(DomainLevelExpectation.id)).unique().all():
         results.append(SearchResult(result_type="expectation", id=item.id, name=item.competency.name, description=item.expectation_description, domain=ref_domain(item.domain), career_level=ref_level_short(item.career_level), competency_id=item.competency_id))
 
-    competency_query = select(Competency).options(*competency_options()).where(or_(Competency.name.ilike(term), Competency.description.ilike(term)))
+    competency_query = select(Competency).options(*competency_options(industry_id)).where(or_(Competency.name.ilike(term), Competency.description.ilike(term)))
     if domain:
         competency_query = competency_query.where(Competency.expectations.any(DomainLevelExpectation.domain_id.in_(descendant_domain_ids(db, domain))))
     if level:
         competency_query = competency_query.where(Competency.expectations.any(DomainLevelExpectation.career_level.has(
             or_(CareerLevel.slug == level, func.lower(CareerLevel.name) == level.casefold())
         )))
+    if industry_id is not None:
+        competency_query = competency_query.where(Competency.expectations.any(expectation_scope_clause(industry_id)))
     for item in db.scalars(competency_query.distinct().order_by(Competency.name)).unique().all():
         results.append(SearchResult(result_type="competency", id=item.id, name=item.name, description=item.description, competency_id=item.id))
 
