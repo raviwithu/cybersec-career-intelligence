@@ -5,6 +5,7 @@ import {
   acceptResearchReviewChange,
   clearAdminSessionKey,
   createProfile,
+  deleteResearchSubmission,
   fetchAIModels,
   fetchCareerMatrix,
   fetchCompetencies,
@@ -75,6 +76,15 @@ describe("API client contracts", () => {
     const models = await fetchAIModels("test-admin-key");
     expect(models.active_model_id).toBe("llama3.2");
     expect(models.providers[0].models[0]).toMatchObject({ provider: "ollama", id: "llama3.2" });
+  });
+
+  it("handles a successful 204 submission deletion without parsing JSON", async () => {
+    global.fetch = vi.fn(() => response(null, true, 204));
+    await expect(deleteResearchSubmission(9, "test-admin-key")).resolves.toBeNull();
+    expect(global.fetch).toHaveBeenCalledWith(
+      "http://localhost:8100/api/v1/research/submissions/9",
+      expect.objectContaining({ method: "DELETE", headers: { "Content-Type": "application/json", "X-Admin-API-Key": "test-admin-key" } }),
+    );
   });
 
   it("persists and clears the administrator session key and exposes API errors", async () => {

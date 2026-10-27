@@ -34,6 +34,7 @@ async function request(path, options = {}) {
     }
     throw new ApiError(errorMessage(detail?.detail) || `Request failed with status ${response.status}`, response.status, detail);
   }
+  if (response.status === 204) return null;
   return response.json();
 }
 
@@ -135,6 +136,7 @@ export function importResearchUrl(url, adminKey) { return request("/api/v1/resea
 
 export function submitResearchFile(formData, adminKey) { return request("/api/v1/research/submissions/file", { method: "POST", headers: adminHeaders(adminKey), body: formData }); }
 export function fetchResearchSubmissions(adminKey) { return request("/api/v1/research/submissions", { headers: adminHeaders(adminKey) }); }
+export function deleteResearchSubmission(id, adminKey) { return request(`/api/v1/research/submissions/${id}`, { method: "DELETE", headers: adminHeaders(adminKey) }); }
 export function fetchResearchDrafts(status, adminKey) { return request(`/api/v1/research/drafts${queryString({ status_filter: status })}`, { headers: adminHeaders(adminKey) }); }
 export function updateResearchDraft(id, payload, adminKey) { return request(`/api/v1/research/drafts/${id}`, { method: "PATCH", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
 export function approveResearchDraft(id, reviewer_note, adminKey) { return request(`/api/v1/research/drafts/${id}/approve`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify({ reviewer_note }) }); }

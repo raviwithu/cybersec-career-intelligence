@@ -120,3 +120,11 @@ Review endpoints are under `/api/v1/research/review`:
 
 Publication preserves existing structured knowledge when an incoming proposal omits a field. Supporting excerpts are linked to the published expectation, and repeated excerpts from one source are consolidated to respect the existing source-link uniqueness rule. Rejected findings remain stored and auditable but never update the public knowledge base.
 
+## Submission deletion
+
+The Research Admin ingestion history includes a Delete action for each submission. Deletion requires the administrator API key and always shows a confirmation dialog explaining that unpublished findings, drafts, evidence links, and review decisions will be removed.
+
+`DELETE /api/v1/research/submissions/{id}` returns `204` when an eligible submission is removed. The backend deletes only submission-scoped unpublished rows in one transaction and removes the temporary research source when it is not referenced elsewhere. A deletion audit record retains only the submission identifier, prior processing status, actor, action, and timestamp; it does not retain submitted source content.
+
+Deletion returns `404` for an unknown submission, `401` without valid administrator credentials, and `409` when the submission is still `received`/`processing` or has published dependencies. Published drafts, published review changes or batches, and evidence linked to public expectations are protected. Shared competencies, domains, career levels, industries, published expectations, and evidence belonging to other sources are never deleted. Failed, rejected, approved-but-unpublished, and completed unpublished submissions are eligible for deletion.
+

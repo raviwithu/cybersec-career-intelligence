@@ -29,6 +29,9 @@ It is **not** a job board, job tracker, job aggregator, applicant-tracking syste
 - Taxonomy-aware extraction of competencies, domains, career levels, categories, evidence, confidence, and responsibilities.
 - Duplicate-input detection using a SHA-256 content digest.
 - Reviewable draft expectations with edit, approve, reject, and publish workflow.
+- Research Admin submission history shows title, submitted date, processing status, review status, and a protected Delete action.
+- Deletion requires administrator authentication and confirmation; failed, rejected, and approved-but-unpublished submissions can be removed with their unpublished findings, drafts, evidence links, and review decisions.
+- Deletion is blocked while processing and whenever published expectations, published changes, or published batches depend on the submission; shared taxonomy and published knowledge are preserved.
 - Only explicitly published expectations are visible through the public knowledge-base APIs.
 
 ### AI providers and model management
@@ -342,6 +345,9 @@ The template is [`.env.example`](.env.example). Compose supplies the container-l
 5. Review and edit URL-imported content before submitting it for extraction.
 6. Review generated draft expectations and evidence excerpts.
 7. Save edits, approve or reject drafts, and publish approved expectations when ready.
+8. To remove an eligible submission, choose **Delete**, read the confirmation dialog, and choose **Delete Submission**. The submission list, draft count, and review queue refresh after success.
+
+Deletion is intentionally blocked for submissions that are still being analyzed or that contributed to published knowledge. Published evidence and change history remain intact; use a future archive/retraction workflow for published research.
 
 The original submitted job-description body is not retained as a full document. The application stores submission metadata, a content digest, structured extraction data, bounded evidence, and workflow records. Provider and model identifiers are retained for traceability.
 
@@ -424,7 +430,7 @@ cd ..
 docker compose config --quiet
 ```
 
-The backend tests cover health behavior, knowledge-base APIs, research workflows, provider discovery, authentication failures, response normalization, model selection, evaluation, and migrations. Frontend tests cover the main application and Research Admin workflows.
+The backend tests cover health behavior, knowledge-base APIs, research workflows, provider discovery, authentication failures, response normalization, model selection, evaluation, migrations, and submission deletion safety/cleanup. Frontend tests cover the main application, Research Admin workflows, deletion confirmation, list refresh, and API error handling.
 
 For migration validation in a disposable SQLite file, use the existing Alembic configuration with a temporary `DATABASE_URL`, then remove the file. Production-like deployments should use PostgreSQL from Compose.
 

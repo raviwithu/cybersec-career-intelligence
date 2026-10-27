@@ -261,6 +261,16 @@ class ResearchSubmission(Base):
     publication_batches: Mapped[list["PublicationBatch"]] = relationship(back_populates="submission", cascade="all, delete-orphan")
 
 
+class ResearchSubmissionAudit(Base):
+    __tablename__ = "research_submission_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    submission_id: Mapped[int] = mapped_column(Integer, index=True)
+    action: Mapped[str] = mapped_column(String(30), nullable=False)
+    actor: Mapped[str] = mapped_column(String(120), nullable=False)
+    previous_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
 class ResearchFinding(Base):
     __tablename__ = "research_findings"
 

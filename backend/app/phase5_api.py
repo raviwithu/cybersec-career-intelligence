@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -41,6 +41,7 @@ from .phase5_schemas import (
     WorkflowResponse,
 )
 from .phase5_service import content_digest, parse_research_file, process_submission, published_expectation
+from .submission_deletion import SubmissionDeletionBlocked, delete_submission
 from .url_importer import UrlImportError, UrlImporter
 
 router = APIRouter(prefix="/research", tags=["research-administration"])
@@ -145,6 +146,15 @@ def create_submission(db: Session, *, content: str, source_title: str | None, so
     return submission
 
 
+def submission_review_status(item: ResearchSubmission) -> str:
+    statuses = {change.status for change in item.review_changes}
+    if statuses and statuses <= {"published", "rejected"} and "published" in statuses:
+        return "published"
+    if statuses and statuses <= {"rejected"}:
+        return "rejected"
+    return "in_review" if statuses else "pending"
+
+
 def submission_response(item: ResearchSubmission) -> ResearchSubmissionResponse:
     return ResearchSubmissionResponse(
         id=item.id, source_id=item.source_id, source_title=item.source.source_title, source_url=item.source.source_url,
@@ -152,7 +162,7 @@ def submission_response(item: ResearchSubmission) -> ResearchSubmissionResponse:
         status=item.status, model_provider=item.model_provider, model_id=item.model_id, model_name=item.model_name,
         evaluation_version=item.evaluation_version,
         error_message=item.error_message, submitted_at=item.submitted_at, completed_at=item.completed_at,
-        finding_count=len(item.findings), draft_count=len(item.drafts),
+        review_status=submission_review_status(item), finding_count=len(item.findings), draft_count=len(item.drafts),
     )
 
 
@@ -286,14 +296,20 @@ def submit_file(
 
 @router.get("/submissions", response_model=SubmissionPage, dependencies=[Depends(require_admin)])
 def list_submissions(db: Session = Depends(get_db)) -> SubmissionPage:
-    query = select(ResearchSubmission).options(selectinload(ResearchSubmission.source), selectinload(ResearchSubmission.findings), selectinload(ResearchSubmission.drafts)).order_by(ResearchSubmission.submitted_at.desc())
+    query = select(ResearchSubmission).options(
+        selectinload(ResearchSubmission.source), selectinload(ResearchSubmission.findings),
+        selectinload(ResearchSubmission.drafts), selectinload(ResearchSubmission.review_changes),
+    ).order_by(ResearchSubmission.submitted_at.desc())
     items = list(db.scalars(query).unique().all())
     return SubmissionPage(items=[submission_response(item) for item in items], total=len(items))
 
 
 @router.get("/submissions/{submission_id}", response_model=ResearchSubmissionResponse, dependencies=[Depends(require_admin)])
 def get_submission(submission_id: int, db: Session = Depends(get_db)) -> ResearchSubmissionResponse:
-    item = db.scalar(select(ResearchSubmission).where(ResearchSubmission.id == submission_id).options(selectinload(ResearchSubmission.source), selectinload(ResearchSubmission.findings), selectinload(ResearchSubmission.drafts)))
+    item = db.scalar(select(ResearchSubmission).where(ResearchSubmission.id == submission_id).options(
+        selectinload(ResearchSubmission.source), selectinload(ResearchSubmission.findings),
+        selectinload(ResearchSubmission.drafts), selectinload(ResearchSubmission.review_changes),
+    ))
     if item is None:
         raise HTTPException(status_code=404, detail="Research submission was not found")
     return submission_response(item)
@@ -307,6 +323,16 @@ def list_drafts(status_filter: str | None = None, db: Session = Depends(get_db))
     items = list(db.scalars(query).unique().all())
     return DraftPage(items=[draft_response(item) for item in items], total=len(items))
 
+
+@router.delete("/submissions/{submission_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_admin)])
+def delete_submission_endpoint(submission_id: int = Path(gt=0), actor: str = Depends(require_admin), db: Session = Depends(get_db)) -> Response:
+    try:
+        delete_submission(db, submission_id, actor)
+    except SubmissionDeletionBlocked as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Research submission deletion failed and was rolled back") from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 @router.get("/drafts/{draft_id}", response_model=DraftExpectationResponse, dependencies=[Depends(require_admin)])
 def get_draft(draft_id: int, db: Session = Depends(get_db)) -> DraftExpectationResponse:

@@ -3,6 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ResearchAdminPage from "../src/ResearchAdminPage";
 
+const submission = {
+  id: 9, source_id: 14, source_title: "Automotive security role", source_url: "about:blank", source_type: "pasted_text",
+  original_filename: null, content_size: 2048, status: "draft_ready", review_status: "in_review", model_provider: "ollama",
+  model_id: "gpt-oss:20b", model_name: "gpt-oss:20b", evaluation_version: "v1", error_message: null,
+  submitted_at: "2026-01-15T12:30:00Z", completed_at: "2026-01-15T12:31:00Z", finding_count: 2, draft_count: 1,
+};
+
 const draft = {
   id: 7, submission_id: 3, domain_id: 1, domain_name: "Cloud Infrastructure Security", career_level_id: 3,
   career_level_name: "Senior", competency_id: 2, competency_name: "Kubernetes Security",
@@ -14,7 +21,12 @@ const draft = {
 
 function response(body, ok = true, status = 200) { return Promise.resolve({ ok, status, json: () => Promise.resolve(body) }); }
 
+let visibleSubmissions;
+let pendingReviews;
+
 beforeEach(() => {
+  visibleSubmissions = [submission];
+  pendingReviews = [{ id: 41 }];
   global.fetch = vi.fn((url, options = {}) => {
     const path = new URL(url).pathname;
     if (path.endsWith("/ollama")) return response({ status: "configured", model: "gpt-oss:20b", active_model: "gpt-oss:20b", mode: "fallback", available_models: ["gpt-oss:20b", "qwen2.5:7b"], evaluations: [] });
@@ -22,8 +34,10 @@ beforeEach(() => {
     if (path.endsWith("/ollama/evaluate")) return response({ status: "configured", model: "qwen2.5:7b", active_model: "qwen2.5:7b", mode: "automatic", evaluation_version: "cybersec-job-extraction-v1", available_models: ["gpt-oss:20b", "qwen2.5:7b"], evaluations: [{ model_name: "qwen2.5:7b", evaluation_version: "cybersec-job-extraction-v1", extraction_accuracy: 1, classification_accuracy: .9, json_validity: 1, hallucination_rate: 0, average_processing_ms: 120, overall_score: .95, error_message: null, evaluated_at: "2026-01-15T00:00:00Z" }] });
     if (path.endsWith("/ollama/select")) return response({ status: "configured", model: "qwen2.5:7b", active_model: "qwen2.5:7b", mode: "manual", available_models: ["gpt-oss:20b", "qwen2.5:7b"], evaluations: [] });
     if (path.endsWith("/import-url")) return response({ source_url: "https://jobs.example.test/security", job_title: "Senior Security Engineer", job_description: "Secure product releases.", extraction_method: "json_ld", date_posted: "2026-01-15", status: "success" });
+    if (path.endsWith("/review/dashboard")) return response({ pending_reviews: pendingReviews });
+    if (path.endsWith("/submissions/9") && options.method === "DELETE") { visibleSubmissions = []; pendingReviews = []; return response(null, true, 204); }
     if (path.endsWith("/submissions") && options.method === "POST") return response({ id: 4, status: "draft_ready" }, true, 201);
-    if (path.endsWith("/submissions")) return response({ items: [], total: 0 });
+    if (path.endsWith("/submissions")) return response({ items: visibleSubmissions, total: visibleSubmissions.length });
     if (path.endsWith("/drafts/7/approve")) return response({ status: "approved", draft: { ...draft, status: "approved" } });
     if (path.endsWith("/drafts")) return response({ items: [draft], total: 1 });
     return response({});
@@ -112,5 +126,30 @@ describe("Phase 5 research console", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Installed Ollama model" }), { target: { value: "qwen2.5:7b" } });
     fireEvent.click(screen.getByRole("button", { name: "Use selected model" }));
     await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/research/ollama/select"), expect.objectContaining({ method: "POST", body: JSON.stringify({ model_name: "qwen2.5:7b" }) })));
+  });
+
+  it("confirms deletion, refreshes the list and counts, and shows success", async () => {
+    render(<ResearchAdminPage />);
+    fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open research console" }));
+    await waitFor(() => expect(screen.getByText("Automotive security role")).toBeTruthy());
+    expect(screen.getByText("draft_ready")).toBeTruthy();
+    expect(screen.getByText("Review: in_review")).toBeTruthy();
+    expect(screen.getByText("Pending reviews: 1")).toBeTruthy();
+    expect(screen.getByText("1")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete submission Automotive security role" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByText(/Its unpublished findings, draft expectations, and associated review data will also be deleted/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(global.fetch.mock.calls.some(([url, options]) => url.endsWith("/submissions/9") && options?.method === "DELETE")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete submission Automotive security role" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete Submission" }));
+    await waitFor(() => expect(screen.getByText("Research submission deleted successfully.")).toBeTruthy());
+    expect(screen.getByText("No research submitted")).toBeTruthy();
+    expect(screen.getByText("Pending reviews: 0")).toBeTruthy();
+    expect(global.fetch.mock.calls.some(([url, options]) => url.endsWith("/submissions/9") && options?.method === "DELETE")).toBe(true);
   });
 });
