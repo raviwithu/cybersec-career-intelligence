@@ -1,0 +1,1 @@
+"""CyberSec Career Intelligence backend."""

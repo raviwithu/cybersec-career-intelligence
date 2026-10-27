@@ -1,0 +1,95 @@
+name: cybersec-career-intelligence
+
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "127.0.0.1:8100:8000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: cybersec
+      DB_USER: cybersec
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:latest}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-90}
+      OLLAMA_RETRIES: ${OLLAMA_RETRIES:-2}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      MAX_RESEARCH_BYTES: ${MAX_RESEARCH_BYTES:-500000}
+      URL_IMPORT_TIMEOUT_SECONDS: ${URL_IMPORT_TIMEOUT_SECONDS:-10}
+      URL_IMPORT_MAX_BYTES: ${URL_IMPORT_MAX_BYTES:-1000000}
+      URL_IMPORT_MAX_REDIRECTS: ${URL_IMPORT_MAX_REDIRECTS:-5}
+      CORS_ORIGINS: http://localhost:3100,http://127.0.0.1:3100
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
+    networks:
+      - cybersec-network
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # "/" = same origin; nginx proxies /api/ to the backend
+        VITE_API_BASE_URL: /
+    ports:
+      - "127.0.0.1:3100:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 5
+    networks:
+      - cybersec-network
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: cybersec
+      POSTGRES_USER: cybersec
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cybersec -d cybersec"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - cybersec-network
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - cybersec-network
+
+networks:
+  cybersec-network:
+    name: cybersec-career-intelligence-network
+    driver: bridge
+
+volumes:
+  postgres-data:
+    name: cybersec-career-intelligence-postgres-data

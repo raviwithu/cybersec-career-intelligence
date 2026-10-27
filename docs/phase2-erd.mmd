@@ -1,0 +1,85 @@
+erDiagram
+    SECURITY_DOMAINS {
+        int id PK
+        int parent_id FK
+        string name UK
+        string slug UK
+        text description
+        int display_order
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    CAREER_LEVELS {
+        int id PK
+        string name UK
+        string slug UK
+        string career_track
+        text description
+        int display_order
+    }
+    COMPETENCY_CATEGORIES {
+        int id PK
+        string name UK
+        string slug UK
+        text description
+    }
+    COMPETENCIES {
+        int id PK
+        string name UK
+        string slug UK
+        text description
+        int category_id FK
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    DOMAIN_LEVEL_EXPECTATIONS {
+        int id PK
+        int domain_id FK
+        int career_level_id FK
+        int competency_id FK
+        text expectation_description
+        string proficiency_level
+        string importance
+        string responsibility_type
+        int experience_years_min
+        int experience_years_max
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    COMPETENCY_RELATIONSHIPS {
+        int id PK
+        int source_competency_id FK
+        int target_competency_id FK
+        string relationship_type
+    }
+    RESEARCH_SOURCES {
+        int id PK
+        string source_type
+        string source_url
+        string source_title
+        timestamptz collected_at
+        text notes
+    }
+    EXPECTATION_SOURCES {
+        int expectation_id PK,FK
+        int source_id PK,FK
+        text supporting_excerpt
+    }
+    ANALYSIS_VERSIONS {
+        int id PK
+        string version UK
+        timestamptz analysis_date
+        text description
+        text methodology
+        timestamptz created_at
+    }
+
+    SECURITY_DOMAINS o|--o{ SECURITY_DOMAINS : parent_child
+    COMPETENCY_CATEGORIES ||--o{ COMPETENCIES : classifies
+    SECURITY_DOMAINS ||--o{ DOMAIN_LEVEL_EXPECTATIONS : scopes
+    CAREER_LEVELS ||--o{ DOMAIN_LEVEL_EXPECTATIONS : defines
+    COMPETENCIES ||--o{ DOMAIN_LEVEL_EXPECTATIONS : expected_as
+    COMPETENCIES ||--o{ COMPETENCY_RELATIONSHIPS : source
+    COMPETENCIES ||--o{ COMPETENCY_RELATIONSHIPS : target
+    DOMAIN_LEVEL_EXPECTATIONS ||--o{ EXPECTATION_SOURCES : supported_by
+    RESEARCH_SOURCES ||--o{ EXPECTATION_SOURCES : supports
