@@ -18,7 +18,11 @@ from .config import Settings
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 CONTENT_TYPES = {"text/html", "application/xhtml+xml"}
 UNSAFE_ELEMENT_NAMES = {"aside", "footer", "form", "header", "iframe", "nav", "noscript", "script", "style"}
-UNSAFE_ATTRIBUTE_PATTERN = re.compile(r"(?:ad|advert|breadcrumb|cookie|footer|header|menu|nav|social|share)", re.I)
+# Match whole class/id tokens only: a bare substring match on "ad" also removed
+# containers such as "mx-details-container-padding" (LinkedIn's job description).
+UNSAFE_ATTRIBUTE_PATTERN = re.compile(r"(?<![a-z0-9])(?:ads?|advert\w*|breadcrumbs?|cookies?|footer|header|menu|nav|navbar|navigation|social|share)(?![a-z0-9])", re.I)
+DESCRIPTION_CLASS_PATTERN = re.compile(r"description", re.I)
+MIN_DESCRIPTION_CHARS = 200
 
 
 class UrlImportError(Exception):
@@ -218,7 +222,14 @@ def extract_html(soup: BeautifulSoup) -> tuple[str, str]:
     candidates = [soup.find("main"), soup.find("article"), soup.find(attrs={"role": "main"})]
     candidates.extend(soup.find_all(attrs={"class": re.compile(r"(?:job|posting|description|content|career|position|role)", re.I)}))
     candidates = [candidate for candidate in candidates if candidate is not None]
-    content_node = max(candidates, key=lambda node: len(node.get_text(" ", strip=True)), default=soup.body or soup)
+    # Prefer an explicit job-description container over the whole <main>, which on
+    # sites like LinkedIn also holds sign-in prompts and related-job listings.
+    described = [
+        candidate for candidate in candidates
+        if DESCRIPTION_CLASS_PATTERN.search(" ".join(candidate.get("class") or []))
+        and len(candidate.get_text(" ", strip=True)) >= MIN_DESCRIPTION_CHARS
+    ]
+    content_node = max(described or candidates, key=lambda node: len(node.get_text(" ", strip=True)), default=soup.body or soup)
     return title, html_to_text(str(content_node))
 
 

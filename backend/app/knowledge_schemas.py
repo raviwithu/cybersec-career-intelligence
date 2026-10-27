@@ -77,6 +77,10 @@ class ExpectationCreate(BaseModel):
     domain_id: int
     career_level_id: int
     competency_id: int
+    technical_knowledge: str = ""
+    practical_capability: str = ""
+    qualifications: str = ""
+    tools_technologies: str = ""
     expectation_description: str = Field(min_length=1)
     proficiency_level: str = Field(min_length=1, max_length=40)
     importance: str = Field(min_length=1, max_length=40)
