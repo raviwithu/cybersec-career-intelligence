@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "../src/App";
@@ -14,6 +14,7 @@ const levels = [
 ];
 const domain = { id: 1, name: "Embedded Systems Security", slug: "embedded-systems-security", description: "Protect embedded products.", parent_id: null, display_order: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", children: [{ id: 2, name: "Boot Security", slug: "boot-security", description: "Trusted startup.", parent_id: 1, display_order: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", children: [] }] };
 const category = { id: 1, name: "Technical Knowledge", slug: "technical-knowledge", description: "Knowledge." };
+const industries = [{ id: 1, name: "Automotive", slug: "automotive", aliases: [] }];
 const competency = { id: 1, name: "Secure Boot", slug: "secure-boot", description: "Design a trusted boot chain.", category, domains: [{ id: 2, name: "Boot Security", slug: "boot-security" }], career_levels: [levels[2], levels[4]] };
 const expectation = { id: 1, domain: { id: 2, name: "Boot Security", slug: "boot-security" }, career_level: levels[4], competency, expectation_description: "Design and validate a trusted boot chain.", proficiency_level: "expert", importance: "essential", responsibility_type: "design", experience_years_min: 7, experience_years_max: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", supporting_sources: [] };
 const matrix = { levels, domains: [{ domain: { id: 2, name: "Boot Security", slug: "boot-security" }, cells: levels.map((level) => ({ domain_id: 2, career_level_id: level.id, expectation_count: level.slug === "architect" ? 1 : 0, competency_count: level.slug === "architect" ? 1 : 0, category_distribution: { "technical-knowledge": 1 } })) }] };
@@ -28,6 +29,7 @@ function mockApi({ fail = false, empty = false } = {}) {
     if (path.endsWith("/domains")) return response([domain]);
     if (path.endsWith("/levels")) return response(levels);
     if (path.endsWith("/categories")) return response([category]);
+    if (path.endsWith("/industries")) return response(industries);
     if (path.endsWith("/career-matrix")) return response(matrix);
     if (path.endsWith("/competencies/1")) return response({ ...competency, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", related_competencies: [], expectations: [{ ...expectation, domain: expectation.domain, career_level: expectation.career_level }] });
     if (path.endsWith("/competencies")) return response(page(empty ? [] : [competency], empty ? 0 : 1));
@@ -104,5 +106,13 @@ describe("Phase 4 knowledge workspace", () => {
     const menu = await screen.findByRole("button", { name: "Open navigation" });
     fireEvent.click(menu);
     expect(screen.getByRole("button", { name: "Close navigation" })).toBeTruthy();
+  });
+
+  it("applies the selected industry to shared read requests", async () => {
+    render(<App />);
+    const scope = await screen.findByRole("combobox", { name: "Industry scope" });
+    fireEvent.change(scope, { target: { value: "automotive" } });
+    await waitFor(() => expect(global.fetch.mock.calls.some(([url]) => url.includes("/career-matrix?industry=automotive"))).toBe(true));
+    expect(scope.value).toBe("automotive");
   });
 });
