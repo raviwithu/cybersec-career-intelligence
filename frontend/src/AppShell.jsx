@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createProfile, fetchCategories, fetchCareerMatrix, fetchCompetencies, fetchDomains, fetchExpectations, fetchHealth, fetchIndustries, fetchLevels, fetchProfiles } from "./api";
 import { Badge, ErrorState, Loading } from "./components";
 import { CompetenciesPage, ComparePage, DashboardPage, DomainsPage, MatrixPage, SearchPage } from "./pages";
+import CareerReadinessPage from "./CareerReadinessPage";
 import AutomatedResearchPage from "./AutomatedResearchPage";
 import ResearchAdminPage from "./ResearchAdminPage";
 import ResearchReviewPage from "./ResearchReviewPage";
@@ -11,6 +12,7 @@ import { useApi } from "./useApi";
 
 const navigation = [
   { id: "dashboard", label: "Overview", icon: "⌂" },
+  { id: "readiness", label: "Career Readiness", icon: "◎" },
   { id: "domains", label: "Domain Explorer", icon: "◈" },
   { id: "matrix", label: "Career Matrix", icon: "▦" },
   { id: "compare", label: "Compare levels", icon: "⇄" },
@@ -68,11 +70,16 @@ export default function AppShell() {
   function selectMatrixCell(domain, level) { setSelectedDomainSlug(domain.slug); setSelectedLevel(level.slug); navigate("domains"); }
   function openCompetency(id) { setSelectedCompetencyId(id); navigate("competencies"); }
   function openDomain(slug) { const domain = allDomains.find((item) => item.slug === slug); if (domain) selectDomain(domain); }
+  function updateReadinessContext({ domain, level }) {
+    if (domain !== undefined) setSelectedDomainSlug(domain);
+    if (level !== undefined) setSelectedLevel(level || null);
+  }
   if (bootstrap.loading && !data) return <div className="app-loading"><Loading label="Loading career intelligence" /></div>;
   if (bootstrap.error && !data) return <div className="app-loading"><ErrorState error={bootstrap.error} onRetry={bootstrap.reload} /></div>;
 
   const intelligenceViews = { "intelligence-dashboard": "dashboard", "skill-trends": "trends", "career-progression": "progression", "industry-intelligence": "industries", "competency-gaps": "gaps", "career-roadmap": "roadmap", "ask-career": "ask", "evidence-explorer": "evidence" };
   const content = view === "dashboard" ? <DashboardPage domains={data.domains} levels={data.levels} matrix={data.matrix} competencyTotal={data.competencies.meta.total} expectationTotal={data.expectations.meta.total} onNavigate={navigate} />
+    : view === "readiness" ? <CareerReadinessPage domains={data.domains} levels={data.levels} categories={data.categories} industries={data.industries} selectedIndustry={selectedIndustry} onNavigate={navigate} onContextChange={updateReadinessContext} onIndustryChange={setSelectedIndustry} onCompetency={openCompetency} />
     : view === "domains" ? <DomainsPage domains={data.domains} levels={data.levels} categories={data.categories} matrix={data.matrix} selectedDomain={selectedDomain} selectedLevel={selectedLevel} selectedIndustry={selectedIndustry} onSelectDomain={selectDomain} onSelectLevel={setSelectedLevel} onCompetency={openCompetency} />
       : view === "matrix" ? <MatrixPage matrix={data.matrix} domains={data.domains} levels={data.levels} onCell={selectMatrixCell} />
         : view === "compare" ? <ComparePage domains={allDomains} levels={data.levels} selectedDomain={selectedDomain || allDomains[0]} selectedIndustry={selectedIndustry} compareLevels={compareLevels} onDomainChange={(domain) => setSelectedDomainSlug(domain.slug)} onLevelsChange={setCompareLevels} onCompetency={openCompetency} />
