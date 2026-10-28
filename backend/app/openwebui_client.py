@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -8,7 +9,20 @@ from pydantic import ValidationError
 
 from .config import Settings
 from .phase5_schemas import ExtractionResult
-from .provider_common import AIModel, ProviderError, SYSTEM_PROMPT, build_extraction_prompt, parse_extraction
+from .provider_common import AIModel, ProviderError, SYSTEM_PROMPT, SYSTEM_PROMPT_NO_FORMAT_SUFFIX, build_extraction_prompt, parse_extraction
+
+logger = logging.getLogger("cybersec.openwebui")
+
+
+def _error_summary(exc: Exception | None) -> str:
+    # Field locations and pydantic messages only; never echo model output or research text.
+    if isinstance(exc, ValidationError):
+        error = exc.errors()[0]
+        location = ".".join(str(part) for part in error["loc"]) or "value"
+        return f"{location}: {error['msg']}"[:200]
+    if isinstance(exc, ProviderError):
+        return exc.message[:200]
+    return f"{type(exc).__name__}: invalid JSON" if exc else "unknown error"
 
 
 class OpenWebUIClient:
@@ -19,6 +33,7 @@ class OpenWebUIClient:
         self.api_key = settings.openwebui_api_key
         self.model = settings.ai_model or settings.ollama_model
         self.timeout = settings.openwebui_timeout_seconds or settings.ollama_timeout_seconds
+        self.retries = min(settings.ollama_retries, 1)
         self._client = client
 
     @property
@@ -152,16 +167,23 @@ class OpenWebUIClient:
 
     def extract(self, content: str, taxonomy: dict[str, list[dict[str, Any]]], model: str | None = None) -> ExtractionResult:
         model_id = model or self.model
-        try:
-            raw = self._content(self._completion(model_id, [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_extraction_prompt(content, taxonomy)},
-            ]))
-            return parse_extraction(raw)
-        except ProviderError:
-            raise
-        except (ValueError, ValidationError) as exc:
-            raise ProviderError(self.provider, "OpenWebUI returned malformed extraction JSON") from exc
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT + SYSTEM_PROMPT_NO_FORMAT_SUFFIX},
+            {"role": "user", "content": build_extraction_prompt(content, taxonomy)},
+        ]
+        last_error: Exception | None = None
+        # Model output varies between runs, so one malformed reply is worth a retry.
+        for attempt in range(self.retries + 1):
+            try:
+                return parse_extraction(self._content(self._completion(model_id, messages)))
+            except ProviderError as exc:
+                if "JSON" not in exc.message:
+                    raise
+                last_error = exc
+            except (ValueError, ValidationError) as exc:
+                last_error = exc
+            logger.warning("openwebui_extraction_failed model=%s attempt=%d error=%s", model_id, attempt + 1, _error_summary(last_error))
+        raise ProviderError(self.provider, f"OpenWebUI returned malformed extraction JSON ({_error_summary(last_error)})") from last_error
 
     def test_model(self, model_id: str) -> float:
         started = time.perf_counter()

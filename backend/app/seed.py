@@ -51,11 +51,19 @@ DOMAIN_SEED = [
     ("ai-system-security", "AI System Security", "Security of AI and machine-learning systems themselves: LLM and generative-AI application security (prompt injection, insecure output handling, agent and tool-use abuse), model and training-data integrity (data poisoning, model theft, model supply chain and provenance), adversarial machine learning, AI red teaming, and secure MLOps. References include the OWASP Top 10 for LLM Applications, MITRE ATLAS, NIST AI RMF, and ISO/IEC 42001. Use when the asset being protected is an AI or ML system.", None, 9),
     ("ai-enabled-security-products", "AI-Enabled Security Products", "Building and operating security products that use AI or machine learning as a core capability: ML-based threat detection and anomaly detection, AI-assisted SOC triage and investigation, LLM-powered security copilots and automation, malware and phishing classification models, and the data pipelines, model evaluation, false-positive tuning, and drift monitoring behind them. Use when AI is the tool used to deliver security outcomes rather than the asset being protected.", None, 10),
     ("security-automation", "Security Automation", "Automating security workflows and controls through SOAR, workflow orchestration, security-as-code, policy-as-code, automated vulnerability management, control validation, and repeatable detection or response actions. Use when workflow automation is the primary security capability, rather than AI being the protected asset or the enabling technology.", None, 11),
+    ("vulnerability-research", "Vulnerability Research", "Discovering, analyzing, and demonstrating previously unknown security vulnerabilities in software, firmware, and hardware: source and binary code auditing, reverse engineering, fuzzing and harness development, variant analysis, root-cause and patch-diff analysis, exploitability assessment and exploit or proof-of-concept development, and coordinated vulnerability disclosure including CVE reporting. Use when the work produces new vulnerability findings, rather than operating vulnerability management for known issues or testing a specific application.", None, 12),
 ]
 
 DOMAIN_ALIAS_SEED = [
     ("security-operations", "SecOps", False, None),
     ("governance-risk-compliance", "GRC", False, None),
+    ("vulnerability-research", "Vuln Research", False, None),
+    ("vulnerability-research", "Exploit Development", False, None),
+    ("vulnerability-research", "Exploit Dev", False, None),
+    ("vulnerability-research", "Zero-Day Research", False, None),
+    ("vulnerability-research", "Offensive Security Research", False, None),
+    ("vulnerability-research", "VR", True, "Use this alias only when the source explicitly means vulnerability research, not virtual reality."),
+    ("vulnerability-research", "Security Research", True, "Use this alias only when the source describes discovering new vulnerabilities rather than general threat or security research."),
 ]
 
 CAREER_LEVEL_ALIAS_SEED = [
@@ -65,6 +73,12 @@ CAREER_LEVEL_ALIAS_SEED = [
     ("architect", "Staff", False, None),
     ("architect", "Principal", False, None),
     ("director", "Head", False, None),
+    ("guide", "Mentor", True, "Use this alias only for a dedicated mentoring or guidance role, not a Senior engineer who also mentors."),
+    ("guide", "Coach", True, "Use this alias only when the source describes a dedicated security coaching role."),
+    ("supervisor", "Team Supervisor", False, None),
+    ("supervisor", "Shift Supervisor", False, None),
+    ("supervisor", "SOC Supervisor", False, None),
+    ("supervisor", "Team Leader", True, "Use this alias only when the role supervises the team's people and daily work, not a senior technical lead."),
 ]
 
 CATEGORY_ALIAS_SEED = [
@@ -85,9 +99,11 @@ CAREER_LEVEL_SEED = [
     ("junior", "Junior", "shared", "Builds foundational capability with defined guidance.", 1),
     ("intermediate", "Intermediate", "shared", "Delivers independent work within an established security practice.", 2),
     ("senior", "Senior", "shared", "Leads complex work, makes technical decisions, and mentors others.", 3),
-    ("manager", "Manager", "management", "Leads people, planning, prioritization, and operational outcomes.", 4),
-    ("architect", "Architect", "technical", "Defines technical direction, boundaries, and cross-system security design.", 5),
-    ("director", "Director", "management", "Owns organizational security outcomes, strategy, and risk decisions.", 6),
+    ("guide", "Guide", "management", "Guides a small group or workstream without formal people authority: sets day-to-day direction, reviews work, coaches junior and intermediate staff, and escalates risks.", 4),
+    ("supervisor", "Supervisor", "management", "First-line people leader for a security team or shift: assigns and oversees daily work, monitors quality and service levels, handles escalations, and reports to a Manager.", 5),
+    ("manager", "Manager", "management", "Leads people, planning, prioritization, and operational outcomes.", 6),
+    ("architect", "Architect", "technical", "Defines technical direction, boundaries, and cross-system security design.", 7),
+    ("director", "Director", "management", "Owns organizational security outcomes, strategy, and risk decisions.", 8),
 ]
 
 CATEGORY_SEED = [
@@ -200,10 +216,16 @@ def seed_reference_data(db: Session) -> None:
         if child is None:
             db.add(SecurityDomain(slug=slug, name=name, description=description, parent_id=embedded_parent.id, display_order=display_order))
 
+    created_levels = False
     for slug, name, track, description, display_order in CAREER_LEVEL_SEED:
         if db.scalar(select(CareerLevel).where(CareerLevel.slug == slug)) is None:
             db.add(CareerLevel(slug=slug, name=name, career_track=track, description=description, display_order=display_order))
+            created_levels = True
     db.flush()
+    if created_levels:
+        # Newly seeded levels slot into the progression, so realign existing seeded levels once.
+        for slug, _name, _track, _description, display_order in CAREER_LEVEL_SEED:
+            db.scalar(select(CareerLevel).where(CareerLevel.slug == slug)).display_order = display_order
 
     levels = {item.slug: item for item in db.scalars(select(CareerLevel)).all()}
     for level_slug, alias, requires_context, context_hint in CAREER_LEVEL_ALIAS_SEED:

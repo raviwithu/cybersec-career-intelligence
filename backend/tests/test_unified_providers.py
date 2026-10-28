@@ -123,6 +123,38 @@ def test_openwebui_malformed_model_response_is_rejected():
         client.extract("research", {"domains": []}, model="custom-model")
 
 
+def test_openwebui_retries_once_after_malformed_reply_and_reports_field():
+    replies = iter(["not json", json.dumps({"requirements": [{"competency_name": "Fuzzing", "evidence_excerpt": "AFL++"}]})])
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"choices": [{"message": {"content": next(replies)}}]}))
+    client = OpenWebUIClient(provider_settings(), httpx.Client(transport=transport))
+    assert client.extract("research", {"domains": []}, model="custom-model").requirements[0].competency_name == "Fuzzing"
+
+    bad = json.dumps({"requirements": [{"competency_name": "Fuzzing", "evidence_excerpt": ""}]})
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"choices": [{"message": {"content": bad}}]}))
+    client = OpenWebUIClient(provider_settings(), httpx.Client(transport=transport))
+    with pytest.raises(ProviderError, match=r"malformed extraction JSON \(.*evidence_excerpt"):
+        client.extract("research", {"domains": []}, model="custom-model")
+
+
+def test_extraction_tolerates_near_miss_model_output():
+    from app.provider_common import parse_extraction
+
+    result = parse_extraction(json.dumps({"requirements": [
+        {"competency_name": "Reverse engineering", "evidence_excerpt": "IDA Pro and Ghidra", "technical_knowledge": None,
+         "responsibilities": None, "domain_slugs": "vulnerability-research", "security_subdomains": None, "finding_type": None,
+         "confidence": 85, "experience_years_min": "5+", "experience_years_max": 120},
+        {"competency_name": "Unsupported", "evidence_excerpt": ""},
+    ], "unclassified_notes": [{"note": "OSED preferred"}]}))
+    requirement = result.requirements[0]
+    assert len(result.requirements) == 1
+    assert requirement.technical_knowledge == "" and requirement.finding_type == "technical-skills"
+    assert requirement.domain_slugs == ["vulnerability-research"] and requirement.security_subdomains == []
+    assert requirement.confidence == 0.85
+    assert (requirement.experience_years_min, requirement.experience_years_max) == (5, None)
+    assert "OSED preferred" in result.unclassified_notes[0]
+    assert "1 extracted requirement(s) were discarded" in result.unclassified_notes[-1]
+
+
 def test_unified_api_lists_both_routes_without_exposing_api_key(client, monkeypatch):
     catalogs = [
         ProviderCatalog("ollama", "connected", (AIModel("ollama", "local-model", "Local Model"),)),

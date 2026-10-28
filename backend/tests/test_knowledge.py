@@ -20,6 +20,7 @@ def test_taxonomy_matches_revised_domain_and_track_requirements(client):
         "AI System Security",
         "AI-Enabled Security Products",
         "Security Automation",
+        "Vulnerability Research",
     }
     embedded = next(domain for domain in taxonomy["domains"] if domain["name"] == "Embedded Systems Security")
     assert [child["name"] for child in embedded["children"]] == [
@@ -30,9 +31,11 @@ def test_taxonomy_matches_revised_domain_and_track_requirements(client):
         "Wireless Security",
     ]
     assert [level["name"] for level in taxonomy["career_levels"]] == [
-        "Junior", "Intermediate", "Senior", "Manager", "Architect", "Director"
+        "Junior", "Intermediate", "Senior", "Guide", "Supervisor", "Manager", "Architect", "Director"
     ]
     tracks = {level["name"]: level["career_track"] for level in taxonomy["career_levels"]}
+    assert tracks["Guide"] == "management"
+    assert tracks["Supervisor"] == "management"
     assert tracks["Manager"] == "management"
     assert tracks["Architect"] == "technical"
     assert {category["name"] for category in taxonomy["competency_categories"]} >= {

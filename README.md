@@ -11,7 +11,7 @@ It is **not** a job board, job tracker, job aggregator, applicant-tracking syste
 ### Knowledge base and exploration
 
 - Hierarchical cybersecurity competency taxonomy with ten top-level domains: Web Application Security, Cloud API Security, Cloud Infrastructure Security, Traditional Server Infrastructure Security, Embedded Systems Security, Governance, Risk, and Compliance, Identity and Access Management, Security Operations, AI System Security, and AI-Enabled Security Products, plus embedded-security subdomains.
-- Six seeded career levels with explicit shared, technical, and management tracks.
+- Eight seeded career levels with explicit shared, technical, and management tracks.
 - Reusable competency definitions, categories, relationships, and domain/level expectations.
 - Supporting research-source references and bounded evidence excerpts.
 - Domain Explorer with subdomain navigation, career-level filtering, categories, expectations, and evidence.
@@ -89,11 +89,13 @@ The seeded levels are:
 - Junior — shared track
 - Intermediate — shared track
 - Senior — shared track
+- Guide — management track
+- Supervisor — management track
 - Manager — management track
 - Architect — technical track
 - Director — management track
 
-Technical and management career paths are deliberately distinct. Junior, Intermediate, and Senior are shared levels; Architect is technical; Manager and Director are management. The data model does not impose a single hierarchy between the two tracks.
+Technical and management career paths are deliberately distinct. Junior, Intermediate, and Senior are shared levels; Architect is technical; Guide, Supervisor, Manager, and Director are management. The data model does not impose a single hierarchy between the two tracks.
 
 ## Architecture
 
