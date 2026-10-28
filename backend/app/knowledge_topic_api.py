@@ -147,12 +147,13 @@ def list_topic_proposals(
     career_level_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
 ) -> TopicProposalPage:
-    proposals = list(db.scalars(select(KnowledgeTopicProposal).order_by(KnowledgeTopicProposal.created_at.desc())).all())
+    legacy_query = select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.contract == "legacy").order_by(KnowledgeTopicProposal.created_at.desc())
+    proposals = list(db.scalars(legacy_query).all())
     if not proposals:
         proposals = ensure_all_topic_proposals(db)
     else:
         ensure_all_topic_proposals(db)
-        proposals = list(db.scalars(select(KnowledgeTopicProposal).order_by(KnowledgeTopicProposal.created_at.desc())).all())
+        proposals = list(db.scalars(legacy_query).all())
     selected_domain = subdomain_id or domain_id
     filtered = []
     for proposal in proposals:
@@ -180,7 +181,7 @@ def list_topic_proposals(
 
 @admin_router.get("/proposals/{proposal_id}", response_model=TopicProposalResponse, dependencies=[Depends(require_admin)])
 def get_topic_proposal(proposal_id: int, db: Session = Depends(get_db)) -> TopicProposalResponse:
-    proposal = db.scalar(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.id == proposal_id))
+    proposal = db.scalar(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.id == proposal_id, KnowledgeTopicProposal.contract == "legacy"))
     if proposal is None:
         raise HTTPException(status_code=404, detail="Knowledge topic proposal was not found")
     return TopicProposalResponse.model_validate(proposal_response(db, proposal))
@@ -199,7 +200,7 @@ def publish_topic_proposals(payload: TopicPublishRequest, actor: str = Depends(r
 
 @admin_router.get("/proposals/{proposal_id}/evidence", response_model=list[dict[str, Any]], dependencies=[Depends(require_admin)])
 def proposal_evidence(proposal_id: int, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    proposal = db.scalar(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.id == proposal_id))
+    proposal = db.scalar(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.id == proposal_id, KnowledgeTopicProposal.contract == "legacy"))
     if proposal is None:
         raise HTTPException(status_code=404, detail="Knowledge topic proposal was not found")
     return proposal_response(db, proposal)["source_references"]

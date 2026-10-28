@@ -289,7 +289,7 @@ def proposal_response(db: Session, proposal: KnowledgeTopicProposal) -> dict[str
 
 
 def _proposal_query():
-    return select(KnowledgeTopicProposal).options(selectinload(KnowledgeTopicProposal.topic))
+    return select(KnowledgeTopicProposal).options(selectinload(KnowledgeTopicProposal.topic)).where(KnowledgeTopicProposal.contract == "legacy")
 
 
 def ensure_topic_proposal(db: Session, finding: ResearchFinding) -> KnowledgeTopicProposal | None:

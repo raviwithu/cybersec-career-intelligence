@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from app.database import SessionLocal
+from app.models import KnowledgeTopicProposal
+
 ADMIN = {"X-Admin-API-Key": "test-admin-key"}
 
 
@@ -40,6 +43,8 @@ def test_contract_requires_authentication_and_supports_idempotency(client):
     assert second.status_code == 201
     assert first.json()["id"] == second.json()["id"]
     assert first.json()["references"][0]["locator"] == "Section 3"
+    with SessionLocal() as db:
+        assert len(db.get(KnowledgeTopicProposal, first.json()["id"]).fingerprint) == 64
 
 
 
@@ -145,6 +150,34 @@ def test_create_topic_proposal_enters_review_before_publication(client):
     published = approve_and_publish(client, created.json())
     assert published["status"] == "published"
     assert client.get("/api/v1/knowledge/topics/oauth-2-review-contract-topic").status_code == 200
+
+
+def test_integration_status_is_submitter_scoped_and_private_fields_are_redacted(client):
+    from app.config import get_settings
+
+    settings = get_settings()
+    previous = settings.knowledge_integration_keys
+    settings.knowledge_integration_keys = "integration-one,integration-two"
+    try:
+        topic = existing_topic(client)
+        payload = proposal_payload(topic["id"], {"items": [{"name": "Scoped surface", "internal_notes": "do not disclose", "excerpt": "private embedded excerpt"}]}, references=[{"source_type": "technical_article", "title": "Private source", "url": "https://example.com/private", "access_scope": "private", "is_private": True, "verification_status": "authoritative", "excerpt": "private source excerpt"}])
+        created = client.post("/api/v1/knowledge/proposals", headers={"X-Knowledge-Integration-Key": "integration-one"}, json=payload)
+        assert created.status_code == 201, created.text
+        body = created.json()
+        assert body["references"][0]["verification_status"] == "unverified"
+        assert body["references"][0]["excerpt"] is None
+        assert body["review_decisions"] == []
+        assert "internal_notes" not in str(body["proposed_content"])
+        assert client.get(f"/api/v1/knowledge/proposals/{body['id']}", headers={"X-Knowledge-Integration-Key": "integration-two"}).status_code == 404
+    finally:
+        settings.knowledge_integration_keys = previous
+
+
+def test_relationship_target_must_be_a_positive_integer(client):
+    topic = existing_topic(client)
+    payload = proposal_payload(topic["id"], {"target_topic_id": "not-an-id", "relationship_type": "related"}, action="ADD_TOPIC_RELATIONSHIP", section=None)
+    response = client.post("/api/v1/knowledge/proposals", headers=ADMIN, json=payload)
+    assert response.status_code == 422
 
 
 def test_admin_review_endpoints_are_not_public(client):

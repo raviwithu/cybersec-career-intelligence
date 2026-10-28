@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from .knowledge_contract_schemas import SECTION_TYPES, KnowledgeProposalCreate, KnowledgeProposalReview, KnowledgeSourceReference
@@ -18,6 +19,8 @@ from .models import (
     KnowledgeProposalSource,
     KnowledgeReviewDecision,
     KnowledgeTopic,
+    KnowledgeTopicDomain,
+    KnowledgeTopicIndustry,
     KnowledgeTopicProposal,
     KnowledgeTopicRelationship,
     KnowledgeTopicSection,
@@ -104,7 +107,7 @@ def _section_response(section: KnowledgeTopicSection, *, include_history: bool) 
 def coverage(db: Session, topic: KnowledgeTopic, *, include_pending: bool = False) -> dict[str, Any]:
     pending: dict[str, str] = {}
     if include_pending:
-        rows = db.scalars(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.topic_id == topic.id, KnowledgeTopicProposal.section_type.is_not(None))).all()
+        rows = db.scalars(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.contract == "section_v1", KnowledgeTopicProposal.topic_id == topic.id, KnowledgeTopicProposal.section_type.is_not(None))).all()
         for row in rows:
             if row.section_type and row.status in {"draft", "review", "deferred", "approved"}:
                 pending[row.section_type] = "pending_review" if row.status != "draft" else "draft"
@@ -168,16 +171,27 @@ def _content_for_action(topic: KnowledgeTopic | None, section_type: str | None, 
     return deepcopy(proposed)
 
 
-def _fingerprint(payload: KnowledgeProposalCreate, idempotency_key: str | None) -> str:
-    raw = idempotency_key or json.dumps(payload.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
-    return f"knowledge-proposal:{hashlib.sha256(raw.encode()).hexdigest()}"
+def _fingerprint(payload: KnowledgeProposalCreate, actor: str) -> str:
+    raw = f"knowledge-proposal:{actor}:{json.dumps(payload.model_dump(mode='json'), sort_keys=True, separators=(',', ':'))}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _client_idempotency_key(actor: str, key: str) -> str:
+    return f"knowledge-proposal:{hashlib.sha256(f'{actor}:{key}'.encode()).hexdigest()}"
 
 
 def create_proposal(db: Session, payload: KnowledgeProposalCreate, actor: str, idempotency_key: str | None = None) -> KnowledgeTopicProposal:
-    fingerprint = _fingerprint(payload, idempotency_key)
-    existing = db.scalar(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.idempotency_key == fingerprint))
-    if existing:
+    fingerprint = _fingerprint(payload, actor)
+    scoped_idempotency_key = _client_idempotency_key(actor, idempotency_key) if idempotency_key else None
+    if scoped_idempotency_key:
+        existing = db.scalar(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.idempotency_key == scoped_idempotency_key))
+        if existing:
+            return existing
+    existing = db.scalar(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.fingerprint == fingerprint))
+    if existing and existing.status in {"draft", "review", "deferred", "approved"}:
         return existing
+    if existing:
+        fingerprint = hashlib.sha256(f"{fingerprint}:{uuid.uuid4()}".encode()).hexdigest()
     topic = resolve_topic(db, payload.topic_id, payload.topic_key)
     section_type = _section_type(payload.section)
     if payload.action != "CREATE_TOPIC" and topic is None:
@@ -209,7 +223,7 @@ def create_proposal(db: Session, payload: KnowledgeProposalCreate, actor: str, i
         proposed_content = {**proposed_content, "topic": {**proposed_content.get("topic", {}), "name": name, "topic_key": topic_key}}
     if payload.action in {"ADD_TOPIC_RELATIONSHIP"}:
         target_id = proposed_content.get("target_topic_id")
-        target = resolve_topic(db, int(target_id) if target_id else None, None)
+        target = resolve_topic(db, target_id, None)
         if target is None:
             raise HTTPException(status_code=404, detail="Relationship target topic was not found")
         if target.id == topic.id:
@@ -226,9 +240,12 @@ def create_proposal(db: Session, payload: KnowledgeProposalCreate, actor: str, i
         schema_version=payload.schema_version,
         action=payload.action,
         section_type=section_type,
+        merge_target_topic_id=None,
         source_type=payload.source_type,
-        idempotency_key=fingerprint,
+        idempotency_key=scoped_idempotency_key,
         base_section_version=base_version,
+        contract="section_v1",
+        submitted_by=actor,
         original_content=original,
         proposed_content=proposed_content,
         change_reason=payload.change_reason,
@@ -237,16 +254,25 @@ def create_proposal(db: Session, payload: KnowledgeProposalCreate, actor: str, i
         updated_at=now(),
     )
     db.add(proposal)
-    db.flush()
-    for reference in payload.references:
-        db.add(KnowledgeProposalSource(proposal_id=proposal.id, **_source_values(reference)))
-    db.add(KnowledgeReviewDecision(proposal_id=proposal.id, action="submitted", actor=actor, note=payload.change_reason, before_content=original, after_content=proposed_content, created_at=now()))
-    db.commit()
+    try:
+        db.flush()
+        for reference in payload.references:
+            db.add(KnowledgeProposalSource(proposal_id=proposal.id, **_source_values(reference)))
+        db.add(KnowledgeReviewDecision(proposal_id=proposal.id, action="submitted", actor=actor, note=payload.change_reason, before_content=original, after_content=proposed_content, created_at=now()))
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if scoped_idempotency_key:
+            existing = db.scalar(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.idempotency_key == scoped_idempotency_key))
+            if existing:
+                return get_proposal(db, existing.id)
+        raise HTTPException(status_code=409, detail="A matching proposal was submitted concurrently; retry with a new idempotency key") from exc
     return get_proposal(db, proposal.id)
 
 
 def _source_values(reference: KnowledgeSourceReference) -> dict[str, Any]:
     data = reference.model_dump()
+    data["verification_status"] = "unverified"
     data["source_title"] = data.pop("title")
     data["source_url"] = data.pop("url")
     data["metadata_payload"] = data.pop("metadata")
@@ -254,43 +280,60 @@ def _source_values(reference: KnowledgeSourceReference) -> dict[str, Any]:
 
 
 def get_proposal(db: Session, proposal_id: int) -> KnowledgeTopicProposal:
-    proposal = db.scalar(select(KnowledgeTopicProposal).options(selectinload(KnowledgeTopicProposal.sources), selectinload(KnowledgeTopicProposal.decisions)).where(KnowledgeTopicProposal.id == proposal_id))
+    proposal = db.scalar(select(KnowledgeTopicProposal).options(selectinload(KnowledgeTopicProposal.topic), selectinload(KnowledgeTopicProposal.sources), selectinload(KnowledgeTopicProposal.decisions)).where(KnowledgeTopicProposal.id == proposal_id, KnowledgeTopicProposal.contract == "section_v1"))
     if proposal is None:
         raise HTTPException(status_code=404, detail="Knowledge proposal was not found")
     return proposal
 
 
-def proposal_response(proposal: KnowledgeTopicProposal) -> dict[str, Any]:
+_PRIVATE_CONTENT_KEYS = {"excerpt", "review_note", "reviewer_note", "internal_notes", "private_notes"}
+
+
+def _redact_private_content(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _redact_private_content(item) for key, item in value.items() if str(key).casefold() not in _PRIVATE_CONTENT_KEYS}
+    if isinstance(value, list):
+        return [_redact_private_content(item) for item in value]
+    return value
+
+
+def proposal_response(proposal: KnowledgeTopicProposal, *, include_private: bool = True) -> dict[str, Any]:
+    proposed_content = proposal.proposed_content or proposal.proposed_snapshot or {}
+    visible_original = proposal.original_content if include_private else _redact_private_content(proposal.original_content)
+    visible_proposed = proposed_content if include_private else _redact_private_content(proposed_content)
+    proposed_topic = visible_proposed.get("topic") if isinstance(visible_proposed, dict) and isinstance(visible_proposed.get("topic"), dict) else {}
     return {
         "id": proposal.id,
         "schema_version": proposal.schema_version,
         "source_type": proposal.source_type,
         "topic_id": proposal.topic_id,
-        "topic_key": _topic_key(proposal.topic) if proposal.topic else proposal.proposed_content.get("topic", {}).get("topic_key"),
+        "topic_key": _topic_key(proposal.topic) if proposal.topic else proposed_topic.get("topic_key"),
         "action": proposal.action,
         "section": proposal.section_type,
         "status": proposal.status,
         "version": proposal.version,
         "base_section_version": proposal.base_section_version,
-        "original_content": proposal.original_content,
-        "proposed_content": proposal.proposed_content or proposal.proposed_snapshot,
+        "merge_target_topic_id": proposal.merge_target_topic_id,
+        "original_content": visible_original,
+        "proposed_content": visible_proposed,
         "change_reason": proposal.change_reason,
         "created_at": proposal.created_at,
         "updated_at": proposal.updated_at,
-        "reviewed_by": proposal.reviewed_by,
+        "reviewed_by": proposal.reviewed_by if include_private else None,
         "reviewed_at": proposal.reviewed_at,
         "published_at": proposal.published_at,
-        "references": [_reference_response(item) for item in proposal.sources],
-        "review_decisions": [{"id": item.id, "action": item.action, "actor": item.actor, "note": item.note, "before_content": item.before_content, "after_content": item.after_content, "created_at": item.created_at} for item in proposal.decisions],
+        "references": [_reference_response(item, include_private=include_private) for item in proposal.sources],
+        "review_decisions": [{"id": item.id, "action": item.action, "actor": item.actor, "note": item.note, "before_content": item.before_content, "after_content": item.after_content, "created_at": item.created_at} for item in proposal.decisions] if include_private else [],
     }
 
 
-def _reference_response(item: KnowledgeProposalSource) -> dict[str, Any]:
+def _reference_response(item: KnowledgeProposalSource, *, include_private: bool = True) -> dict[str, Any]:
+    public_source = item.access_scope == "public" and not item.is_private
     return {
         "id": item.id, "source_type": item.source_type, "document_identifier": item.document_identifier,
         "title": item.source_title, "author": item.author, "publisher": item.publisher, "url": item.source_url,
         "document_version": item.document_version, "publication_date": item.publication_date, "retrieved_at": item.retrieved_at,
-        "locator": item.locator, "excerpt": item.excerpt, "content_hash": item.content_hash,
+        "locator": item.locator, "excerpt": item.excerpt if include_private or public_source else None, "content_hash": item.content_hash,
         "verification_status": item.verification_status, "access_scope": item.access_scope, "is_private": item.is_private,
     }
 
@@ -310,17 +353,20 @@ def review_proposal(db: Session, proposal_id: int, payload: KnowledgeProposalRev
         for source_id in source_ids:
             proposal_sources[source_id].verification_status = "verified"
     if payload.action == "modify":
+        if proposal.action == "CREATE_TOPIC":
+            _validate_topic_metadata(db, payload.proposed_content or {})
         proposal.proposed_content = payload.proposed_content
         proposal.proposed_snapshot = payload.proposed_content
         proposal.status = "review"
     elif payload.action == "approve":
         proposal.status = "approved"
     elif payload.action == "merge":
-        target = resolve_topic(db, payload.merge_target_topic_id, None)
+        target = resolve_topic(db, payload.merge_target_topic_id, None, require_active=False)
         if target is None or not target.is_active or target.publication_status != "published":
             raise HTTPException(status_code=409, detail="Merge target must be an active published topic")
-        proposal.proposed_content = {**(proposal.proposed_content or {}), "merge_target_topic_id": target.id}
-        proposal.proposed_snapshot = proposal.proposed_content
+        proposal.merge_target_topic_id = target.id
+        target_section = _section(target, proposal.section_type)
+        proposal.base_section_version = target_section.published_version if target_section else 0
         proposal.status = "approved"
     elif payload.action == "reject":
         proposal.status = "rejected"
@@ -336,7 +382,12 @@ def review_proposal(db: Session, proposal_id: int, payload: KnowledgeProposalRev
     return get_proposal(db, proposal.id)
 
 
+CVE_PATTERN = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.IGNORECASE)
+
+
 def _contains_cve(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(CVE_PATTERN.search(value))
     if isinstance(value, dict):
         return any(("cve" in str(key).casefold() and bool(child)) or _contains_cve(child) for key, child in value.items())
     if isinstance(value, list):
@@ -356,8 +407,9 @@ def _ensure_sources_publishable(proposal: KnowledgeTopicProposal) -> None:
 
 def _create_topic(db: Session, proposal: KnowledgeTopicProposal, actor: str) -> KnowledgeTopic:
     data = proposal.proposed_content or {}
-    metadata = data.get("topic", {})
-    name = metadata.get("name") or data.get("name")
+    metadata = data.get("topic") if isinstance(data.get("topic"), dict) else data
+    _validate_topic_metadata(db, data)
+    name = metadata.get("name")
     key = metadata.get("topic_key") or slugify(name or "knowledge-topic")
     if not name:
         raise HTTPException(status_code=422, detail="CREATE_TOPIC is missing a topic name")
@@ -366,6 +418,10 @@ def _create_topic(db: Session, proposal: KnowledgeTopicProposal, actor: str) -> 
     topic = KnowledgeTopic(name=name, slug=slugify(metadata.get("slug") or key), topic_key=key, description=metadata.get("description", ""), category_id=metadata.get("category_id"), publication_status="draft", is_active=True, version=1, display_order=metadata.get("display_order", 0), created_at=now(), updated_at=now())
     db.add(topic)
     db.flush()
+    for domain_id in metadata.get("domain_ids", data.get("domain_ids", [])):
+        db.add(KnowledgeTopicDomain(topic_id=topic.id, domain_id=domain_id))
+    for industry_id in metadata.get("industry_ids", data.get("industry_ids", [])):
+        db.add(KnowledgeTopicIndustry(topic_id=topic.id, industry_id=industry_id))
     return topic
 
 
@@ -376,14 +432,21 @@ def publish_proposal(db: Session, proposal_id: int, expected_version: int, actor
     if proposal.status != "approved":
         raise HTTPException(status_code=409, detail="Only approved proposals can be published")
     _ensure_sources_publishable(proposal)
-    topic = resolve_topic(db, proposal.topic_id, None) if proposal.topic_id else None
+    topic = resolve_topic(db, proposal.topic_id, None, require_active=False) if proposal.topic_id else None
     if proposal.action == "CREATE_TOPIC":
         topic = _create_topic(db, proposal, actor)
         proposal.topic_id = topic.id
     if topic is None:
         raise HTTPException(status_code=404, detail="Knowledge topic was not found")
+    if not topic.is_active and proposal.action != "CREATE_TOPIC":
+        raise HTTPException(status_code=409, detail="The source knowledge topic is inactive")
+    if proposal.merge_target_topic_id:
+        target = resolve_topic(db, proposal.merge_target_topic_id, None, require_active=False)
+        if target is None or not target.is_active or target.publication_status != "published":
+            raise HTTPException(status_code=409, detail="Merge target must be an active published topic")
+        topic = target
     if proposal.section_type:
-        section = _section(topic, proposal.section_type)
+        section = db.scalar(select(KnowledgeTopicSection).where(KnowledgeTopicSection.topic_id == topic.id, KnowledgeTopicSection.section_type == proposal.section_type).with_for_update())
         current_version = section.published_version if section else 0
         if current_version != proposal.base_section_version:
             raise HTTPException(status_code=409, detail="Section changed; reload and create a new proposal")
@@ -422,7 +485,11 @@ def publish_proposal(db: Session, proposal_id: int, expected_version: int, actor
     proposal.published_at = now()
     proposal.updated_at = now()
     db.add(KnowledgeReviewDecision(proposal_id=proposal.id, action="publish", actor=actor, note=change_reason, before_content=proposal.original_content, after_content=proposal.proposed_content, created_at=now()))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Section changed concurrently; reload and create a new proposal") from exc
     return get_proposal(db, proposal.id)
 
 
@@ -434,9 +501,13 @@ def list_public_topics(db: Session, search: str | None = None) -> list[Knowledge
 
 
 def list_proposals(db: Session, filters: dict[str, Any]) -> list[KnowledgeTopicProposal]:
-    query = select(KnowledgeTopicProposal).options(selectinload(KnowledgeTopicProposal.topic), selectinload(KnowledgeTopicProposal.sources), selectinload(KnowledgeTopicProposal.decisions)).order_by(KnowledgeTopicProposal.created_at.desc())
+    query = select(KnowledgeTopicProposal).options(selectinload(KnowledgeTopicProposal.topic), selectinload(KnowledgeTopicProposal.sources), selectinload(KnowledgeTopicProposal.decisions)).where(KnowledgeTopicProposal.contract == "section_v1").order_by(KnowledgeTopicProposal.created_at.desc())
     for key, column in (("source_type", KnowledgeTopicProposal.source_type), ("action", KnowledgeTopicProposal.action), ("status", KnowledgeTopicProposal.status), ("topic_id", KnowledgeTopicProposal.topic_id)):
         value = filters.get(key)
         if value:
             query = query.where(column == value)
+    if filters.get("submitted_after"):
+        query = query.where(KnowledgeTopicProposal.created_at >= filters["submitted_after"])
+    if filters.get("submitted_before"):
+        query = query.where(KnowledgeTopicProposal.created_at <= filters["submitted_before"])
     return list(db.scalars(query).unique().all())

@@ -27,7 +27,10 @@ def upgrade() -> None:
         ("schema_version", "schema_version", sa.String(length=20)),
         ("action", "action", sa.String(length=40)),
         ("section_type", "section_type", sa.String(length=50)),
+        ("merge_target_topic_id", "merge_target_topic_id", sa.Integer()),
         ("source_type", "source_type", sa.String(length=40)),
+        ("contract", "contract", sa.String(length=20)),
+        ("submitted_by", "submitted_by", sa.String(length=128)),
         ("idempotency_key", "idempotency_key", sa.String(length=160)),
         ("base_section_version", "base_section_version", sa.Integer()),
         ("original_content", "original_content", sa.JSON()),
@@ -35,13 +38,16 @@ def upgrade() -> None:
         ("change_reason", "change_reason", sa.String(length=500)),
     ):
         default = {
-            "schema_version": "1.0", "action": "UPDATE_TOPIC", "source_type": "ai",
+            "schema_version": "1.0", "action": "UPDATE_TOPIC", "source_type": "ai", "contract": "legacy",
             "base_section_version": "0", "change_reason": "",
         }.get(name)
-        op.add_column("knowledge_topic_proposals", sa.Column(name, definition, nullable=name in {"section_type", "idempotency_key", "original_content", "proposed_content"}, server_default=default))
+        op.add_column("knowledge_topic_proposals", sa.Column(name, definition, nullable=name in {"section_type", "idempotency_key", "original_content", "proposed_content", "merge_target_topic_id", "submitted_by"}, server_default=default))
+    with op.batch_alter_table("knowledge_topic_proposals") as batch_op:
+        batch_op.create_foreign_key("fk_knowledge_topic_proposals_merge_target", "knowledge_topics", ["merge_target_topic_id"], ["id"], ondelete="SET NULL")
+    op.execute("UPDATE knowledge_topic_proposals SET contract = 'legacy' WHERE contract IS NULL")
     op.execute("UPDATE knowledge_topic_proposals SET proposed_content = proposed_snapshot WHERE proposed_content IS NULL")
     op.execute("UPDATE knowledge_topic_proposals SET original_content = original_snapshot WHERE original_content IS NULL")
-    for name, column in (("action", "action"), ("section_type", "section_type"), ("source_type", "source_type"), ("base_section_version", "base_section_version")): 
+    for name, column in (("action", "action"), ("section_type", "section_type"), ("source_type", "source_type"), ("contract", "contract"), ("submitted_by", "submitted_by"), ("merge_target_topic_id", "merge_target_topic_id"), ("base_section_version", "base_section_version")):
         _index(f"ix_knowledge_topic_proposals_{name}_contract", "knowledge_topic_proposals", column)
     _index("ix_knowledge_topic_proposals_idempotency_key", "knowledge_topic_proposals", "idempotency_key", unique=True)
 
@@ -175,9 +181,11 @@ def downgrade() -> None:
         op.drop_index(index, table_name="knowledge_topic_sections")
     op.drop_table("knowledge_topic_sections")
     op.drop_index("ix_knowledge_topic_proposals_idempotency_key", table_name="knowledge_topic_proposals")
-    for name in ("base_section_version", "source_type", "section_type", "action"):
+    for name in ("base_section_version", "merge_target_topic_id", "submitted_by", "contract", "source_type", "section_type", "action"):
         op.drop_index(f"ix_knowledge_topic_proposals_{name}_contract", table_name="knowledge_topic_proposals")
-    for name in ("change_reason", "proposed_content", "original_content", "base_section_version", "idempotency_key", "source_type", "section_type", "action", "schema_version"):
+    with op.batch_alter_table("knowledge_topic_proposals") as batch_op:
+        batch_op.drop_constraint("fk_knowledge_topic_proposals_merge_target", type_="foreignkey")
+    for name in ("change_reason", "proposed_content", "original_content", "base_section_version", "idempotency_key", "submitted_by", "contract", "source_type", "merge_target_topic_id", "section_type", "action", "schema_version"):
         op.drop_column("knowledge_topic_proposals", name)
     op.drop_index("ix_knowledge_topics_topic_key", table_name="knowledge_topics")
     op.drop_column("knowledge_topics", "topic_key")

@@ -12,7 +12,7 @@ const labels = {
   references: "References",
   career_level_guidance: "Career Guidance",
 };
-const tabs = ["overview", "how_it_works", "attack_surfaces", "mitigations", "real_world_examples", "references"];
+const tabs = ["overview", "how_it_works", "attack_surfaces", "mitigations", "real_world_examples", "references", "career_level_guidance"];
 
 function TextList({ values }) {
   if (!values?.length) return null;
