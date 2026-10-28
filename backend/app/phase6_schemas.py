@@ -111,8 +111,8 @@ class RunStartRequest(BaseModel):
         return self
 
 
-JOB_PROVIDER_TYPES = Literal["linkedin_authorized", "licensed_api", "import", "employer_ats"]
-DATE_POSTED = Literal["24h", "week", "month", "any"]
+JOB_PROVIDER_TYPES = Literal["linkedin_authorized", "licensed_api", "jsearch", "import", "employer_ats"]
+DATE_POSTED = Literal["24h", "week", "month", "any", "all", "today", "3days"]
 WORK_MODES = Literal["remote", "hybrid", "onsite", "any"]
 
 
@@ -121,15 +121,24 @@ class JobSearchCreate(BaseModel):
     provider_type: JOB_PROVIDER_TYPES = "import"
     keywords: list[str] = Field(min_length=1, max_length=20)
     location: str = Field(default="", max_length=200)
+    country: str = Field(default="us", min_length=2, max_length=2)
     experience_level: str = Field(default="", max_length=80)
     date_posted: DATE_POSTED = "any"
     employment_type: str = Field(default="", max_length=80)
     work_mode: WORK_MODES = "any"
     max_results: int = Field(default=100, ge=1, le=500)
+    max_pages: int = Field(default=3, ge=1, le=20)
     search_frequency: FREQUENCIES = "manual"
     interval_minutes: int = Field(default=1440, ge=5, le=10080)
     enabled: bool = True
     configuration: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_jsearch(self):
+        self.country = self.country.strip().casefold()
+        if self.provider_type == "jsearch" and len(self.country) != 2:
+            raise ValueError("JSearch country must be a two-letter ISO country code")
+        return self
 
     @model_validator(mode="after")
     def validate_search(self):
@@ -147,11 +156,13 @@ class JobSearchUpdate(BaseModel):
     provider_type: JOB_PROVIDER_TYPES | None = None
     keywords: list[str] | None = Field(default=None, min_length=1, max_length=20)
     location: str | None = Field(default=None, max_length=200)
+    country: str | None = Field(default=None, min_length=2, max_length=2)
     experience_level: str | None = Field(default=None, max_length=80)
     date_posted: DATE_POSTED | None = None
     employment_type: str | None = Field(default=None, max_length=80)
     work_mode: WORK_MODES | None = None
     max_results: int | None = Field(default=None, ge=1, le=500)
+    max_pages: int | None = Field(default=None, ge=1, le=20)
     search_frequency: FREQUENCIES | None = None
     interval_minutes: int | None = Field(default=None, ge=5, le=10080)
     enabled: bool | None = None
@@ -163,13 +174,18 @@ class JobSearchUpdate(BaseModel):
             self.keywords = [keyword.strip() for keyword in self.keywords if keyword.strip()]
             if not self.keywords:
                 raise ValueError("at least one non-empty job keyword is required")
+        if self.country is not None:
+            self.country = self.country.strip().casefold()
+            if len(self.country) != 2:
+                raise ValueError("country must be a two-letter ISO country code")
         if self.configuration is not None:
             reject_secrets(self.configuration)
         return self
 
 
 class JobSearchScheduleRequest(BaseModel):
-    frequency: Literal["manual", "daily", "weekly"] = "daily"
+    frequency: FREQUENCIES = "daily"
+    interval_minutes: int = Field(default=1440, ge=5, le=10080)
     enabled: bool = True
 
 
@@ -209,11 +225,13 @@ class JobSearchResponse(BaseModel):
     enabled: bool
     keywords: list[str]
     location: str
+    country: str
     experience_level: str
     date_posted: str
     employment_type: str
     work_mode: str
     max_results: int
+    max_pages: int
     search_frequency: str
     next_run_at: datetime | None
     last_run_at: datetime | None
@@ -229,15 +247,21 @@ class JobSearchRunResponse(BaseModel):
     status: str
     provider_status: str
     provider_total: int | None
+    pages_requested: int
+    api_requests_used: int
     results_retrieved: int
     unique_results: int
     results_queued: int
     results_unavailable: int
+    complete_descriptions: int
+    partial_descriptions: int
     descriptions_retrieved: int
     successfully_analyzed: int
     duplicates_skipped: int
     manual_review_required: int
     failed: int
+    rate_limit_errors: int
+    quota_errors: int
     summary: dict[str, Any]
     error_message: str | None
     started_at: datetime | None
@@ -254,6 +278,10 @@ class JobSearchResultResponse(BaseModel):
     canonical_url: str
     description_url: str | None
     location: str
+    country: str
+    employment_type: str
+    posted_at: datetime | None
+    description_complete: bool
     status: str
     content_hash: str | None
     attempt_count: int
@@ -262,6 +290,26 @@ class JobSearchResultResponse(BaseModel):
     metadata: dict[str, Any]
     first_seen_at: datetime
     processed_at: datetime | None
+
+
+class JobSearchPreviewItem(BaseModel):
+    title: str
+    canonical_url: str
+    external_id: str | None = None
+    location: str
+    country: str
+    employment_type: str
+    posted_at: datetime | None = None
+    has_description: bool
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class JobSearchPreviewResponse(BaseModel):
+    provider: str
+    provider_total: int | None
+    items: list[JobSearchPreviewItem]
+    pages_requested: int
+    api_requests_used: int
 
 
 class JobSearchProviderResponse(BaseModel):

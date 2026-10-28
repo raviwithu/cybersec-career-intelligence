@@ -98,12 +98,13 @@ class SecureResearchFetcher:
         self.resolver = resolver or resolve_public_ips
         self.sleep = sleep
 
-    def _client(self, destination_ip: str) -> httpx.Client:
+    def _client(self, destination_ip: str, timeout_seconds: float | None = None) -> httpx.Client:
         if self.client_factory is not None:
             return self.client_factory(destination_ip)
         transport = httpx.HTTPTransport(verify=True, trust_env=False, retries=0)
         transport._pool._network_backend = PinnedBackend(destination_ip)
-        return httpx.Client(transport=transport, timeout=httpx.Timeout(self.settings.research_request_timeout_seconds), follow_redirects=False, trust_env=False)
+        timeout = timeout_seconds if timeout_seconds is not None else self.settings.research_request_timeout_seconds
+        return httpx.Client(transport=transport, timeout=httpx.Timeout(timeout), follow_redirects=False, trust_env=False)
 
     def _robots_allowed(self, url: str, destination_ip: str) -> bool:
         parsed = urlsplit(url)
@@ -121,7 +122,7 @@ class SecureResearchFetcher:
         except (httpx.HTTPError, OSError, ValueError):
             return True
 
-    def fetch(self, url: str, *, accept: str, respect_robots: bool = True, headers: dict[str, str] | None = None) -> tuple[bytes, str, int]:
+    def fetch(self, url: str, *, accept: str, respect_robots: bool = True, headers: dict[str, str] | None = None, timeout_seconds: float | None = None) -> tuple[bytes, str, int]:
         try:
             current_url = normalize_url(url)
         except (ValueError, UrlImportError) as exc:
@@ -136,7 +137,7 @@ class SecureResearchFetcher:
             if respect_robots and not self._robots_allowed(current_url, addresses[0]):
                 raise CollectionError("The source robots policy does not permit this request", retryable=False)
             try:
-                with self._client(addresses[0]) as client:
+                with self._client(addresses[0], timeout_seconds=timeout_seconds) as client:
                     request_headers = {"Accept": accept, "User-Agent": getattr(self.settings, "research_allowed_user_agent", "CyberSecCareerIntelligenceResearch/1.0")}
                     request_headers.update(headers or {})
                     with client.stream("GET", current_url, headers=request_headers) as response:

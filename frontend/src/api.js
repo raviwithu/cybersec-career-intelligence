@@ -178,6 +178,10 @@ export function importJobSearchResults(id, payload, adminKey) { return request(`
 export function fetchJobSearchRuns(id, adminKey) { return request(`/api/v1/research/automated/job-searches/${id}/runs`, { headers: adminHeaders(adminKey) }); }
 export function fetchJobSearchRunResults(runId, adminKey) { return request(`/api/v1/research/automated/job-searches/runs/${runId}/results`, { headers: adminHeaders(adminKey) }); }
 export function retryJobSearchRun(runId, adminKey) { return request(`/api/v1/research/automated/job-searches/runs/${runId}/retry`, { method: "POST", headers: adminHeaders(adminKey) }); }
+export function testJSearchConnection(adminKey) { return request("/api/v1/research/automated/job-searches/provider-status/jsearch/test", { method: "POST", headers: adminHeaders(adminKey) }); }
+export function previewJobSearch(id, adminKey) { return request(`/api/v1/research/automated/job-searches/${id}/preview`, { method: "POST", headers: adminHeaders(adminKey) }); }
+export function pauseJobSearch(id, adminKey) { return request(`/api/v1/research/automated/job-searches/${id}/pause`, { method: "POST", headers: adminHeaders(adminKey) }); }
+export function resumeJobSearch(id, adminKey) { return request(`/api/v1/research/automated/job-searches/${id}/resume`, { method: "POST", headers: adminHeaders(adminKey) }); }
 
 
 function profileHeaders(profileKey) { return profileKey ? { "X-Profile-Key": profileKey } : {}; }
