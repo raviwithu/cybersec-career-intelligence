@@ -273,7 +273,11 @@ def seed_reference_data(db: Session) -> None:
     # Keep the public checklist populated from the existing canonical competency seed.
     for competency in db.scalars(select(Competency)).all():
         topic = db.scalar(select(KnowledgeTopic).where(KnowledgeTopic.slug == competency.slug))
-        expectations = list(db.scalars(select(DomainLevelExpectation).where(DomainLevelExpectation.competency_id == competency.id)).all())
+        expectations = list(db.scalars(
+            select(DomainLevelExpectation)
+            .where(DomainLevelExpectation.competency_id == competency.id)
+            .order_by(DomainLevelExpectation.id)
+        ).all())
         if topic is None:
             topic = KnowledgeTopic(
                 name=competency.name,
@@ -293,7 +297,13 @@ def seed_reference_data(db: Session) -> None:
             for domain_id in sorted({item.domain_id for item in expectations}):
                 db.add(KnowledgeTopicDomain(topic_id=topic.id, domain_id=domain_id))
         if not topic.level_expectations:
+            # Several domain expectations can share a level/industry; the topic keeps one per pair.
+            seen_levels = set()
             for item in expectations:
+                key = (item.career_level_id, item.industry_id)
+                if key in seen_levels:
+                    continue
+                seen_levels.add(key)
                 db.add(KnowledgeTopicLevel(
                     topic_id=topic.id,
                     career_level_id=item.career_level_id,
