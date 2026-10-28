@@ -17,12 +17,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .sidebar-label, .eyebrow, .filter-label, .source-label, .category-kicker, .version-label { color: var(--mint); font: 500 10px 'DM Mono', monospace; letter-spacing: .13em; text-transform: uppercase; }
 .sidebar-section { flex: 1; }
 .sidebar-label { display: block; padding: 0 13px 12px; color: #5d7590; }
-.sidebar nav { display: grid; gap: 4px; }
-.sidebar nav button, .profile-nav { width: 100%; display: flex; align-items: center; gap: 12px; padding: 11px 13px; border: 0; border-radius: 8px; color: #9aabc0; background: transparent; text-align: left; font-size: .78rem; font-weight: 600; transition: .18s ease; }
-.sidebar nav button span { width: 17px; color: #627d98; font-size: 1rem; text-align: center; }
-.sidebar nav button:hover, .sidebar nav button.active, .profile-nav:hover, .profile-nav.active { color: #eef7ff; background: #12283d; }
-.sidebar nav button.active { box-shadow: inset 2px 0 var(--mint); }
-.sidebar nav button.active span { color: var(--mint); }
+.profile-nav { width: 100%; display: flex; align-items: center; gap: 12px; padding: 11px 13px; border: 0; border-radius: 8px; color: #9aabc0; background: transparent; text-align: left; font-size: .78rem; font-weight: 600; transition: .18s ease; }
+.profile-nav:hover, .profile-nav.active { color: #eef7ff; background: #12283d; }
 .sidebar-footer { border-top: 1px solid var(--line); padding-top: 18px; }
 .profile-nav { padding: 10px 8px; }
 .profile-nav > span:nth-child(2) { flex: 1; }
@@ -327,7 +323,7 @@ kbd { padding: 3px 6px; border: 1px solid #2c455e; border-radius: 4px; color: #6
 .navigation-search-results button:hover, .navigation-search-results button:focus-visible { color: #f1f8ff; background: #12283d; outline: 0; }
 .navigation-search-results small { color: #7089a0; font: 9px 'DM Mono', monospace; }
 .navigation-empty { padding: 8px; color: #7089a0; font-size: .68rem; }
-.sidebar-nav { flex: 1; display: grid; gap: 5px; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.sidebar-nav { flex: 1; display: grid; align-content: start; gap: 5px; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
 .nav-item, .nav-group-toggle { width: 100%; display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 8px 10px; border: 0; border-radius: 7px; color: #91a7bc; background: transparent; text-align: left; font-size: .72rem; font-weight: 650; transition: .18s ease; }
 .nav-item:hover, .nav-item.active, .nav-group-toggle:hover, .nav-group-toggle.active { color: #eef7ff; background: #12283d; }
 .nav-item.active { box-shadow: inset 2px 0 var(--mint); }
