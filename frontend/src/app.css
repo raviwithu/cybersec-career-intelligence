@@ -8,14 +8,13 @@ button { cursor: pointer; }
 button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
 .app-frame { min-height: 100vh; display: flex; }
 .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 20; width: var(--sidebar-width); display: flex; flex-direction: column; padding: 28px 17px 20px; border-right: 1px solid var(--line); background: rgba(8, 17, 31, .94); }
-.brand { display: flex; align-items: center; gap: 11px; padding: 0 13px 46px; }
+.brand { display: flex; align-items: center; gap: 11px; padding: 0 13px 28px; }
 .brand-mark { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--mint); border-radius: 9px; color: var(--mint); font: 700 19px 'DM Mono', monospace; box-shadow: 0 0 24px rgba(116,224,183,.12); }
 .brand-mark span { color: var(--blue); }
 .brand strong, .brand small { display: block; }
 .brand strong { font-size: .9rem; letter-spacing: -.02em; }
 .brand small { margin-top: 3px; color: var(--muted); font: 10px 'DM Mono', monospace; text-transform: uppercase; letter-spacing: .04em; }
 .sidebar-label, .eyebrow, .filter-label, .source-label, .category-kicker, .version-label { color: var(--mint); font: 500 10px 'DM Mono', monospace; letter-spacing: .13em; text-transform: uppercase; }
-.sidebar-section { flex: 1; }
 .sidebar-label { display: block; padding: 0 13px 12px; color: #5d7590; }
 .sidebar-footer { border-top: 1px solid var(--line); padding-top: 18px; }
 .avatar { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; color: #0b1a27; background: var(--mint); font: 700 10px 'DM Mono', monospace; }
@@ -338,6 +337,8 @@ kbd { padding: 3px 6px; border: 1px solid #2c455e; border-radius: 4px; color: #6
 .nav-flyout button:hover, .nav-flyout button.active { color: #eff8ff; background: #12283d; }
 .sidebar-collapsed { width: 76px; padding-left: 10px; padding-right: 10px; }
 .sidebar-collapsed .nav-label { display: none; }
+/* The collapsed rail has few rows; let group flyouts escape instead of being clipped by the scroll container. */
+.sidebar-collapsed .sidebar-nav { overflow: visible; }
 .nav-group { position: relative; }
 .sidebar-resize-handle { position: absolute; top: 0; right: -4px; bottom: 0; z-index: 25; width: 8px; cursor: col-resize; touch-action: none; }
 .sidebar-resize-handle::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background .15s ease; }
