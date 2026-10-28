@@ -122,4 +122,3 @@ def test_phase7_api_dashboard_profile_auth_and_grounded_ask(client):
     assert ask.status_code == 200
     assert ask.json()["insufficient_evidence"] is True
     assert ask.json()["evidence"] == []
-
