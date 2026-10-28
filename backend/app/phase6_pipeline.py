@@ -154,6 +154,14 @@ def _create_version(db: Session, registry_source: AutomatedResearchSource, item:
     current = _version_for(db, registry_source.id, canonical_url)
     if current is not None and current.content_hash == digest:
         current.last_seen_at = now()
+        failed_analysis = db.scalar(select(ResearchAutomationAnalysis).where(
+            ResearchAutomationAnalysis.content_version_id == current.id,
+            ResearchAutomationAnalysis.status == "failed",
+        ))
+        if current.status == "failed" or failed_analysis is not None:
+            current.status = "collected"
+            db.flush()
+            return current, False, None
         db.flush()
         return current, True, current
     duplicate = _global_hash_match(db, digest)
@@ -195,19 +203,38 @@ def _create_version(db: Session, registry_source: AutomatedResearchSource, item:
 def _analyze_version(db: Session, version: ResearchContentVersion, registry_source: AutomatedResearchSource, settings: Settings, provider_registry: AIProviderRegistry) -> bool:
     selection = ModelSelectionService(provider_registry, settings)
     provider, model_id, _ = selection.active_selection(db)
-    submission = ResearchSubmission(
-        source_id=version.research_source_id, source_type=f"automated_{registry_source.source_type}",
-        content_sha256=version.content_hash, content_size=version.content_size, status="received",
-        model_provider=provider, model_id=model_id, model_name=model_id, evaluation_version="phase6-v1",
-        submitted_at=version.first_seen_at,
-    )
-    db.add(submission)
-    db.flush()
-    analysis = ResearchAutomationAnalysis(
-        content_version_id=version.id, submission_id=submission.id, provider=provider, model_id=model_id,
-        prompt_version="phase6-v1", analysis_version="phase6-v1", status="processing", started_at=now(),
-    )
-    db.add(analysis)
+    analysis = db.scalar(select(ResearchAutomationAnalysis).where(ResearchAutomationAnalysis.content_version_id == version.id))
+    submission = db.get(ResearchSubmission, analysis.submission_id) if analysis and analysis.submission_id else None
+    if submission is None:
+        submission = db.scalar(select(ResearchSubmission).where(ResearchSubmission.source_id == version.research_source_id))
+    if submission is None:
+        submission = ResearchSubmission(
+            source_id=version.research_source_id, source_type=f"automated_{registry_source.source_type}",
+            content_sha256=version.content_hash, content_size=version.content_size, status="received",
+            model_provider=provider, model_id=model_id, model_name=model_id, evaluation_version="phase6-v1",
+            submitted_at=version.first_seen_at,
+        )
+        db.add(submission)
+        db.flush()
+    submission.content_sha256 = version.content_hash
+    submission.content_size = version.content_size
+    submission.model_provider = provider
+    submission.model_id = model_id
+    submission.model_name = model_id
+    submission.status = "received"
+    if analysis is None:
+        analysis = ResearchAutomationAnalysis(
+            content_version_id=version.id, submission_id=submission.id, provider=provider, model_id=model_id,
+            prompt_version="phase6-v1", analysis_version="phase6-v1", status="processing", started_at=now(),
+        )
+        db.add(analysis)
+    else:
+        analysis.submission_id = submission.id
+        analysis.provider = provider
+        analysis.model_id = model_id
+        analysis.status = "processing"
+        analysis.error_message = None
+        analysis.started_at = now()
     db.flush()
     try:
         process_submission(db, submission, version.normalized_content, provider_registry, settings)
@@ -232,6 +259,10 @@ def _analyze_version(db: Session, version: ResearchContentVersion, registry_sour
         return False
 
 
+def _utc_datetime(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 def _item_matches(item: CollectedItem, filters: dict[str, Any]) -> bool:
     haystack = f"{getattr(item, 'title', '')} {getattr(item, 'content', '')}".casefold()
     keywords = [str(value).casefold() for value in filters.get("keywords", []) if value]
@@ -242,9 +273,11 @@ def _item_matches(item: CollectedItem, filters: dict[str, Any]) -> bool:
         value = filters.get(key)
         if value and published_at is not None:
             target = datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else value
-            if before == "min" and published_at < target:
+            published_utc = _utc_datetime(published_at)
+            target_utc = _utc_datetime(target)
+            if before == "min" and published_utc < target_utc:
                 return False
-            if before == "max" and published_at > target:
+            if before == "max" and (published_utc >= target_utc if filters.get("date_to_exclusive") else published_utc > target_utc):
                 return False
     return True
 

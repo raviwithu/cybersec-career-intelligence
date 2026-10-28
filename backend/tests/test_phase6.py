@@ -24,7 +24,7 @@ from app.phase6_collectors import (
     normalize_url,
     parse_feed,
 )
-from app.phase6_pipeline import SourceLock, create_run, execute_run
+from app.phase6_pipeline import SourceLock, _item_matches, create_run, execute_run
 from app.phase6_schemas import AutomatedSourceCreate
 
 ADMIN_HEADERS = {"X-Admin-API-Key": "test-admin-key"}
@@ -218,3 +218,9 @@ def select_count(model):
     from sqlalchemy import func, select
 
     return select(func.count()).select_from(model)
+
+
+def test_collector_date_filters_normalize_timezone_and_include_date_only_endpoints():
+    item = SimpleNamespace(published_at=datetime(2026, 1, 15, 23, 30, tzinfo=timezone.utc), title="Research", content="security evidence")
+    assert _item_matches(item, {"date_from": "2026-01-15T18:00:00-05:00", "date_to": "2026-01-16T00:00:00", "date_to_exclusive": True}) is True
+    assert _item_matches(item, {"date_from": "2026-01-15T23:31:00+00:00"}) is False

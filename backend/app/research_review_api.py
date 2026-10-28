@@ -118,7 +118,17 @@ def _filter_changes(
 ) -> list[ReviewChange]:
     descendants: set[int] | None = None
     if subdomain_id is not None:
-        descendants = {subdomain_id}
+        children_by_parent: dict[int | None, list[int]] = {}
+        for domain in db.scalars(select(SecurityDomain)).all():
+            children_by_parent.setdefault(domain.parent_id, []).append(domain.id)
+        descendants = set()
+        pending = [subdomain_id]
+        while pending:
+            current = pending.pop()
+            if current in descendants:
+                continue
+            descendants.add(current)
+            pending.extend(children_by_parent.get(current, []))
     result = []
     for change in changes:
         proposed = change.proposed_snapshot
@@ -281,7 +291,8 @@ def publish_review_changes(payload: PublicationRequest, actor: str = Depends(req
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail="Publication failed and was rolled back") from exc
-    return PublicationResponse(status="published", batch_id=batch.id, published_change_ids=payload.change_ids or [], published_expectation_ids=sorted(set(expectation_ids)), published_competency_ids=sorted(set(competency_ids)))
+    published_change_ids = list(db.scalars(select(ReviewChange.id).where(ReviewChange.publication_batch_id == batch.id).order_by(ReviewChange.id)).all())
+    return PublicationResponse(status="published", batch_id=batch.id, published_change_ids=published_change_ids, published_expectation_ids=sorted(set(expectation_ids)), published_competency_ids=sorted(set(competency_ids)))
 
 
 @router.get("/history", response_model=HistoryResponse, dependencies=[Depends(require_admin)])

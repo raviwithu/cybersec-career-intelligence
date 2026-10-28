@@ -3,7 +3,7 @@ from math import ceil
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload, with_loader_criteria
 
 from .database import get_db
@@ -43,6 +43,7 @@ from .read_schemas import (
     PageMeta,
     ResearchSourcePage,
     ResearchSourceRead,
+    RelationshipRead,
     SearchPage,
     SearchResult,
 )
@@ -279,17 +280,19 @@ def list_competencies(
 ) -> CompetencyPage:
     industry_id = resolve_industry(db, industry, context).id if industry else None
     query = select(Competency).options(*competency_options(industry_id))
+    expectation_filters = []
     if industry_id is not None:
-        query = query.where(Competency.expectations.any(expectation_scope_clause(industry_id)))
+        expectation_filters.append(expectation_scope_clause(industry_id))
+    if domain:
+        expectation_filters.append(DomainLevelExpectation.domain_id.in_(descendant_domain_ids(db, domain)))
+    if level:
+        expectation_filters.append(DomainLevelExpectation.career_level.has(
+            or_(CareerLevel.slug == level, func.lower(CareerLevel.name) == level.casefold())
+        ))
+    if expectation_filters:
+        query = query.where(Competency.expectations.any(and_(*expectation_filters)))
     if category:
         query = query.where(Competency.category.has(or_(CompetencyCategory.slug == category, func.lower(CompetencyCategory.name) == category.casefold())))
-    if domain:
-        domain_ids = descendant_domain_ids(db, domain)
-        query = query.where(Competency.expectations.any(DomainLevelExpectation.domain_id.in_(domain_ids)))
-    if level:
-        query = query.where(Competency.expectations.any(DomainLevelExpectation.career_level.has(
-            or_(CareerLevel.slug == level, func.lower(CareerLevel.name) == level.casefold())
-        )))
     if search:
         term = f"%{search}%"
         query = query.where(or_(Competency.name.ilike(term), Competency.description.ilike(term)))
@@ -471,7 +474,7 @@ def compare_levels(
             raise not_found("Career level", requested)
         chosen_levels.append(level_item)
     comparison_query = select(DomainLevelExpectation).where(
-        DomainLevelExpectation.domain_id == domain_item.id,
+        DomainLevelExpectation.domain_id.in_(descendant_domain_ids(db, domain_item.slug)),
         DomainLevelExpectation.career_level_id.in_([level.id for level in chosen_levels]),
     ).options(*expectation_options(industry_id))
     if industry_id is not None:
@@ -546,14 +549,17 @@ def search(
         results.append(SearchResult(result_type="expectation", id=item.id, name=item.competency.name, description=item.expectation_description, domain=ref_domain(item.domain), career_level=ref_level_short(item.career_level), competency_id=item.competency_id))
 
     competency_query = select(Competency).options(*competency_options(industry_id)).where(or_(Competency.name.ilike(term), Competency.description.ilike(term)))
+    expectation_filters = []
     if domain:
-        competency_query = competency_query.where(Competency.expectations.any(DomainLevelExpectation.domain_id.in_(descendant_domain_ids(db, domain))))
+        expectation_filters.append(DomainLevelExpectation.domain_id.in_(descendant_domain_ids(db, domain)))
     if level:
-        competency_query = competency_query.where(Competency.expectations.any(DomainLevelExpectation.career_level.has(
+        expectation_filters.append(DomainLevelExpectation.career_level.has(
             or_(CareerLevel.slug == level, func.lower(CareerLevel.name) == level.casefold())
-        )))
+        ))
     if industry_id is not None:
-        competency_query = competency_query.where(Competency.expectations.any(expectation_scope_clause(industry_id)))
+        expectation_filters.append(expectation_scope_clause(industry_id))
+    if expectation_filters:
+        competency_query = competency_query.where(Competency.expectations.any(and_(*expectation_filters)))
     for item in db.scalars(competency_query.distinct().order_by(Competency.name)).unique().all():
         results.append(SearchResult(result_type="competency", id=item.id, name=item.name, description=item.description, competency_id=item.id))
 
