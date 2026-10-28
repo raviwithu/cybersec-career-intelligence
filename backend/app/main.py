@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .database import SessionLocal, get_db, init_db
 from .health import service_status
+from .intelligence_api import router as intelligence_router
 from .job_search_api import router as job_search_router
 from .knowledge import router as knowledge_router
 from .phase5_api import router as phase5_router
@@ -51,12 +52,13 @@ app.include_router(phase5_router, prefix=settings.api_prefix)
 app.include_router(phase6_router, prefix=settings.api_prefix)
 app.include_router(job_search_router, prefix=settings.api_prefix)
 app.include_router(research_review_router, prefix=settings.api_prefix)
+app.include_router(intelligence_router, prefix=settings.api_prefix)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 

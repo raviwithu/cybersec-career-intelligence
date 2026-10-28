@@ -22,6 +22,39 @@ class CareerProfile(Base):
 
 
 
+class CompetencyProfile(Base):
+    __tablename__ = "competency_profiles"
+    __table_args__ = (UniqueConstraint("profile_token_hash", name="uq_competency_profile_token_hash"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    profile_token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    target_industry_id: Mapped[int | None] = mapped_column(ForeignKey("industries.id", ondelete="SET NULL"), index=True)
+    target_domain_id: Mapped[int | None] = mapped_column(ForeignKey("security_domains.id", ondelete="SET NULL"), index=True)
+    target_career_level_id: Mapped[int | None] = mapped_column(ForeignKey("career_levels.id", ondelete="SET NULL"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    target_industry: Mapped["Industry | None"] = relationship()
+    target_domain: Mapped["SecurityDomain | None"] = relationship()
+    target_career_level: Mapped["CareerLevel | None"] = relationship()
+    assessments: Mapped[list["CompetencyAssessment"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
+
+
+class CompetencyAssessment(Base):
+    __tablename__ = "competency_assessments"
+    __table_args__ = (UniqueConstraint("profile_id", "competency_id", name="uq_competency_assessment_profile_competency"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("competency_profiles.id", ondelete="CASCADE"), index=True)
+    competency_id: Mapped[int] = mapped_column(ForeignKey("competencies.id", ondelete="CASCADE"), index=True)
+    proficiency: Mapped[str] = mapped_column(String(30), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    profile: Mapped[CompetencyProfile] = relationship(back_populates="assessments")
+    competency: Mapped["Competency"] = relationship()
+
+
+
 class Industry(Base):
     __tablename__ = "industries"
 

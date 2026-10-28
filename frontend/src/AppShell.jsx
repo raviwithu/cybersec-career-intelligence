@@ -6,6 +6,7 @@ import { CompetenciesPage, ComparePage, DashboardPage, DomainsPage, MatrixPage, 
 import AutomatedResearchPage from "./AutomatedResearchPage";
 import ResearchAdminPage from "./ResearchAdminPage";
 import ResearchReviewPage from "./ResearchReviewPage";
+import IntelligencePage from "./IntelligencePage";
 import { useApi } from "./useApi";
 
 const navigation = [
@@ -18,6 +19,14 @@ const navigation = [
   { id: "research", label: "Research admin", icon: "✦" },
   { id: "automated-research", label: "Automated Research", icon: "↻" },
   { id: "research-review", label: "Research Review", icon: "✓" },
+  { id: "intelligence-dashboard", label: "Intelligence Dashboard", icon: "◉" },
+  { id: "skill-trends", label: "Skill Trends", icon: "↗" },
+  { id: "career-progression", label: "Career Progression", icon: "⇢" },
+  { id: "industry-intelligence", label: "Industry Intelligence", icon: "◇" },
+  { id: "competency-gaps", label: "Competency Gap Analysis", icon: "△" },
+  { id: "career-roadmap", label: "Career Roadmap", icon: "⌁" },
+  { id: "ask-career", label: "Ask Career Intelligence", icon: "?" },
+  { id: "evidence-explorer", label: "Evidence Explorer", icon: "⌗" },
 ];
 
 function flattenDomains(domains) { return domains.flatMap((domain) => [domain, ...(domain.children || [])]); }
@@ -49,8 +58,9 @@ export default function AppShell() {
   const allDomains = useMemo(() => flattenDomains(data?.domains || []), [data?.domains]);
   const selectedDomain = allDomains.find((domain) => domain.slug === selectedDomainSlug) || null;
 
-  function navigate(nextView) {
+  function navigate(nextView, payload = null) {
     setView(nextView); setMobileOpen(false);
+    if (nextView === "evidence-explorer" && payload) setSelectedCompetencyId(payload);
     // Domains and counts load once at startup; refresh them so newly published research appears without a page reload.
     if (!nextView.startsWith("research")) bootstrap.refresh();
   }
@@ -61,6 +71,7 @@ export default function AppShell() {
   if (bootstrap.loading && !data) return <div className="app-loading"><Loading label="Loading career intelligence" /></div>;
   if (bootstrap.error && !data) return <div className="app-loading"><ErrorState error={bootstrap.error} onRetry={bootstrap.reload} /></div>;
 
+  const intelligenceViews = { "intelligence-dashboard": "dashboard", "skill-trends": "trends", "career-progression": "progression", "industry-intelligence": "industries", "competency-gaps": "gaps", "career-roadmap": "roadmap", "ask-career": "ask", "evidence-explorer": "evidence" };
   const content = view === "dashboard" ? <DashboardPage domains={data.domains} levels={data.levels} matrix={data.matrix} competencyTotal={data.competencies.meta.total} expectationTotal={data.expectations.meta.total} onNavigate={navigate} />
     : view === "domains" ? <DomainsPage domains={data.domains} levels={data.levels} categories={data.categories} matrix={data.matrix} selectedDomain={selectedDomain} selectedLevel={selectedLevel} selectedIndustry={selectedIndustry} onSelectDomain={selectDomain} onSelectLevel={setSelectedLevel} onCompetency={openCompetency} />
       : view === "matrix" ? <MatrixPage matrix={data.matrix} domains={data.domains} levels={data.levels} onCell={selectMatrixCell} />
@@ -70,7 +81,8 @@ export default function AppShell() {
             : view === "research" ? <ResearchAdminPage />
               : view === "automated-research" ? <AutomatedResearchPage onOpenReview={() => navigate("research-review")} />
                 : view === "research-review" ? <ResearchReviewPage />
-                  : <ProfilePage />;
+                  : intelligenceViews[view] ? <IntelligencePage data={data} initialView={intelligenceViews[view]} selectedCompetencyId={selectedCompetencyId} onNavigate={navigate} />
+                    : <ProfilePage />;
   return <div className="app-frame">
     <aside className={`sidebar ${mobileOpen ? "open" : ""}`}><div className="brand"><div className="brand-mark">C<span>·</span></div><div><strong>CyberSec</strong><small>Career Intelligence</small></div></div><div className="sidebar-section"><span className="sidebar-label">WORKSPACE</span><nav>{navigation.map((item) => <button className={view === item.id ? "active" : ""} key={item.id} onClick={() => navigate(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav></div><div className="sidebar-footer"><button className={`profile-nav ${view === "profile" ? "active" : ""}`} onClick={() => navigate("profile")}><span className="avatar">CI</span><span><strong>My profile</strong><small>Phase 1 baseline</small></span><span>→</span></button><div className="version-label">KNOWLEDGE BASE · PHASE 4</div></div></aside>
     {mobileOpen && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
