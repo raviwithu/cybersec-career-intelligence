@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     employer_ats_api_key: str | None = None
     jsearch_api_key: str | None = None
     jsearch_api_host: str = "jsearch.p.rapidapi.com"
-    jsearch_api_endpoint: str = "https://jsearch.p.rapidapi.com/search"
+    jsearch_api_endpoint: str = "https://jsearch.p.rapidapi.com/search-v2"
     jsearch_job_details_endpoint: str = "https://jsearch.p.rapidapi.com/job-details"
     jsearch_timeout_seconds: float = 15.0
     jsearch_max_requests_per_run: int = 10

@@ -45,7 +45,7 @@ services:
       EMPLOYER_ATS_API_KEY: ${EMPLOYER_ATS_API_KEY:-}
       JSEARCH_API_KEY: ${JSEARCH_API_KEY:-}
       JSEARCH_API_HOST: ${JSEARCH_API_HOST:-jsearch.p.rapidapi.com}
-      JSEARCH_API_ENDPOINT: ${JSEARCH_API_ENDPOINT:-https://jsearch.p.rapidapi.com/search}
+      JSEARCH_API_ENDPOINT: ${JSEARCH_API_ENDPOINT:-https://jsearch.p.rapidapi.com/search-v2}
       JSEARCH_JOB_DETAILS_ENDPOINT: ${JSEARCH_JOB_DETAILS_ENDPOINT:-https://jsearch.p.rapidapi.com/job-details}
       JSEARCH_TIMEOUT_SECONDS: ${JSEARCH_TIMEOUT_SECONDS:-15}
       JSEARCH_MAX_REQUESTS_PER_RUN: ${JSEARCH_MAX_REQUESTS_PER_RUN:-10}
@@ -114,7 +114,7 @@ services:
       EMPLOYER_ATS_API_KEY: ${EMPLOYER_ATS_API_KEY:-}
       JSEARCH_API_KEY: ${JSEARCH_API_KEY:-}
       JSEARCH_API_HOST: ${JSEARCH_API_HOST:-jsearch.p.rapidapi.com}
-      JSEARCH_API_ENDPOINT: ${JSEARCH_API_ENDPOINT:-https://jsearch.p.rapidapi.com/search}
+      JSEARCH_API_ENDPOINT: ${JSEARCH_API_ENDPOINT:-https://jsearch.p.rapidapi.com/search-v2}
       JSEARCH_JOB_DETAILS_ENDPOINT: ${JSEARCH_JOB_DETAILS_ENDPOINT:-https://jsearch.p.rapidapi.com/job-details}
       JSEARCH_TIMEOUT_SECONDS: ${JSEARCH_TIMEOUT_SECONDS:-15}
       JSEARCH_MAX_REQUESTS_PER_RUN: ${JSEARCH_MAX_REQUESTS_PER_RUN:-10}
