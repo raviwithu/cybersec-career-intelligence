@@ -52,6 +52,7 @@ DOMAIN_SEED = [
     ("ai-enabled-security-products", "AI-Enabled Security Products", "Building and operating security products that use AI or machine learning as a core capability: ML-based threat detection and anomaly detection, AI-assisted SOC triage and investigation, LLM-powered security copilots and automation, malware and phishing classification models, and the data pipelines, model evaluation, false-positive tuning, and drift monitoring behind them. Use when AI is the tool used to deliver security outcomes rather than the asset being protected.", None, 10),
     ("security-automation", "Security Automation", "Automating security workflows and controls through SOAR, workflow orchestration, security-as-code, policy-as-code, automated vulnerability management, control validation, and repeatable detection or response actions. Use when workflow automation is the primary security capability, rather than AI being the protected asset or the enabling technology.", None, 11),
     ("vulnerability-research", "Vulnerability Research", "Discovering, analyzing, and demonstrating previously unknown security vulnerabilities in software, firmware, and hardware: source and binary code auditing, reverse engineering, fuzzing and harness development, variant analysis, root-cause and patch-diff analysis, exploitability assessment and exploit or proof-of-concept development, and coordinated vulnerability disclosure including CVE reporting. Use when the work produces new vulnerability findings, rather than operating vulnerability management for known issues or testing a specific application.", None, 12),
+    ("devsecops", "DevSecOps", "Integrating security into software development and delivery: secure SDLC practices and design-time threat modeling, CI/CD pipeline and build-system hardening, SAST, DAST, SCA, and secret-scanning gates, software supply chain security (SBOMs, dependency and artifact provenance, signing, SLSA), infrastructure-as-code and container image scanning, and developer security enablement. References include NIST SSDF (SP 800-218), OWASP SAMM, and SLSA. Use when the work embeds security controls into engineering and delivery pipelines, rather than automating security operations workflows or testing a specific application.", None, 13),
 ]
 
 DOMAIN_ALIAS_SEED = [
@@ -64,6 +65,14 @@ DOMAIN_ALIAS_SEED = [
     ("vulnerability-research", "Offensive Security Research", False, None),
     ("vulnerability-research", "VR", True, "Use this alias only when the source explicitly means vulnerability research, not virtual reality."),
     ("vulnerability-research", "Security Research", True, "Use this alias only when the source describes discovering new vulnerabilities rather than general threat or security research."),
+    ("devsecops", "Secure DevOps", False, None),
+    ("devsecops", "DevOps Security", False, None),
+    ("devsecops", "Secure SDLC", False, None),
+    ("devsecops", "SSDLC", False, None),
+    ("devsecops", "CI/CD Security", False, None),
+    ("devsecops", "Pipeline Security", False, None),
+    ("devsecops", "Shift-Left Security", False, None),
+    ("devsecops", "Software Supply Chain Security", True, "Use this alias only when the source concerns securing the organization's own build and dependency pipeline, not third-party vendor risk management."),
 ]
 
 CAREER_LEVEL_ALIAS_SEED = [
