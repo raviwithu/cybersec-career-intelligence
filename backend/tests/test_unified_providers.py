@@ -168,3 +168,24 @@ def test_extraction_prompt_requests_qualifications_and_tools():
     }]}))
     assert result.requirements[0].qualifications == "CISSP"
     assert result.requirements[0].tools_technologies == "Splunk, Sentinel"
+
+
+def test_extraction_prompt_contains_ai_domain_names_and_disambiguating_descriptions():
+    from app.database import SessionLocal
+    from app.phase5_service import taxonomy
+    from app.provider_common import build_extraction_prompt
+    from app.seed import DOMAIN_SEED, seed_reference_data
+
+    with SessionLocal() as db:
+        seed_reference_data(db)
+        db.commit()
+        prompt = build_extraction_prompt("AI security research", taxonomy(db))
+
+    expected = {
+        slug: (name, description)
+        for slug, name, description, parent_id, display_order in DOMAIN_SEED
+        if slug in {"ai-system-security", "ai-enabled-security-products"}
+    }
+    for name, description in expected.values():
+        assert name in prompt
+        assert description in prompt
