@@ -8,6 +8,7 @@ import AutomatedResearchPage from "./AutomatedResearchPage";
 import ResearchAdminPage from "./ResearchAdminPage";
 import TaxonomyManagementPage from "./TaxonomyManagementPage";
 import ResearchReviewPage from "./ResearchReviewPage";
+import CareerReadinessAdminPage from "./CareerReadinessAdminPage";
 import IntelligencePage from "./IntelligencePage";
 import { useApi } from "./useApi";
 
@@ -23,6 +24,8 @@ const navigation = [
   { id: "taxonomy-management", label: "Taxonomy Management", icon: "⌘" },
   { id: "automated-research", label: "Automated Research", icon: "↻" },
   { id: "research-review", label: "Research Review", icon: "✓" },
+  { id: "career-readiness-review", label: "Readiness Review", icon: "◇" },
+  { id: "knowledge-topics", label: "Knowledge Topics", icon: "☷" },
   { id: "intelligence-dashboard", label: "Intelligence Dashboard", icon: "◉" },
   { id: "skill-trends", label: "Skill Trends", icon: "↗" },
   { id: "career-progression", label: "Career Progression", icon: "⇢" },
@@ -91,6 +94,8 @@ export default function AppShell() {
               : view === "taxonomy-management" ? <TaxonomyManagementPage />
                 : view === "automated-research" ? <AutomatedResearchPage onOpenReview={() => navigate("research-review")} />
                 : view === "research-review" ? <ResearchReviewPage />
+                  : view === "career-readiness-review" ? <CareerReadinessAdminPage initialTab="review" />
+                    : view === "knowledge-topics" ? <CareerReadinessAdminPage initialTab="topics" />
                   : intelligenceViews[view] ? <IntelligencePage data={data} initialView={intelligenceViews[view]} selectedCompetencyId={selectedCompetencyId} onNavigate={navigate} />
                     : <ProfilePage />;
   return <div className="app-frame">

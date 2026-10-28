@@ -15,6 +15,10 @@ from .models import (
     SecurityDomainAlias,
     CareerLevelAlias,
     CompetencyCategoryAlias,
+    KnowledgeTopic,
+    KnowledgeTopicCompetency,
+    KnowledgeTopicDomain,
+    KnowledgeTopicLevel,
 )
 
 ILLUSTRATIVE_PREFIX = "Illustrative development seed; not verified market research. "
@@ -263,6 +267,50 @@ def seed_reference_data(db: Session) -> None:
                     experience_years_max=years_max,
                 )
             )
+
+
+    db.flush()
+    # Keep the public checklist populated from the existing canonical competency seed.
+    for competency in db.scalars(select(Competency)).all():
+        topic = db.scalar(select(KnowledgeTopic).where(KnowledgeTopic.slug == competency.slug))
+        expectations = list(db.scalars(
+            select(DomainLevelExpectation)
+            .where(DomainLevelExpectation.competency_id == competency.id)
+            .order_by(DomainLevelExpectation.id)
+        ).all())
+        if topic is None:
+            topic = KnowledgeTopic(
+                name=competency.name,
+                slug=competency.slug,
+                description=competency.description,
+                category_id=competency.category_id,
+                aliases=[],
+                publication_status="published",
+                is_active=True,
+                version=1,
+                published_at=datetime.now(timezone.utc),
+            )
+            db.add(topic)
+            db.flush()
+            db.add(KnowledgeTopicCompetency(topic_id=topic.id, competency_id=competency.id))
+        if not topic.domains:
+            for domain_id in sorted({item.domain_id for item in expectations}):
+                db.add(KnowledgeTopicDomain(topic_id=topic.id, domain_id=domain_id))
+        if not topic.level_expectations:
+            # Several domain expectations can share a level/industry; the topic keeps one per pair.
+            seen_levels = set()
+            for item in expectations:
+                key = (item.career_level_id, item.industry_id)
+                if key in seen_levels:
+                    continue
+                seen_levels.add(key)
+                db.add(KnowledgeTopicLevel(
+                    topic_id=topic.id,
+                    career_level_id=item.career_level_id,
+                    industry_id=item.industry_id,
+                    expectation=item.expectation_description,
+                    practical_capability=item.practical_capability,
+                ))
 
     if db.scalar(select(AnalysisVersion).where(AnalysisVersion.version == "illustrative-v1")) is None:
         db.add(
