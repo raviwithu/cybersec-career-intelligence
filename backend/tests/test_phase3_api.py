@@ -11,10 +11,13 @@ def test_domain_hierarchy_and_missing_resource(client):
     response = client.get("/api/v1/domains")
     assert response.status_code == 200
     domains = response.json()
-    assert len(domains) == 11
+    assert len(domains) == 12
     security_automation = next(item for item in domains if item["slug"] == "security-automation")
     assert security_automation["parent_id"] is None
     assert "SOAR" in security_automation["description"]
+    vulnerability_research = next(item for item in domains if item["slug"] == "vulnerability-research")
+    assert vulnerability_research["parent_id"] is None
+    assert "fuzzing" in vulnerability_research["description"]
     embedded = next(item for item in domains if item["slug"] == "embedded-systems-security")
     assert len(embedded["children"]) == 5
     assert all(child["parent_id"] == embedded["id"] for child in embedded["children"])
@@ -33,7 +36,7 @@ def test_levels_and_categories(client):
     categories = client.get("/api/v1/categories")
     assert levels.status_code == 200
     assert categories.status_code == 200
-    assert [item["name"] for item in levels.json()] == ["Junior", "Intermediate", "Senior", "Manager", "Architect", "Director"]
+    assert [item["name"] for item in levels.json()] == ["Junior", "Intermediate", "Senior", "Guide", "Supervisor", "Manager", "Architect", "Director"]
     assert {item["career_track"] for item in levels.json()} == {"shared", "management", "technical"}
     assert len(categories.json()) == 13
 
@@ -145,13 +148,14 @@ def test_seed_reference_data_is_idempotent_for_security_domains():
     from sqlalchemy import func, select
 
     from app.database import SessionLocal
-    from app.models import SecurityDomain
+    from app.models import SecurityDomain, SecurityDomainAlias
     from app.seed import seed_reference_data
 
     expected = {
         "ai-system-security": ("AI System Security", "Use when the asset being protected is an AI or ML system."),
         "ai-enabled-security-products": ("AI-Enabled Security Products", "Use when AI is the tool used to deliver security outcomes rather than the asset being protected."),
         "security-automation": ("Security Automation", "Use when workflow automation is the primary security capability"),
+        "vulnerability-research": ("Vulnerability Research", "Use when the work produces new vulnerability findings"),
     }
     with SessionLocal() as db:
         seed_reference_data(db)
@@ -164,3 +168,59 @@ def test_seed_reference_data_is_idempotent_for_security_domains():
             assert domain.name == name
             assert domain.parent_id is None
             assert disambiguation in domain.description
+        vulnerability_research = db.scalar(select(SecurityDomain).where(SecurityDomain.slug == "vulnerability-research"))
+        aliases = {item.alias: item.requires_context for item in db.scalars(select(SecurityDomainAlias).where(SecurityDomainAlias.domain_id == vulnerability_research.id))}
+        assert aliases == {
+            "Vuln Research": False,
+            "Exploit Development": False,
+            "Exploit Dev": False,
+            "Zero-Day Research": False,
+            "Offensive Security Research": False,
+            "VR": True,
+            "Security Research": True,
+        }
+
+
+def test_seed_inserts_guide_and_supervisor_into_existing_level_order():
+    from sqlalchemy import delete, select
+
+    from app.database import SessionLocal
+    from app.models import CareerLevel, CareerLevelAlias
+    from app.seed import seed_reference_data
+
+    with SessionLocal() as db:
+        seed_reference_data(db)
+        db.commit()
+        # Simulate a database seeded before Guide and Supervisor existed.
+        db.execute(delete(CareerLevel).where(CareerLevel.slug.in_(["guide", "supervisor"])))
+        for slug, order in {"manager": 4, "architect": 5, "director": 6}.items():
+            db.scalar(select(CareerLevel).where(CareerLevel.slug == slug)).display_order = order
+        db.commit()
+
+        seed_reference_data(db)
+        db.commit()
+        levels = db.scalars(select(CareerLevel).order_by(CareerLevel.display_order)).all()
+        assert [item.slug for item in levels] == ["junior", "intermediate", "senior", "guide", "supervisor", "manager", "architect", "director"]
+        assert {item.slug: item.career_track for item in levels if item.slug in {"guide", "supervisor"}} == {"guide": "management", "supervisor": "management"}
+        supervisor = next(item for item in levels if item.slug == "supervisor")
+        aliases = {item.alias: item.requires_context for item in db.scalars(select(CareerLevelAlias).where(CareerLevelAlias.career_level_id == supervisor.id))}
+        assert aliases == {"Team Supervisor": False, "Shift Supervisor": False, "SOC Supervisor": False, "Team Leader": True}
+
+
+def test_classify_level_recognizes_guide_and_supervisor():
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from app.database import SessionLocal
+    from app.models import CareerLevel
+    from app.phase5_schemas import ExtractedRequirement
+    from app.phase5_service import classify_level
+
+    with SessionLocal() as db:
+        levels = list(db.scalars(select(CareerLevel).options(selectinload(CareerLevel.aliases))).all())
+        def requirement(**values):
+            return ExtractedRequirement(competency_name="Incident triage", evidence_excerpt="Excerpt.", **values)
+        assert classify_level(requirement(career_level="Guide"), levels).slug == "guide"
+        assert classify_level(requirement(career_level="Shift Supervisor"), levels).slug == "supervisor"
+        assert classify_level(requirement(responsibilities="Act as SOC supervisor for the night shift."), levels).slug == "supervisor"
+        assert classify_level(requirement(technical_knowledge="Supervised learning for anomaly detection."), levels) is None

@@ -155,6 +155,8 @@ def classify_level(requirement: ExtractedRequirement, levels: list[CareerLevel])
         requested = "director"
     elif any(word in haystack for word in ("manager", "manage a team", "people leadership")):
         requested = "manager"
+    elif any(word in haystack for word in ("supervisor", "shift lead")):
+        requested = "supervisor"
     elif any(word in haystack for word in ("architect", "architecture strategy", "technical direction", "principal")):
         requested = "architect"
     elif any(word in haystack for word in ("lead", "mentor", "cross-functional leadership")):
