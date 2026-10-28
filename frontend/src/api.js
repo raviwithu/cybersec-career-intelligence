@@ -2,8 +2,8 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:810
 const ADMIN_SESSION_KEY = "cybersec-career-intelligence.admin-api-key";
 
 export function getAdminSessionKey() { return typeof window === "undefined" ? "" : window.sessionStorage.getItem(ADMIN_SESSION_KEY) || ""; }
-export function setAdminSessionKey(value) { if (typeof window !== "undefined") window.sessionStorage.setItem(ADMIN_SESSION_KEY, value); }
-export function clearAdminSessionKey() { if (typeof window !== "undefined") window.sessionStorage.removeItem(ADMIN_SESSION_KEY); }
+export function setAdminSessionKey(value) { if (typeof window !== "undefined") { window.sessionStorage.setItem(ADMIN_SESSION_KEY, value); window.dispatchEvent(new Event("admin-session-changed")); } }
+export function clearAdminSessionKey() { if (typeof window !== "undefined") { window.sessionStorage.removeItem(ADMIN_SESSION_KEY); window.dispatchEvent(new Event("admin-session-changed")); } }
 
 
 export class ApiError extends Error {

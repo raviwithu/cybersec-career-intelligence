@@ -42,14 +42,18 @@ function mockApi({ fail = false, empty = false } = {}) {
     if (path.endsWith("/search")) return response(page(empty ? [] : [{ result_type: "competency", id: 1, name: "Secure Boot", description: competency.description, competency_id: 1 }], empty ? 0 : 1));
     if (path.endsWith("/intelligence/evidence")) return response({ competency: { id: 1, name: "Secure Boot", slug: "secure-boot" }, total: 1, data_quality: [], evidence: [{ expectation_id: 1, source_id: 8, source_title: evidenceSource.source_title, source_url: evidenceSource.source_url, research_date: evidenceSource.collected_at, excerpt: "Verified startup protects firmware integrity.", publication_version: 3 }] });
     if (path.endsWith("/profiles")) return response([]);
+    if (path.endsWith("/research/models")) return response({ providers: [{ provider: "ollama", status: "connected", models: [{ id: "model:test", name: "model:test" }] }], active_provider: "ollama", active_model_id: "model:test", active_model_name: "model:test", mode: "manual", evaluations: [] });
+    if (path.endsWith("/research/submissions")) return response({ items: [], total: 0 });
+    if (path.endsWith("/research/drafts")) return response({ items: [], total: 0 });
+    if (path.endsWith("/research/review/dashboard")) return response({ pending_reviews: [], approved_changes: [], rejected_findings: [], change_history: [], filters: { domains: [], career_levels: [], categories: [], sources: [] } });
     if (path.endsWith("/job-searches/provider-status")) return response([{ provider_type: "linkedin_authorized", status: "unconfigured", display_name: "Authorized LinkedIn integration", limitations: ["Requires authorized access"], configured: false }, { provider_type: "import", status: "configured", display_name: "Permitted import", limitations: ["Uses permitted URLs or datasets"], configured: true }]);
     if (path.endsWith("/job-searches")) return response([]);
     return response({});
   });
 }
 
-beforeEach(() => { global.fetch = mockApi(); });
-afterEach(() => vi.restoreAllMocks());
+beforeEach(() => { sessionStorage.clear(); window.location.hash = ""; global.fetch = mockApi(); });
+afterEach(() => { sessionStorage.clear(); window.location.hash = ""; vi.restoreAllMocks(); });
 
 describe("Phase 4 knowledge workspace", () => {
   it("renders dashboard statistics from backend data", async () => {
@@ -61,6 +65,7 @@ describe("Phase 4 knowledge workspace", () => {
 
   it("opens Career Readiness with compact context filters and category navigation", async () => {
     render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Career Development" }));
     fireEvent.click(await screen.findByRole("button", { name: /Career Readiness/ }));
     expect(await screen.findByRole("heading", { name: /Career Readiness/ })).toBeTruthy();
     expect(screen.getByRole("combobox", { name: "Security Domain" }).value).toBe("embedded-systems-security");
@@ -76,6 +81,7 @@ describe("Phase 4 knowledge workspace", () => {
 
   it("searches and expands one competency card with accessible evidence drawer", async () => {
     render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Career Development" }));
     fireEvent.click(await screen.findByRole("button", { name: /Career Readiness/ }));
     const search = await screen.findByRole("textbox", { name: "Search within competencies" });
     fireEvent.change(search, { target: { value: "secure boot" } });
@@ -94,6 +100,7 @@ describe("Phase 4 knowledge workspace", () => {
 
   it("keeps preparation actions separate and navigates to self-assessment and comparison", async () => {
     render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Career Development" }));
     fireEvent.click(await screen.findByRole("button", { name: /Career Readiness/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Self-assess skills/ }));
     expect(await screen.findByRole("heading", { name: "Competency Gap Analysis" })).toBeTruthy();
@@ -105,6 +112,7 @@ describe("Phase 4 knowledge workspace", () => {
   it("shows the readiness empty state when filters return no expectations", async () => {
     global.fetch = mockApi({ empty: true });
     render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Career Development" }));
     fireEvent.click(await screen.findByRole("button", { name: /Career Readiness/ }));
     expect(await screen.findByText("No competencies match these filters")).toBeTruthy();
   });
@@ -115,12 +123,14 @@ describe("Phase 4 knowledge workspace", () => {
     const grc = { ...domain, id: 11, name: "Governance, Risk, and Compliance", slug: "governance-risk-compliance", display_order: 6, children: [] };
     const baseFetch = global.fetch;
     global.fetch = vi.fn((url, options) => new URL(url).pathname.endsWith("/domains") ? response([domain, grc]) : baseFetch(url, options));
+    fireEvent.click(screen.getByRole("button", { name: "Explore" }));
     fireEvent.click(screen.getByText("Domain Explorer"));
     expect(await screen.findByText("Governance, Risk, and Compliance")).toBeTruthy();
   });
 
   it("navigates domains, selects a subdomain and career level", async () => {
     render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Explore" }));
     fireEvent.click(await screen.findByText("Domain Explorer"));
     expect(await screen.findByText("Select a security domain")).toBeTruthy();
     fireEvent.click(screen.getByText("Boot Security"));
@@ -131,6 +141,7 @@ describe("Phase 4 knowledge workspace", () => {
 
   it("opens a matrix cell into the matching expectations", async () => {
     render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Explore" }));
     fireEvent.click(await screen.findByText("Career Matrix"));
     fireEvent.click(screen.getByRole("button", { name: /Boot Security, Architect: 1 expectations/ }));
     expect(await screen.findByText("Design and validate a trusted boot chain.")).toBeTruthy();
@@ -138,7 +149,8 @@ describe("Phase 4 knowledge workspace", () => {
 
   it("runs a career comparison using selected levels", async () => {
     render(<App />);
-    fireEvent.click(await screen.findByText("Compare levels"));
+    fireEvent.click(await screen.findByRole("button", { name: "Explore" }));
+    fireEvent.click(await screen.findByText("Career Comparison"));
     expect(await screen.findByText("Make progression visible")).toBeTruthy();
     expect(await screen.findByText("Shared competencies")).toBeTruthy();
     expect(screen.getByText("Secure Boot")).toBeTruthy();
@@ -146,28 +158,30 @@ describe("Phase 4 knowledge workspace", () => {
 
   it("searches competencies and opens competency detail", async () => {
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /Competencies$/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Explore" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Competency Explorer/ }));
     expect(await screen.findByText("Browse the building blocks")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Secure Boot/ }));
     expect(await screen.findByText("RELATED COMPETENCIES")).toBeTruthy();
-    fireEvent.click(screen.getByText("Global search"));
+    fireEvent.click(screen.getByRole("button", { name: /Search the knowledge base/ }));
     fireEvent.change(screen.getByLabelText("Global search"), { target: { value: "secure" } });
     fireEvent.click(screen.getByRole("button", { name: "Submit search" }));
     expect(await screen.findByText("1 results for")).toBeTruthy();
   });
 
-  it("opens the authenticated automated research workspace", async () => {
-    sessionStorage.clear();
+  it("preserves direct access to the legacy automated research route", async () => {
+    window.location.hash = "#automated-research";
     render(<App />);
-    fireEvent.click(await screen.findByText("Automated Research"));
     expect(await screen.findByText("Unlock automated research")).toBeTruthy();
+    expect(screen.queryByText("Administration")).toBeNull();
   });
 
   it("renders the LinkedIn Job Search workspace with provider status", async () => {
     sessionStorage.setItem("cybersec-career-intelligence.admin-api-key", "test-admin-key");
     render(<App />);
-    fireEvent.click(await screen.findByText("Automated Research"));
-    fireEvent.click(await screen.findByText("LinkedIn Job Search"));
+    fireEvent.click(await screen.findByRole("button", { name: "Administration" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Research Ingestion" }));
+    fireEvent.click(await screen.findByRole("tab", { name: /Saved Searches/ }));
     expect(await screen.findByText("Authorized search results integration")).toBeTruthy();
     expect(screen.getByText("No undocumented APIs")).toBeTruthy();
   });
@@ -176,6 +190,7 @@ describe("Phase 4 knowledge workspace", () => {
   it("shows empty states and API errors", async () => {
     global.fetch = mockApi({ empty: true });
     render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Explore" }));
     fireEvent.click(await screen.findByText("Domain Explorer"));
     fireEvent.click(screen.getByText("Boot Security"));
     expect(await screen.findByText("No expectations in this view")).toBeTruthy();

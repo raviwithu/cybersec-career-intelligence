@@ -37,6 +37,15 @@ describe("Research Review", () => {
     expect(screen.getAllByText("Embedded Systems Security").length).toBeGreaterThan(0);
   });
 
+
+  it("renders the publication history mode without changing the review route", async () => {
+    render(<ResearchReviewPage initialView="history" />);
+    fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open review workspace" }));
+    expect(await screen.findByRole("heading", { name: "Publication History" })).toBeTruthy();
+    expect(screen.getByText("No published changes")).toBeTruthy();
+  });
+
   it("accepts and merges a finding into the domain in one step", async () => {
     render(<ResearchReviewPage />);
     fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });

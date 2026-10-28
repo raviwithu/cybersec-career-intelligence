@@ -55,14 +55,14 @@ function CoverageTable({ coverage }) {
   return <div className="table-wrap automation-coverage-table"><table><thead><tr><th>Industry</th><th>Security domain</th><th>Career level</th><th>Evidence</th><th>Sources</th><th>Coverage</th></tr></thead><tbody>{coverage.cells.map((cell) => <tr key={`${cell.industry.id}-${cell.domain.id}-${cell.career_level.id}`}><td>{cell.industry.name}</td><td>{cell.domain.name}</td><td>{cell.career_level.name}</td><td>{cell.evidence_count}</td><td>{cell.source_count}</td><td><Badge tone={cell.label === "adequate" ? "mint" : cell.label === "limited" ? "amber" : "rose"}>{cell.label}</Badge></td></tr>)}</tbody></table></div>;
 }
 
-export default function AutomatedResearchPage({ onOpenReview }) {
+export default function AutomatedResearchPage({ onOpenReview, initialTab = "overview" }) {
   const [enteredKey, setEnteredKey] = useState(() => getAdminSessionKey());
   const [adminKey, setAdminKey] = useState(() => getAdminSessionKey());
   const [dashboard, setDashboard] = useState(null);
   const [sources, setSources] = useState([]);
   const [runs, setRuns] = useState([]);
   const [coverage, setCoverage] = useState(null);
-  const [tab, setTab] = useState("overview");
+  const [tab, setTab] = useState(initialTab);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -73,6 +73,7 @@ export default function AutomatedResearchPage({ onOpenReview }) {
     try { const [nextDashboard, nextSources, nextRuns, nextCoverage] = await Promise.all([fetchAutomatedResearchDashboard(adminKey), fetchAutomatedResearchSources(adminKey), fetchAutomatedResearchRuns(adminKey), fetchAutomatedResearchCoverage(adminKey)]); setDashboard(nextDashboard); setSources(nextSources); setRuns(nextRuns); setCoverage(nextCoverage); } catch (requestError) { setError(requestError); } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, [adminKey]);
+  useEffect(() => { setTab(initialTab); }, [initialTab]);
   async function startRun() { setBusy(true); setError(null); try { await startAutomatedResearchRun({ source_ids: null }, adminKey); await load(); setTab("runs"); } catch (requestError) { setError(requestError); } finally { setBusy(false); } }
   async function updateSource(sourceId, payload) { setBusy(true); try { await configureAutomatedResearchSchedule(sourceId, payload, adminKey); await load(); } catch (requestError) { setError(requestError); } finally { setBusy(false); } }
 
