@@ -270,6 +270,167 @@ class CompetencyRelationship(Base):
     target_competency: Mapped[Competency] = relationship(foreign_keys=[target_competency_id], back_populates="target_relationships")
 
 
+
+
+class KnowledgeTopic(Base):
+    __tablename__ = "knowledge_topics"
+    __table_args__ = (UniqueConstraint("slug", name="uq_knowledge_topic_slug"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(240), index=True)
+    slug: Mapped[str] = mapped_column(String(240), index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("competency_categories.id", ondelete="SET NULL"), index=True)
+    parent_topic_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_topics.id", ondelete="SET NULL"), index=True)
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list)
+    publication_status: Mapped[str] = mapped_column(String(20), default="published", index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    category: Mapped[CompetencyCategory | None] = relationship()
+    parent: Mapped["KnowledgeTopic | None"] = relationship(remote_side=[id], back_populates="children")
+    children: Mapped[list["KnowledgeTopic"]] = relationship(back_populates="parent")
+    domains: Mapped[list["KnowledgeTopicDomain"]] = relationship(back_populates="topic", cascade="all, delete-orphan")
+    industries: Mapped[list["KnowledgeTopicIndustry"]] = relationship(back_populates="topic", cascade="all, delete-orphan")
+    level_expectations: Mapped[list["KnowledgeTopicLevel"]] = relationship(back_populates="topic", cascade="all, delete-orphan")
+    competencies: Mapped[list["KnowledgeTopicCompetency"]] = relationship(back_populates="topic", cascade="all, delete-orphan")
+    evidence: Mapped[list["KnowledgeTopicEvidence"]] = relationship(back_populates="topic", cascade="all, delete-orphan")
+    versions: Mapped[list["KnowledgeTopicVersion"]] = relationship(back_populates="topic", cascade="all, delete-orphan")
+    proposals: Mapped[list["KnowledgeTopicProposal"]] = relationship(back_populates="topic")
+
+
+class KnowledgeTopicDomain(Base):
+    __tablename__ = "knowledge_topic_domains"
+    __table_args__ = (UniqueConstraint("topic_id", "domain_id", name="uq_knowledge_topic_domain"),)
+
+    topic_id: Mapped[int] = mapped_column(ForeignKey("knowledge_topics.id", ondelete="CASCADE"), primary_key=True)
+    domain_id: Mapped[int] = mapped_column(ForeignKey("security_domains.id", ondelete="CASCADE"), primary_key=True)
+
+    topic: Mapped[KnowledgeTopic] = relationship(back_populates="domains")
+    domain: Mapped[SecurityDomain] = relationship()
+
+
+class KnowledgeTopicIndustry(Base):
+    __tablename__ = "knowledge_topic_industries"
+    __table_args__ = (UniqueConstraint("topic_id", "industry_id", name="uq_knowledge_topic_industry"),)
+
+    topic_id: Mapped[int] = mapped_column(ForeignKey("knowledge_topics.id", ondelete="CASCADE"), primary_key=True)
+    industry_id: Mapped[int] = mapped_column(ForeignKey("industries.id", ondelete="CASCADE"), primary_key=True)
+
+    topic: Mapped[KnowledgeTopic] = relationship(back_populates="industries")
+    industry: Mapped[Industry] = relationship()
+
+
+class KnowledgeTopicLevel(Base):
+    __tablename__ = "knowledge_topic_levels"
+    __table_args__ = (UniqueConstraint("topic_id", "career_level_id", "industry_id", name="uq_knowledge_topic_level_industry"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    topic_id: Mapped[int] = mapped_column(ForeignKey("knowledge_topics.id", ondelete="CASCADE"), index=True)
+    career_level_id: Mapped[int] = mapped_column(ForeignKey("career_levels.id", ondelete="CASCADE"), index=True)
+    industry_id: Mapped[int | None] = mapped_column(ForeignKey("industries.id", ondelete="CASCADE"), index=True)
+    expectation: Mapped[str] = mapped_column(Text, default="")
+    practical_capability: Mapped[str] = mapped_column(Text, default="")
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    topic: Mapped[KnowledgeTopic] = relationship(back_populates="level_expectations")
+    career_level: Mapped[CareerLevel] = relationship()
+    industry: Mapped[Industry | None] = relationship()
+
+
+class KnowledgeTopicCompetency(Base):
+    __tablename__ = "knowledge_topic_competencies"
+    __table_args__ = (UniqueConstraint("topic_id", "competency_id", name="uq_knowledge_topic_competency"),)
+
+    topic_id: Mapped[int] = mapped_column(ForeignKey("knowledge_topics.id", ondelete="CASCADE"), primary_key=True)
+    competency_id: Mapped[int] = mapped_column(ForeignKey("competencies.id", ondelete="CASCADE"), primary_key=True)
+
+    topic: Mapped[KnowledgeTopic] = relationship(back_populates="competencies")
+    competency: Mapped[Competency] = relationship()
+
+
+class KnowledgeTopicEvidence(Base):
+    __tablename__ = "knowledge_topic_evidence"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    topic_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_topics.id", ondelete="CASCADE"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("research_sources.id", ondelete="CASCADE"), index=True)
+    proposal_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_topic_proposals.id", ondelete="SET NULL"), index=True)
+    excerpt: Mapped[str] = mapped_column(Text)
+    evidence_type: Mapped[str] = mapped_column(String(30), default="supporting")
+    confidence: Mapped[float | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    topic: Mapped[KnowledgeTopic] = relationship(back_populates="evidence")
+    source: Mapped["ResearchSource"] = relationship()
+    proposal: Mapped["KnowledgeTopicProposal | None"] = relationship(back_populates="evidence")
+
+
+class KnowledgeTopicVersion(Base):
+    __tablename__ = "knowledge_topic_versions"
+    __table_args__ = (UniqueConstraint("topic_id", "version", name="uq_knowledge_topic_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    topic_id: Mapped[int] = mapped_column(ForeignKey("knowledge_topics.id", ondelete="CASCADE"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    source_id: Mapped[int | None] = mapped_column(ForeignKey("research_sources.id", ondelete="SET NULL"), index=True)
+    actor: Mapped[str] = mapped_column(String(120), default="administrator")
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    topic: Mapped[KnowledgeTopic] = relationship(back_populates="versions")
+    source: Mapped["ResearchSource | None"] = relationship()
+
+
+class KnowledgeTopicProposal(Base):
+    __tablename__ = "knowledge_topic_proposals"
+    __table_args__ = (UniqueConstraint("fingerprint", name="uq_knowledge_topic_proposal_fingerprint"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    finding_id: Mapped[int | None] = mapped_column(ForeignKey("research_findings.id", ondelete="SET NULL"), index=True)
+    topic_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_topics.id", ondelete="SET NULL"), index=True)
+    proposal_type: Mapped[str] = mapped_column(String(30), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="review", index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    original_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    proposed_snapshot: Mapped[dict] = mapped_column(JSON)
+    ai_interpretation: Mapped[str] = mapped_column(Text, default="")
+    confidence: Mapped[float | None] = mapped_column()
+    evidence_status: Mapped[str] = mapped_column(String(30), default="ai-derived")
+    review_note: Mapped[str | None] = mapped_column(Text)
+    reviewed_by: Mapped[str | None] = mapped_column(String(120))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    finding: Mapped["ResearchFinding | None"] = relationship()
+    topic: Mapped[KnowledgeTopic | None] = relationship(back_populates="proposals")
+    evidence: Mapped[list[KnowledgeTopicEvidence]] = relationship(back_populates="proposal")
+
+
+class KnowledgeTopicAudit(Base):
+    __tablename__ = "knowledge_topic_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    topic_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_topics.id", ondelete="SET NULL"), index=True)
+    proposal_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_topic_proposals.id", ondelete="SET NULL"), index=True)
+    action: Mapped[str] = mapped_column(String(40), index=True)
+    actor: Mapped[str] = mapped_column(String(120), default="administrator")
+    before_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    after_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    topic: Mapped[KnowledgeTopic | None] = relationship()
+    proposal: Mapped[KnowledgeTopicProposal | None] = relationship()
+
 class ResearchSource(Base):
     __tablename__ = "research_sources"
 

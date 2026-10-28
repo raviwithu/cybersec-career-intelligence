@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { fetchExpectations, fetchIntelligenceEvidence } from "./api";
+import { fetchExpectations, fetchIntelligenceEvidence, fetchKnowledgeTopics } from "./api";
 import { Badge, EmptyState, ErrorState, Loading, PageHeader } from "./components";
 
 const PRIORITY_RANK = { essential: 0, important: 1, useful: 2 };
@@ -92,6 +92,20 @@ export default function CareerReadinessPage({ domains, levels, categories, indus
     page: 1,
     page_size: 100,
   }), [effectiveDomain, filters.career_level, filters.industry, filters.category, filters.importance, filters.proficiency]);
+  const topicQuery = useMemo(() => ({
+    ...(selectedDomain?.id ? { domain_id: selectedDomain.id } : {}),
+    ...(selectedIndustryItem?.id ? { industry_id: selectedIndustryItem.id } : {}),
+    ...(selectedLevel?.id ? { career_level_id: selectedLevel.id } : {}),
+  }), [selectedDomain?.id, selectedIndustryItem?.id, selectedLevel?.id]);
+  const [topics, setTopics] = useState(null);
+  useEffect(() => {
+    let current = true;
+    fetchKnowledgeTopics(topicQuery).then((next) => {
+      if (current) setTopics(Array.isArray(next) ? next : null);
+    }).catch(() => { if (current) setTopics(null); });
+    return () => { current = false; };
+  }, [topicQuery]);
+
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -111,7 +125,31 @@ export default function CareerReadinessPage({ domains, levels, categories, indus
     return () => { current = false; };
   }, [query, requestVersion]);
 
-  const expectations = result?.items || [];
+  const topicExpectations = useMemo(() => (topics || []).flatMap((topic) => {
+    const levelRows = topic.level_expectations || [];
+    const matchingLevels = selectedLevel ? levelRows.filter((item) => item.career_level?.id === selectedLevel.id) : levelRows;
+    const rows = selectedLevel ? matchingLevels : levelRows.filter((item) => item.industry == null || item.industry.id === selectedIndustryItem?.id);
+    return rows.map((levelRow, index) => ({
+      id: `topic-${topic.id}-${levelRow.id || index}`,
+      topic_id: topic.id,
+      domain: topic.domains?.[0] || null,
+      career_level: levelRow.career_level,
+      industry: levelRow.industry,
+      competency: topic.related_competencies?.[0] ? { ...topic.related_competencies[0], description: topic.description, category: topic.category } : { id: topic.id, name: topic.name, description: topic.description, category: topic.category },
+      expectation_description: levelRow.expectation || topic.description,
+      technical_knowledge: topic.description,
+      practical_capability: levelRow.practical_capability || levelRow.expectation || topic.description,
+      tools_technologies: "",
+      qualifications: "",
+      proficiency_level: "proficient",
+      importance: "important",
+      responsibility_type: "execution",
+      experience_years_min: null,
+      experience_years_max: null,
+      supporting_sources: (topic.supporting_evidence || []).map((item) => ({ source: { id: item.source_id, source_title: item.source_title, source_url: item.source_url, collected_at: null }, supporting_excerpt: item.excerpt })),
+    }));
+  }), [topics, selectedLevel, selectedIndustryItem?.id]);
+  const expectations = topics !== null ? topicExpectations : (result?.items || []);
   function retryLoad() { setRequestVersion((version) => version + 1); }
   const filteredExpectations = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -224,7 +262,7 @@ export default function CareerReadinessPage({ domains, levels, categories, indus
 
     <section className="readiness-priorities" aria-labelledby="learning-priorities-heading"><div className="readiness-section-heading"><div><p className="eyebrow">03 / LEARNING PRIORITIES</p><h2 id="learning-priorities-heading">Start with the essentials</h2><p className="muted-copy">Inferred from expectation importance and available coverage, not source frequency alone.</p></div>{priorities.length > 6 && <button type="button" className="button button-secondary" onClick={() => setShowAllPriorities((show) => !show)}>{showAllPriorities ? "Show fewer" : `View all ${priorities.length}`}</button>}</div>{visiblePriorities.length ? <div className="priority-list">{visiblePriorities.map((expectation) => <article className="priority-item" key={expectation.competency.id}><div><h3>{expectation.competency.name}</h3><p>{expectationText(expectation)}</p></div><div className="priority-item-meta"><Badge tone={expectation.importance === "essential" ? "mint" : "blue"}>{expectation.importance || "Inferred"}</Badge><button type="button" className="text-link" onClick={() => onCompetency?.(expectation.competency.id)}>View details →</button></div></article>)}</div> : <EmptyState title="No learning priorities yet" message="Choose a broader context or remove an advanced filter." />}</section>
 
-    <section className="readiness-explorer" aria-labelledby="competency-explorer-heading"><div className="readiness-section-heading"><div><p className="eyebrow">04 / COMPETENCY EXPLORER</p><h2 id="competency-explorer-heading">Explore one category at a time</h2></div><div className="readiness-explorer-tools"><label className="readiness-search"><span className="sr-only">Search within competencies</span><input aria-label="Search within competencies" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search competencies…" /></label><button type="button" className="text-link" onClick={() => setExpandedId(null)}>Collapse all</button></div></div><div className="readiness-category-tabs" role="tablist" aria-label="Competency categories"><button type="button" role="tab" aria-selected={!activeCategory} className={!activeCategory ? "active" : ""} onClick={() => setActiveCategory("")}>All ({filteredExpectations.length})</button>{categoriesWithData.map((category) => <button type="button" role="tab" aria-selected={activeCategory === category.slug} className={activeCategory === category.slug ? "active" : ""} key={category.slug} onClick={() => setActiveCategory(category.slug)}>{categoryLabel(category)} ({filteredExpectations.filter((expectation) => expectation.competency?.category?.slug === category.slug).length})</button>)}</div>{loading && <Loading label="Loading readiness expectations" />}{error && <ErrorState error={error} onRetry={retryLoad} />}{!loading && !error && !categoryExpectations.length && <EmptyState title="No competencies match these filters" message="Try another category, search term, or career context." />}{!loading && !error && categoryExpectations.length > 0 && <><div className="readiness-card-list">{categoryExpectations.slice(0, visibleExpectationCount).map((expectation) => <ReadinessCard key={expectation.id} expectation={expectation} expanded={expandedId === expectation.id} onToggle={() => setExpandedId((current) => current === expectation.id ? null : expectation.id)} onEvidence={openEvidence} onDetails={() => onCompetency?.(expectation.competency.id)} selectedIndustry={selectedIndustryItem?.name || "Cross-industry"} />)}</div>{visibleExpectationCount < categoryExpectations.length && <button type="button" className="button button-secondary readiness-load-more" onClick={() => setVisibleExpectationCount((count) => count + 12)}>Load more expectations ({categoryExpectations.length - visibleExpectationCount} remaining)</button>}</>}</section>
+    <section className="readiness-explorer" aria-labelledby="competency-explorer-heading"><div className="readiness-section-heading"><div><p className="eyebrow">WHAT YOU NEED TO KNOW</p><h2 id="competency-explorer-heading">What You Need to Know</h2><p className="muted-copy">Concrete cybersecurity topics grouped by category for your selected career context.</p></div><div className="readiness-explorer-tools"><label className="readiness-search"><span className="sr-only">Search within competencies</span><input aria-label="Search within competencies" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search competencies…" /></label><button type="button" className="text-link" onClick={() => setExpandedId(null)}>Collapse all</button></div></div><div className="readiness-category-tabs" role="tablist" aria-label="Competency categories"><button type="button" role="tab" aria-selected={!activeCategory} className={!activeCategory ? "active" : ""} onClick={() => setActiveCategory("")}>All ({filteredExpectations.length})</button>{categoriesWithData.map((category) => <button type="button" role="tab" aria-selected={activeCategory === category.slug} className={activeCategory === category.slug ? "active" : ""} key={category.slug} onClick={() => setActiveCategory(category.slug)}>{categoryLabel(category)} ({filteredExpectations.filter((expectation) => expectation.competency?.category?.slug === category.slug).length})</button>)}</div>{loading && <Loading label="Loading readiness expectations" />}{error && <ErrorState error={error} onRetry={retryLoad} />}{!loading && !error && !categoryExpectations.length && <EmptyState title="No competencies match these filters" message="Try another category, search term, or career context." />}{!loading && !error && categoryExpectations.length > 0 && <><div className="readiness-card-list">{categoryExpectations.slice(0, visibleExpectationCount).map((expectation) => <ReadinessCard key={expectation.id} expectation={expectation} expanded={expandedId === expectation.id} onToggle={() => setExpandedId((current) => current === expectation.id ? null : expectation.id)} onEvidence={openEvidence} onDetails={() => onCompetency?.(expectation.competency.id)} selectedIndustry={selectedIndustryItem?.name || "Cross-industry"} />)}</div>{visibleExpectationCount < categoryExpectations.length && <button type="button" className="button button-secondary readiness-load-more" onClick={() => setVisibleExpectationCount((count) => count + 12)}>Load more expectations ({categoryExpectations.length - visibleExpectationCount} remaining)</button>}</>}</section>
 
     <section className="readiness-preparation panel" aria-labelledby="preparation-heading"><div><p className="eyebrow">05 / PREPARATION AND ASSESSMENT</p><h2 id="preparation-heading">Turn expectations into a plan</h2><p className="muted-copy">Keep assessment, recommendations, comparison, and export actions together instead of repeating them on every card.</p></div><div className="preparation-actions"><button type="button" className="button" onClick={() => onNavigate?.("competency-gaps")}>Self-assess skills <span>→</span></button><button type="button" className="button button-secondary" onClick={() => onNavigate?.("career-roadmap")}>Recommendations & exercises <span>→</span></button><button type="button" className="button button-secondary" onClick={() => onNavigate?.("compare")}>Compare career levels <span>→</span></button><button type="button" className="button button-secondary" onClick={exportReadiness}>Export current view <span>↓</span></button></div></section>
 
@@ -235,7 +273,7 @@ export default function CareerReadinessPage({ domains, levels, categories, indus
 
 function ReadinessCard({ expectation, expanded, onToggle, onEvidence, onDetails, selectedIndustry }) {
   const fields = [["What you need to know", expectation.technical_knowledge], ["What you should be able to do", expectation.practical_capability], ["Practical demonstration", expectation.expectation_description], ["Tools and technologies", expectation.tools_technologies], ["Qualifications", expectation.qualifications], ["Responsibility and scope", expectation.responsibility_type], ["Industry-specific context", expectation.industry?.name || selectedIndustry], ["Experience expectations", expectation.experience_years_min !== null || expectation.experience_years_max !== null ? `${expectation.experience_years_min ?? 0}${expectation.experience_years_max !== null ? `–${expectation.experience_years_max}` : "+"} years` : ""]].filter(([, value]) => clean(value));
-  return <article className={`readiness-card ${expanded ? "expanded" : ""}`}><div className="readiness-card-summary"><div className="readiness-card-title"><h3>{expectation.competency.name}</h3><p>{expectationText(expectation)}</p></div><div className="readiness-card-meta"><Badge tone="violet">{expectation.proficiency_level}</Badge><span>{sourceCount(expectation)} evidence</span><button type="button" className="card-expand" onClick={onToggle} aria-expanded={expanded} aria-controls={`expectation-detail-${expectation.id}`}>{expanded ? "Collapse" : "Expand"}<span aria-hidden="true">{expanded ? "⌃" : "⌄"}</span></button></div></div>{expanded && <div id={`expectation-detail-${expectation.id}`} className="readiness-card-detail"><div className="readiness-detail-grid">{fields.map(([label, value]) => <div key={label}><span>{label}</span><p>{value}</p></div>)}</div><div className="readiness-card-actions"><button type="button" className="text-link" onClick={(event) => onEvidence(expectation, event.currentTarget)}>View supporting evidence ({sourceCount(expectation)})</button><button type="button" className="text-link" onClick={onDetails}>Open competency details →</button></div></div>}</article>;
+  return <article className={`readiness-card ${expanded ? "expanded" : ""}`}><div className="readiness-card-summary"><div className="readiness-card-title"><h3>{expectation.competency.name}</h3><p>{expectationText(expectation)}</p></div><div className="readiness-card-meta"><Badge tone="violet">{expectation.proficiency_level}</Badge><span>{sourceCount(expectation)} evidence</span><button type="button" className="card-expand" onClick={onToggle} aria-expanded={expanded} aria-controls={`expectation-detail-${expectation.id}`}>{expanded ? "Collapse" : "Expand"}<span aria-hidden="true">{expanded ? "⌃" : "⌄"}</span></button></div></div>{expanded && <div id={`expectation-detail-${expectation.id}`} className="readiness-card-detail"><div className="readiness-detail-grid">{fields.map(([label, value]) => <div key={label}><span>{label}</span><p>{value}</p></div>)}</div><div className="readiness-card-actions"><button type="button" className="text-link" onClick={(event) => onEvidence(expectation, event.currentTarget)}>Why is this included? · View supporting evidence ({sourceCount(expectation)})</button><button type="button" className="text-link" onClick={onDetails}>Open competency details →</button></div></div>}</article>;
 }
 
 function EvidenceDrawer({ evidence, loading, error, closeButtonRef, onClose, selectedIndustry }) {

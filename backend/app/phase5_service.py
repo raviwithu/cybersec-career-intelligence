@@ -33,6 +33,7 @@ from .ai_providers import AIProviderRegistry
 from .ollama_client import OllamaClient
 from .phase5_schemas import DraftUpdate, ExtractionResult, ExtractedRequirement
 from .research_review_service import ensure_submission_changes
+from .knowledge_topic_service import ensure_all_topic_proposals
 
 logger = logging.getLogger("cybersec.research")
 ALLOWED_EXTENSIONS = {".txt", ".json", ".csv"}
@@ -357,6 +358,7 @@ def process_submission(db: Session, submission: ResearchSubmission, content: str
         submission.extraction_payload = result.model_dump(mode="json")
         consolidate(db, submission, result, settings)
         ensure_submission_changes(db, submission.id)
+        ensure_all_topic_proposals(db, commit=False)
         submission.status = "draft_ready"
         submission.completed_at = datetime.now(timezone.utc)
         submission.error_message = None

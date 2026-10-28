@@ -62,6 +62,8 @@ export function fetchExpectation(id, params = {}) { return request(`/api/v1/expe
 export function fetchCareerMatrix(params = {}) { return request(`/api/v1/career-matrix${queryString(params)}`); }
 export function fetchComparison(domain, levels, params = {}) { return request(`/api/v1/compare${queryString({ domain, levels: levels.join(","), ...params })}`); }
 export function fetchSearch(params = {}) { return request(`/api/v1/search${queryString(params)}`); }
+export function fetchKnowledgeTopics(params = {}) { return request(`/api/v1/knowledge-topics${queryString(params)}`); }
+
 export function fetchResearchSources(params = {}) { return request(`/api/v1/research-sources${queryString(params)}`); }
 
 
@@ -141,6 +143,17 @@ export function fetchResearchDrafts(status, adminKey) { return request(`/api/v1/
 export function updateResearchDraft(id, payload, adminKey) { return request(`/api/v1/research/drafts/${id}`, { method: "PATCH", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
 export function approveResearchDraft(id, reviewer_note, adminKey) { return request(`/api/v1/research/drafts/${id}/approve`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify({ reviewer_note }) }); }
 export function rejectResearchDraft(id, reviewer_note, adminKey) { return request(`/api/v1/research/drafts/${id}/reject`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify({ reviewer_note }) }); }
+export function fetchKnowledgeTopicAdmin(params = {}, adminKey) { return request(`/api/v1/research/career-readiness/topics${queryString(params)}`, { headers: adminHeaders(adminKey) }); }
+export function createKnowledgeTopic(payload, adminKey) { return request("/api/v1/research/career-readiness/topics", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function updateKnowledgeTopic(id, payload, adminKey) { return request(`/api/v1/research/career-readiness/topics/${id}`, { method: "PATCH", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function publishKnowledgeTopic(id, payload, adminKey) { return request(`/api/v1/research/career-readiness/topics/${id}/publish`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function setKnowledgeTopicActive(id, active, adminKey) { return request(`/api/v1/research/career-readiness/topics/${id}/${active ? "reactivate" : "deactivate"}`, { method: "POST", headers: adminHeaders(adminKey) }); }
+export function mergeKnowledgeTopic(id, targetId, reason, adminKey) { return request(`/api/v1/research/career-readiness/topics/${id}/merge${queryString({ target_topic_id: targetId, reason })}`, { method: "POST", headers: adminHeaders(adminKey) }); }
+export function fetchKnowledgeTopicHistory(id, adminKey) { return request(`/api/v1/research/career-readiness/topics/${id}/history`, { headers: adminHeaders(adminKey) }); }
+export function fetchKnowledgeTopicProposals(params = {}, adminKey) { return request(`/api/v1/research/career-readiness/proposals${queryString(params)}`, { headers: adminHeaders(adminKey) }); }
+export function reviewKnowledgeTopicProposal(id, payload, adminKey) { return request(`/api/v1/research/career-readiness/proposals/${id}/review`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function publishKnowledgeTopicProposals(payload, adminKey) { return request("/api/v1/research/career-readiness/proposals/publish", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+
 export function publishResearchDraft(id, adminKey) { return request(`/api/v1/research/drafts/${id}/publish`, { method: "POST", headers: adminHeaders(adminKey) }); }
 
 
