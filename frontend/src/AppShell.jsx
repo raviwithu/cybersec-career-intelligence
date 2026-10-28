@@ -10,31 +10,9 @@ import TaxonomyManagementPage from "./TaxonomyManagementPage";
 import ResearchReviewPage from "./ResearchReviewPage";
 import CareerReadinessAdminPage from "./CareerReadinessAdminPage";
 import IntelligencePage from "./IntelligencePage";
+import ResearchIngestionPage from "./ResearchIngestionPage";
+import SidebarNavigation, { findNavigationItem, getViewFromLocation } from "./SidebarNavigation";
 import { useApi } from "./useApi";
-
-const navigation = [
-  { id: "dashboard", label: "Overview", icon: "⌂" },
-  { id: "readiness", label: "Career Readiness", icon: "◎" },
-  { id: "domains", label: "Domain Explorer", icon: "◈" },
-  { id: "matrix", label: "Career Matrix", icon: "▦" },
-  { id: "compare", label: "Compare levels", icon: "⇄" },
-  { id: "competencies", label: "Competencies", icon: "◎" },
-  { id: "search", label: "Global search", icon: "⌕" },
-  { id: "research", label: "Research admin", icon: "✦" },
-  { id: "taxonomy-management", label: "Taxonomy Management", icon: "⌘" },
-  { id: "automated-research", label: "Automated Research", icon: "↻" },
-  { id: "research-review", label: "Research Review", icon: "✓" },
-  { id: "career-readiness-review", label: "Readiness Review", icon: "◇" },
-  { id: "knowledge-topics", label: "Knowledge Topics", icon: "☷" },
-  { id: "intelligence-dashboard", label: "Intelligence Dashboard", icon: "◉" },
-  { id: "skill-trends", label: "Skill Trends", icon: "↗" },
-  { id: "career-progression", label: "Career Progression", icon: "⇢" },
-  { id: "industry-intelligence", label: "Industry Intelligence", icon: "◇" },
-  { id: "competency-gaps", label: "Competency Gap Analysis", icon: "△" },
-  { id: "career-roadmap", label: "Career Roadmap", icon: "⌁" },
-  { id: "ask-career", label: "Ask Career Intelligence", icon: "?" },
-  { id: "evidence-explorer", label: "Evidence Explorer", icon: "⌗" },
-];
 
 function flattenDomains(domains) { return domains.flatMap((domain) => [domain, ...(domain.children || [])]); }
 
@@ -53,8 +31,14 @@ function ProfilePage() {
 }
 
 export default function AppShell() {
-  const [view, setView] = useState("dashboard");
+  const [view, setView] = useState(() => getViewFromLocation());
   const [mobileOpen, setMobileOpen] = useState(false);
+  useEffect(() => {
+    const onLocationChange = () => setView(getViewFromLocation());
+    window.addEventListener("hashchange", onLocationChange);
+    window.addEventListener("popstate", onLocationChange);
+    return () => { window.removeEventListener("hashchange", onLocationChange); window.removeEventListener("popstate", onLocationChange); };
+  }, []);
   const [selectedDomainSlug, setSelectedDomainSlug] = useState("");
   const [selectedIndustry, setSelectedIndustry] = useState("");
   const [selectedLevel, setSelectedLevel] = useState(null);
@@ -67,6 +51,7 @@ export default function AppShell() {
 
   function navigate(nextView, payload = null) {
     setView(nextView); setMobileOpen(false);
+    if (window.location.hash !== `#${nextView}`) window.location.hash = nextView;
     if (nextView === "evidence-explorer" && payload) setSelectedCompetencyId(payload);
     // Domains and counts load once at startup; refresh them so newly published research appears without a page reload.
     if (!nextView.startsWith("research")) bootstrap.refresh();
@@ -82,7 +67,7 @@ export default function AppShell() {
   if (bootstrap.loading && !data) return <div className="app-loading"><Loading label="Loading career intelligence" /></div>;
   if (bootstrap.error && !data) return <div className="app-loading"><ErrorState error={bootstrap.error} onRetry={bootstrap.reload} /></div>;
 
-  const intelligenceViews = { "intelligence-dashboard": "dashboard", "skill-trends": "trends", "career-progression": "progression", "industry-intelligence": "industries", "competency-gaps": "gaps", "career-roadmap": "roadmap", "ask-career": "ask", "evidence-explorer": "evidence" };
+  const intelligenceViews = { "intelligence-dashboard": "dashboard", "skill-trends": "trends", "career-progression": "progression", "industry-intelligence": "industries", "industry-comparison": "industries", "competency-gaps": "gaps", "career-roadmap": "roadmap", "ask-career": "ask", "evidence-explorer": "evidence" };
   const content = view === "dashboard" ? <DashboardPage domains={data.domains} levels={data.levels} matrix={data.matrix} competencyTotal={data.competencies.meta.total} expectationTotal={data.expectations.meta.total} onNavigate={navigate} />
     : view === "readiness" ? <CareerReadinessPage domains={data.domains} levels={data.levels} categories={data.categories} industries={data.industries} selectedIndustry={selectedIndustry} onNavigate={navigate} onContextChange={updateReadinessContext} onIndustryChange={setSelectedIndustry} onCompetency={openCompetency} />
     : view === "domains" ? <DomainsPage domains={data.domains} levels={data.levels} categories={data.categories} matrix={data.matrix} selectedDomain={selectedDomain} selectedLevel={selectedLevel} selectedIndustry={selectedIndustry} onSelectDomain={selectDomain} onSelectLevel={setSelectedLevel} onCompetency={openCompetency} />
@@ -91,17 +76,20 @@ export default function AppShell() {
           : view === "competencies" ? <CompetenciesPage domains={data.domains} levels={data.levels} categories={data.categories} selectedIndustry={selectedIndustry} selectedCompetencyId={selectedCompetencyId} onSelectCompetency={setSelectedCompetencyId} />
             : view === "search" ? <SearchPage domains={data.domains} levels={data.levels} selectedIndustry={selectedIndustry} onCompetency={openCompetency} onDomain={openDomain} />
             : view === "research" ? <ResearchAdminPage />
-              : view === "taxonomy-management" ? <TaxonomyManagementPage />
+              : view === "research-ingestion" ? <ResearchIngestionPage onOpenReview={() => navigate("research-review")} />
                 : view === "automated-research" ? <AutomatedResearchPage onOpenReview={() => navigate("research-review")} />
-                : view === "research-review" ? <ResearchReviewPage />
-                  : view === "career-readiness-review" ? <CareerReadinessAdminPage initialTab="review" />
-                    : view === "knowledge-topics" ? <CareerReadinessAdminPage initialTab="topics" />
-                  : intelligenceViews[view] ? <IntelligencePage data={data} initialView={intelligenceViews[view]} selectedCompetencyId={selectedCompetencyId} onNavigate={navigate} />
-                    : <ProfilePage />;
+                  : view === "taxonomy-management" ? <TaxonomyManagementPage />
+                  : view === "research-coverage" ? <AutomatedResearchPage onOpenReview={() => navigate("research-review")} initialTab="coverage" />
+                    : view === "research-review" ? <ResearchReviewPage />
+                      : view === "publication-history" ? <ResearchReviewPage initialView="history" />
+                        : view === "career-readiness-review" ? <CareerReadinessAdminPage initialTab="review" />
+                          : view === "knowledge-topics" ? <CareerReadinessAdminPage initialTab="topics" />
+                            : intelligenceViews[view] ? <IntelligencePage data={data} initialView={intelligenceViews[view]} selectedCompetencyId={selectedCompetencyId} onNavigate={navigate} />
+                              : <ProfilePage />;
+  const currentNavigation = findNavigationItem(view);
   return <div className="app-frame">
-    <aside className={`sidebar ${mobileOpen ? "open" : ""}`}><div className="brand"><div className="brand-mark">C<span>·</span></div><div><strong>CyberSec</strong><small>Career Intelligence</small></div></div><div className="sidebar-section"><span className="sidebar-label">WORKSPACE</span><nav>{navigation.map((item) => <button className={view === item.id ? "active" : ""} key={item.id} onClick={() => navigate(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav></div><div className="sidebar-footer"><button className={`profile-nav ${view === "profile" ? "active" : ""}`} onClick={() => navigate("profile")}><span className="avatar">CI</span><span><strong>My profile</strong><small>Phase 1 baseline</small></span><span>→</span></button><div className="version-label">KNOWLEDGE BASE · PHASE 4</div></div></aside>
-    {mobileOpen && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
-    <main className="main-content"><header className="topbar"><button className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileOpen(true)}>☰</button><div className="breadcrumbs"><span>Research workspace</span><b>/</b><strong>{navigation.find((item) => item.id === view)?.label || "Profile"}</strong></div><div className="topbar-actions"><label className="industry-scope"><span>Industry scope</span><select aria-label="Industry scope" value={selectedIndustry} onChange={(event) => setSelectedIndustry(event.target.value)}><option value="">All industries</option>{(Array.isArray(data.industries) ? data.industries : []).map((industry) => <option value={industry.slug} key={industry.id}>{industry.name}</option>)}</select></label><button className="topbar-search" onClick={() => navigate("search")}><span>⌕</span> Search the knowledge base <kbd>⌘ K</kbd></button><div className={`health-indicator ${data.health?.status === "healthy" ? "healthy" : "degraded"}`}><i />{data.health?.status === "healthy" ? "Systems healthy" : "Systems degraded"}</div></div>
+    <SidebarNavigation view={view} onNavigate={navigate} mobileOpen={mobileOpen} onClose={() => setMobileOpen(false)} />
+    <main className="main-content"><header className="topbar"><button className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileOpen(true)}>☰</button><div className="breadcrumbs"><span>Research workspace</span><b>/</b><strong>{currentNavigation?.label || "Profile"}</strong></div><div className="topbar-actions"><label className="industry-scope"><span>Industry scope</span><select aria-label="Industry scope" value={selectedIndustry} onChange={(event) => setSelectedIndustry(event.target.value)}><option value="">All industries</option>{(Array.isArray(data.industries) ? data.industries : []).map((industry) => <option value={industry.slug} key={industry.id}>{industry.name}</option>)}</select></label><button className="topbar-search" onClick={() => navigate("search")}><span>⌕</span> Search the knowledge base <kbd>⌘ K</kbd></button><div className={`health-indicator ${data.health?.status === "healthy" ? "healthy" : "degraded"}`}><i />{data.health?.status === "healthy" ? "Systems healthy" : "Systems degraded"}</div></div>
 </header><div className="page-content">{content}</div></main>
   </div>;
 }

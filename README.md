@@ -10,7 +10,7 @@ It is **not** a job board, job tracker, job aggregator, applicant-tracking syste
 
 ### Knowledge base and exploration
 
-- Hierarchical cybersecurity competency taxonomy with ten top-level domains: Web Application Security, Cloud API Security, Cloud Infrastructure Security, Traditional Server Infrastructure Security, Embedded Systems Security, Governance, Risk, and Compliance, Identity and Access Management, Security Operations, AI System Security, and AI-Enabled Security Products, plus embedded-security subdomains.
+- Hierarchical cybersecurity competency taxonomy with thirteen top-level domains: Web Application Security, Cloud API Security, Cloud Infrastructure Security, Traditional Server Infrastructure Security, Embedded Systems Security, Governance, Risk, and Compliance, Identity and Access Management, Security Operations, AI System Security, AI-Enabled Security Products, Security Automation, Vulnerability Research, and DevSecOps, plus embedded-security subdomains.
 - Eight seeded career levels with explicit shared, technical, and management tracks.
 - Reusable competency definitions, categories, relationships, and domain/level expectations.
 - Supporting research-source references and bounded evidence excerpts.
