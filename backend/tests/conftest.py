@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import pytest
+from sqlalchemy import event
 
 TEST_DATABASE = Path(__file__).parent / "test.sqlite3"
 os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DATABASE}"
@@ -10,6 +11,15 @@ os.environ["ADMIN_API_KEY"] = "test-admin-key"
 
 from app.database import Base, engine  # noqa: E402
 from app.main import app  # noqa: E402
+
+
+@event.listens_for(engine, "connect")
+def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+    if engine.dialect.name == "sqlite":
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
 
 
 @pytest.fixture(scope="session", autouse=True)

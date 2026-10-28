@@ -12,7 +12,7 @@ from .config import Settings
 from .models import AutomatedResearchSource, JobSearch, JobSearchResult, JobSearchRun, ResearchChangeEvent, ResearchContentVersion
 from .phase6_collectors import CollectedItem, CollectionError, normalize_content, normalize_url
 from .phase5_api import providers
-from .phase6_pipeline import SourceLock, _analyze_version, _create_version, now
+from .phase6_pipeline import SourceLock, _analyze_version, _create_version, now, schedule_delta
 from .job_search_providers import JobSearchCriteria, JobSearchItem, JobSearchPage, JobSearchProvider, build_provider
 
 
@@ -46,15 +46,18 @@ def _job_item_url(item: JobSearchItem) -> str:
 
 def _deduplicate(items: Iterable[JobSearchItem]) -> tuple[list[JobSearchItem], int]:
     unique: list[JobSearchItem] = []
-    seen: set[str] = set()
+    seen_external_ids: set[str] = set()
+    seen_urls: set[str] = set()
     duplicates = 0
     for item in items:
         canonical = _job_item_url(item)
-        key = f"id:{item.external_id}" if item.external_id else f"url:{canonical}"
-        if key in seen:
+        external_id = item.external_id
+        if canonical in seen_urls or (external_id is not None and external_id in seen_external_ids):
             duplicates += 1
             continue
-        seen.add(key)
+        seen_urls.add(canonical)
+        if external_id is not None:
+            seen_external_ids.add(external_id)
         unique.append(JobSearchItem(**{**item.__dict__, "url": canonical}))
     return unique, duplicates
 
@@ -65,8 +68,8 @@ def _complete_description(provider: JobSearchProvider, item: JobSearchItem) -> s
 
 def _mark_change_run(db: Session, version_id: int, run_id: int) -> None:
     event = db.scalar(select(ResearchChangeEvent).where(ResearchChangeEvent.current_version_id == version_id).order_by(ResearchChangeEvent.id.desc()))
-    if event is not None and event.run_id is None:
-        event.run_id = run_id
+    if event is not None:
+        event.summary = {**(event.summary or {}), "job_search_run_id": run_id}
 
 
 def _process_result(db: Session, run: JobSearchRun, search: JobSearch, source: AutomatedResearchSource, result: JobSearchResult, item: JobSearchItem, provider: JobSearchProvider, settings: Settings, provider_registry: AIProviderRegistry) -> None:
@@ -87,7 +90,8 @@ def _process_result(db: Session, run: JobSearchRun, search: JobSearch, source: A
         result.content_version_id = version.id if version else None
         if duplicate:
             result.status = "duplicate"
-            result.duplicate_of_id = duplicate_version.id if duplicate_version else None
+            if duplicate_version is not None:
+                result.duplicate_of_id = db.scalar(select(JobSearchResult.id).where(JobSearchResult.content_version_id == duplicate_version.id).order_by(JobSearchResult.id))
             run.duplicates_skipped += 1
             return
         _mark_change_run(db, version.id, run.id)
@@ -146,21 +150,22 @@ def execute_job_search_run(db: Session, run: JobSearchRun, settings: Settings, *
         return run
     source = search.automated_source
     provider_registry = provider_registry or providers
-    run.status = "running"
-    run.started_at = now()
-    search.last_status = "running"
-    search.last_run_at = now()
-    db.commit()
     lock = SourceLock(settings, f"cybersec:research:job-search:{search.id}")
     if not lock.acquire():
         run.status = "skipped_overlap"
         run.error_message = "Another execution for this saved search is already running"
         run.completed_at = now()
+        search.last_status = "skipped_overlap"
         db.commit()
         return run
     try:
         provider = provider or build_provider(search.provider_type, settings)
         run.provider_status = "configured"
+        run.status = "running"
+        run.started_at = now()
+        search.last_status = "running"
+        search.last_run_at = now()
+        db.commit()
         criteria = _criteria(search, settings, max_results)
         discovered, reported_total = (imported_items or [], provider_total) if imported_items is not None else _pages(provider, criteria)
         unique, duplicate_count = _deduplicate(discovered)
@@ -197,24 +202,64 @@ def execute_job_search_run(db: Session, run: JobSearchRun, settings: Settings, *
         search.last_error = run.error_message
     finally:
         provider_stats = getattr(provider, "stats", None)
-        run.pages_requested = max(run.pages_requested, int(getattr(provider_stats, "pages_requested", 0)))
-        run.api_requests_used = max(run.api_requests_used, int(getattr(provider_stats, "api_requests", 0)))
-        run.rate_limit_errors = max(run.rate_limit_errors, int(getattr(provider_stats, "rate_limit_errors", 0)))
-        run.quota_errors = max(run.quota_errors, int(getattr(provider_stats, "quota_errors", 0)))
-        run.completed_at = now()
-        run.summary = {
-            "provider_total": run.provider_total, "pages_requested": run.pages_requested, "api_requests_used": run.api_requests_used,
-            "results_retrieved": run.results_retrieved, "unique_results": run.unique_results,
-            "results_queued": run.results_queued, "complete_descriptions": run.complete_descriptions,
-            "partial_descriptions": run.partial_descriptions, "descriptions_retrieved": run.descriptions_retrieved,
-            "successfully_analyzed": run.successfully_analyzed, "duplicates_skipped": run.duplicates_skipped,
-            "manual_review_required": run.manual_review_required, "failed": run.failed,
-            "rate_limit_errors": run.rate_limit_errors, "quota_errors": run.quota_errors,
-        }
-        db.commit()
-        lock.release()
+        try:
+            run.pages_requested = max(run.pages_requested, int(getattr(provider_stats, "pages_requested", 0)))
+            run.api_requests_used = max(run.api_requests_used, int(getattr(provider_stats, "api_requests", 0)))
+            run.rate_limit_errors = max(run.rate_limit_errors, int(getattr(provider_stats, "rate_limit_errors", 0)))
+            run.quota_errors = max(run.quota_errors, int(getattr(provider_stats, "quota_errors", 0)))
+            run.completed_at = now()
+            run.summary = {
+                "provider_total": run.provider_total, "pages_requested": run.pages_requested, "api_requests_used": run.api_requests_used,
+                "results_retrieved": run.results_retrieved, "unique_results": run.unique_results,
+                "results_queued": run.results_queued, "complete_descriptions": run.complete_descriptions,
+                "partial_descriptions": run.partial_descriptions, "descriptions_retrieved": run.descriptions_retrieved,
+                "successfully_analyzed": run.successfully_analyzed, "duplicates_skipped": run.duplicates_skipped,
+                "manual_review_required": run.manual_review_required, "failed": run.failed,
+                "rate_limit_errors": run.rate_limit_errors, "quota_errors": run.quota_errors,
+            }
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            run = db.get(JobSearchRun, run.id)
+            search = db.get(JobSearch, search.id)
+            run.status = "failed"
+            run.error_message = str(exc)[:500]
+            run.completed_at = now()
+            search.last_status = "failed"
+            search.last_error = run.error_message
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+        finally:
+            lock.release()
     return run
 
+
+
+
+def _recompute_run_counts(run: JobSearchRun) -> None:
+    results = list(run.results)
+    run.results_queued = len(results)
+    run.unique_results = len(results)
+    run.results_unavailable = sum(result.status == "manual_review_required" for result in results)
+    run.complete_descriptions = sum(result.description_complete for result in results)
+    run.descriptions_retrieved = sum(bool(result.description_text) for result in results)
+    run.partial_descriptions = sum(bool(result.description_text) and not result.description_complete for result in results)
+    run.successfully_analyzed = sum(result.status == "analyzed" for result in results)
+    run.manual_review_required = sum(result.status == "manual_review_required" for result in results)
+    run.failed = sum(result.status == "failed" for result in results)
+    run.duplicates_skipped = max(run.duplicates_skipped, sum(result.status == "duplicate" for result in results))
+    run.requested_result_ids = [result.id for result in results]
+    run.summary = {
+        "provider_total": run.provider_total, "pages_requested": run.pages_requested, "api_requests_used": run.api_requests_used,
+        "results_retrieved": run.results_retrieved, "unique_results": run.unique_results,
+        "results_queued": run.results_queued, "complete_descriptions": run.complete_descriptions,
+        "partial_descriptions": run.partial_descriptions, "descriptions_retrieved": run.descriptions_retrieved,
+        "successfully_analyzed": run.successfully_analyzed, "duplicates_skipped": run.duplicates_skipped,
+        "manual_review_required": run.manual_review_required, "failed": run.failed,
+        "rate_limit_errors": run.rate_limit_errors, "quota_errors": run.quota_errors,
+    }
 
 def retry_job_search_results(db: Session, run_id: int, settings: Settings, *, provider_registry: AIProviderRegistry | None = None) -> JobSearchRun:
     run = db.scalar(select(JobSearchRun).options(selectinload(JobSearchRun.search).selectinload(JobSearch.automated_source), selectinload(JobSearchRun.results)).where(JobSearchRun.id == run_id))
@@ -222,13 +267,6 @@ def retry_job_search_results(db: Session, run_id: int, settings: Settings, *, pr
         raise ValueError("job search run was not found")
     search = run.search
     source = search.automated_source
-    provider = build_provider(search.provider_type, settings)
-    run.status = "running"
-    run.error_message = None
-    run.failed = 0
-    run.manual_review_required = 0
-    run.started_at = now()
-    db.commit()
     lock = SourceLock(settings, f"cybersec:research:job-search:{search.id}")
     if not lock.acquire():
         run.status = "skipped_overlap"
@@ -236,11 +274,24 @@ def retry_job_search_results(db: Session, run_id: int, settings: Settings, *, pr
         db.commit()
         return run
     try:
+        provider = build_provider(search.provider_type, settings)
+        run.status = "running"
+        run.error_message = None
+        run.failed = 0
+        run.manual_review_required = 0
+        run.results_unavailable = 0
+        run.partial_descriptions = 0
+        run.complete_descriptions = 0
+        run.descriptions_retrieved = 0
+        run.successfully_analyzed = 0
+        run.started_at = now()
+        db.commit()
         for result in run.results:
             if result.status not in {"failed", "manual_review_required"}:
                 continue
             item = JobSearchItem(title=result.title, url=result.canonical_url, description_url=result.description_url, description=result.description_text, snippet=result.snippet, location=result.location, external_id=result.external_id, metadata=result.metadata_payload, country=result.country, employment_type=result.employment_type, posted_at=result.posted_at)
             _process_result(db, run, search, source, result, item, provider, settings, provider_registry or providers)
+        _recompute_run_counts(run)
         run.status = "completed_with_errors" if run.failed or run.manual_review_required else "completed"
     except Exception as exc:
         run.status = "failed"
@@ -270,7 +321,8 @@ def run_due_job_searches(settings: Settings) -> int:
         searches = list(db.scalars(select(JobSearch).where(JobSearch.enabled.is_(True), JobSearch.search_frequency != "manual", JobSearch.next_run_at.is_not(None), JobSearch.next_run_at <= now())).all())
         for search in searches:
             run = create_job_search_run(db, search, trigger="scheduled", actor="scheduler")
-            search.next_run_at = now() + timedelta(minutes=max(search.interval_minutes, 5))
+            delta = schedule_delta(search.search_frequency, search.interval_minutes)
+            search.next_run_at = now() + delta if delta else None
             db.commit()
             execute_job_search_run(db, run, settings)
             count += 1

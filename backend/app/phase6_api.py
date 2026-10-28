@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -82,7 +82,11 @@ def _get_source(db: Session, source_id: int) -> AutomatedResearchSource:
 
 
 def _filters(payload: RunStartRequest) -> dict[str, Any]:
-    return {key: value for key, value in {"industry": payload.industry, "domain": payload.domain, "career_level": payload.career_level, "keywords": payload.keywords, "date_from": payload.date_from.isoformat() if payload.date_from else None, "date_to": payload.date_to.isoformat() if payload.date_to else None}.items() if value not in (None, "", [])}
+    date_to = payload.date_to + timedelta(days=1) if payload.date_to and payload.date_to.tzinfo is None else payload.date_to
+    filters = {"industry": payload.industry, "domain": payload.domain, "career_level": payload.career_level, "keywords": payload.keywords, "date_from": payload.date_from.isoformat() if payload.date_from else None, "date_to": date_to.isoformat() if date_to else None}
+    if payload.date_to and payload.date_to.tzinfo is None:
+        filters["date_to_exclusive"] = True
+    return {key: value for key, value in filters.items() if value not in (None, "", [])}
 
 
 @router.get("/dashboard", response_model=AutomatedDashboardResponse, dependencies=[Depends(require_admin)])

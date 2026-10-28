@@ -368,8 +368,13 @@ def _check_version(change: ReviewChange, expected_version: int) -> None:
 
 def _validate_snapshot(db: Session, snapshot: dict[str, Any]) -> None:
     domain_ids = snapshot.get("domain_ids") or []
-    if not domain_ids or not db.scalar(select(SecurityDomain.id).where(SecurityDomain.id.in_(domain_ids)).limit(1)):
-        raise HTTPException(status_code=422, detail="At least one valid security domain is required")
+    requested_domain_ids = set(domain_ids)
+    found_domain_ids = set(db.scalars(select(SecurityDomain.id).where(SecurityDomain.id.in_(requested_domain_ids))).all()) if requested_domain_ids else set()
+    missing_domain_ids = sorted(requested_domain_ids - found_domain_ids)
+    if not requested_domain_ids:
+        raise HTTPException(status_code=422, detail="At least one security domain is required")
+    if missing_domain_ids:
+        raise HTTPException(status_code=422, detail=f"Security domain ids were not found: {missing_domain_ids}")
     for model, key, label in ((CareerLevel, "career_level_id", "career level"), (CompetencyCategory, "category_id", "competency category")):
         value = snapshot.get(key)
         if value is None or db.get(model, value) is None:
@@ -384,6 +389,22 @@ def _validate_snapshot(db: Session, snapshot: dict[str, Any]) -> None:
         raise HTTPException(status_code=422, detail="Expectation description is required")
     if not snapshot.get("evidence"):
         raise HTTPException(status_code=422, detail="At least one supporting evidence excerpt is required")
+
+
+def _merge_supporting_evidence(snapshot: dict[str, Any], excerpts: list[str] | None) -> None:
+    if not excerpts:
+        return
+    evidence = list(snapshot.get("evidence") or [])
+    source_id = next((item.get("source_id") for item in evidence if item.get("source_id")), None)
+    if source_id is None:
+        raise HTTPException(status_code=422, detail="Reviewer evidence requires an existing research source")
+    seen = {(item.get("source_id"), (item.get("excerpt") or "").strip()) for item in evidence}
+    for excerpt in excerpts:
+        cleaned = excerpt.strip()
+        if cleaned and (source_id, cleaned) not in seen:
+            evidence.append({"source_id": source_id, "excerpt": cleaned})
+            seen.add((source_id, cleaned))
+    snapshot["evidence"] = evidence
 
 
 def _record(change: ReviewChange, action: str, actor: str, before: dict[str, Any] | None, after: dict[str, Any] | None, note: str | None) -> None:
@@ -406,10 +427,16 @@ def accept_change(db: Session, change_id: int, expected_version: int, actor: str
         change.status = "accepted"
         change.reviewer_snapshot = proposed
         _record(change, "accepted", actor, change.proposed_snapshot, proposed, note)
-        db.commit()
+        if not publish:
+            db.commit()
     if publish:
         # Accept-and-merge: publish this single change into the domain knowledge base right away.
-        publish_changes(db, [change.id], {change.id: change.version}, actor)
+        try:
+            db.flush()
+            publish_changes(db, [change.id], {change.id: change.version}, actor)
+        except Exception:
+            db.rollback()
+            raise
         change = _require_change(db, change_id)
     return change
 
@@ -419,11 +446,12 @@ def modify_change(db: Session, change_id: int, payload: ReviewModifyRequest, act
     _check_version(change, payload.expected_version)
     before = deepcopy(change.proposed_snapshot)
     proposed = deepcopy(before)
-    for key, value in payload.model_dump(exclude={"expected_version", "reviewer_note"}, exclude_none=True).items():
+    for key, value in payload.model_dump(exclude={"expected_version", "reviewer_note", "supporting_evidence"}, exclude_none=True).items():
         proposed[key] = value
+    _merge_supporting_evidence(proposed, payload.supporting_evidence)
     if payload.domain_ids is not None:
         proposed["domain_ids"] = payload.domain_ids
-        proposed["domains"] = [_ref(db.get(SecurityDomain, item)) for item in payload.domain_ids]
+        proposed["domains"] = [_ref(db.get(SecurityDomain, item)) for item in payload.domain_ids if db.get(SecurityDomain, item) is not None]
     if payload.career_level_id is not None:
         proposed["career_level"] = _ref(db.get(CareerLevel, payload.career_level_id))
     if payload.category_id is not None:
@@ -463,8 +491,9 @@ def merge_change(db: Session, change_id: int, payload: ReviewMergeRequest, actor
         raise HTTPException(status_code=404, detail="Merge target competency was not found")
     before = deepcopy(change.proposed_snapshot)
     incoming = deepcopy(before)
-    merged_fields = payload.merged.model_dump(exclude={"expected_version", "reviewer_note"}, exclude_none=True) if payload.merged else {}
+    merged_fields = payload.merged.model_dump(exclude={"expected_version", "reviewer_note", "supporting_evidence"}, exclude_none=True) if payload.merged else {}
     incoming.update(merged_fields)
+    _merge_supporting_evidence(incoming, payload.merged.supporting_evidence if payload.merged else None)
     incoming["competency_name"] = target.name
     incoming["competency_description"] = _unique_text(target.description, incoming.get("competency_description"))
     incoming["category_id"] = target.category_id
@@ -646,7 +675,6 @@ def _publish_expectation(db: Session, change: ReviewChange, competency_id: int, 
 
 
 def publish_changes(db: Session, change_ids: list[int] | None, expected_versions: dict[int, int], actor: str) -> tuple[PublicationBatch, list[int], list[int]]:
-    db.rollback()
     changes = _select_changes(db, change_ids)
     if not changes:
         raise HTTPException(status_code=409, detail="No approved changes are selected")

@@ -82,6 +82,13 @@ def canonical_label(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
 
 
+
+
+def _validate_model_identifier(value: str, label: str = "model identifier") -> str:
+    if len(value) > 255:
+        raise ModelSelectionError(f"{label} exceeds the 255-character storage limit")
+    return value
+
 def score_result(result: ExtractionResult, case: EvaluationCase) -> dict[str, float]:
     competency_labels = {canonical_label(requirement.competency_name) for requirement in result.requirements}
     expected_competencies = set(case.expected_competencies)
@@ -194,6 +201,7 @@ class ModelSelectionService:
         selected_id = model_id or model_name
         if not selected_id:
             raise ModelSelectionError("A model identifier is required.")
+        _validate_model_identifier(selected_id)
         if self.providers:
             try:
                 model = self.providers.model(provider, selected_id)
@@ -231,6 +239,12 @@ class ModelSelectionService:
             raise ModelSelectionError("No models are available through configured providers.")
         evaluations: list[ModelEvaluation] = []
         for provider, model_id, model_name in targets:
+            try:
+                _validate_model_identifier(model_id, "model id")
+                _validate_model_identifier(model_name, "model name")
+            except ModelSelectionError:
+                db.rollback()
+                raise
             metrics = self._evaluate_target(provider, model_id)
             evaluation = ModelEvaluation(
                 evaluation_version=EVALUATION_VERSION, provider=provider, model_id=model_id, model_name=model_name,

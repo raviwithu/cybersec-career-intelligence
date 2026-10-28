@@ -167,7 +167,7 @@ class ProfileCreateResponse(BaseModel):
 
 class AssessmentItem(BaseModel):
     competency_id: int = Field(ge=1)
-    proficiency: Literal["not_familiar", "basic", "intermediate", "advanced", "expert"]
+    proficiency: Literal["not_familiar", "basic", "proficient", "intermediate", "advanced", "expert"]
 
 
 class ProfileAssessmentRequest(BaseModel):

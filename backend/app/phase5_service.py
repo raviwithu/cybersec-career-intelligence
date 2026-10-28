@@ -243,11 +243,6 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
             DomainLevelExpectation.industry_id == industry_id,
             DomainLevelExpectation.expectation_description == description,
         ))
-        if existing is not None:
-            for requirement, _ in items:
-                if not db.scalar(select(ExpectationSource).where(ExpectationSource.expectation_id == existing.id, ExpectationSource.source_id == submission.source_id)):
-                    db.add(ExpectationSource(expectation_id=existing.id, source_id=submission.source_id, supporting_excerpt=requirement.evidence_excerpt))
-            continue
         existing_draft = db.scalar(select(DraftExpectation).where(
             DraftExpectation.domain_id == domain_id, DraftExpectation.career_level_id == level_id,
             DraftExpectation.competency_id == competency_id, DraftExpectation.industry_id == industry_id,
@@ -256,7 +251,23 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
         ))
         if existing_draft is not None:
             for requirement, _ in items:
-                db.add(DraftEvidence(draft_id=existing_draft.id, source_id=submission.source_id, supporting_excerpt=requirement.evidence_excerpt))
+                if not db.scalar(select(DraftEvidence).where(DraftEvidence.draft_id == existing_draft.id, DraftEvidence.source_id == submission.source_id, DraftEvidence.supporting_excerpt == requirement.evidence_excerpt)):
+                    db.add(DraftEvidence(draft_id=existing_draft.id, source_id=submission.source_id, supporting_excerpt=requirement.evidence_excerpt))
+            continue
+        if existing is not None:
+            draft = DraftExpectation(
+                submission_id=submission.id, domain_id=domain_id, career_level_id=level_id, competency_id=competency_id, industry_id=industry_id,
+                technical_knowledge=_merge_text(items, "technical_knowledge"), practical_capability=_merge_text(items, "practical_capability"),
+                qualifications=_merge_text(items, "qualifications"), tools_technologies=_merge_text(items, "tools_technologies"),
+                expectation_description=description, proficiency_level=_highest(items, "proficiency_level", ("basic", "proficient", "advanced", "expert")),
+                importance=_highest(items, "importance", ("optional", "important", "essential")), responsibility_type=_responsibility(items),
+                experience_years_min=_min_year(items, "experience_years_min"), experience_years_max=_max_year(items, "experience_years_max"),
+                status="draft", published_expectation_id=existing.id,
+            )
+            db.add(draft)
+            db.flush()
+            for requirement, _ in items:
+                db.add(DraftEvidence(draft_id=draft.id, source_id=submission.source_id, supporting_excerpt=requirement.evidence_excerpt))
             continue
         draft = DraftExpectation(
             submission_id=submission.id, domain_id=domain_id, career_level_id=level_id, competency_id=competency_id, industry_id=industry_id,
@@ -354,5 +365,6 @@ def published_expectation(db: Session, draft: DraftExpectation) -> DomainLevelEx
         DomainLevelExpectation.domain_id == draft.domain_id,
         DomainLevelExpectation.career_level_id == draft.career_level_id,
         DomainLevelExpectation.competency_id == draft.competency_id,
+        DomainLevelExpectation.industry_id == draft.industry_id,
         DomainLevelExpectation.expectation_description == draft.expectation_description,
     ))

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from .admin_auth import require_admin
@@ -20,6 +21,15 @@ router = APIRouter()
 
 def missing(resource: str, identifier: int) -> HTTPException:
     return HTTPException(status_code=404, detail=f"{resource} {identifier} was not found")
+
+
+
+def commit_or_conflict(db: Session) -> None:
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="The requested knowledge record conflicts with an existing record or relationship") from exc
 
 
 def serialize_competency(item: Competency) -> CompetencyResponse:
@@ -62,7 +72,7 @@ def create_domain(payload: DomainCreate, db: Session = Depends(get_db)) -> Secur
         raise missing("Parent domain", payload.parent_id)
     item = SecurityDomain(**payload.model_dump())
     db.add(item)
-    db.commit()
+    commit_or_conflict(db)
     db.refresh(item)
     return item
 
@@ -71,7 +81,7 @@ def create_domain(payload: DomainCreate, db: Session = Depends(get_db)) -> Secur
 def create_career_level(payload: CareerLevelCreate, db: Session = Depends(get_db)) -> CareerLevel:
     item = CareerLevel(**payload.model_dump())
     db.add(item)
-    db.commit()
+    commit_or_conflict(db)
     db.refresh(item)
     return item
 
@@ -80,7 +90,7 @@ def create_career_level(payload: CareerLevelCreate, db: Session = Depends(get_db
 def create_category(payload: CategoryCreate, db: Session = Depends(get_db)) -> CompetencyCategory:
     item = CompetencyCategory(**payload.model_dump())
     db.add(item)
-    db.commit()
+    commit_or_conflict(db)
     db.refresh(item)
     return item
 
@@ -91,7 +101,7 @@ def create_competency(payload: CompetencyCreate, db: Session = Depends(get_db)) 
         raise missing("Competency category", payload.category_id)
     item = Competency(**payload.model_dump())
     db.add(item)
-    db.commit()
+    commit_or_conflict(db)
     db.refresh(item)
     return serialize_competency(item)
 
@@ -103,7 +113,7 @@ def create_relationship(payload: RelationshipCreate, db: Session = Depends(get_d
             raise missing(label, identifier)
     item = CompetencyRelationship(**payload.model_dump())
     db.add(item)
-    db.commit()
+    commit_or_conflict(db)
     db.refresh(item)
     return item
 
@@ -115,7 +125,7 @@ def create_expectation(payload: ExpectationCreate, db: Session = Depends(get_db)
             raise missing(label, identifier)
     item = DomainLevelExpectation(**payload.model_dump())
     db.add(item)
-    db.commit()
+    commit_or_conflict(db)
     query = select(DomainLevelExpectation).where(DomainLevelExpectation.id == item.id).options(
         selectinload(DomainLevelExpectation.domain), selectinload(DomainLevelExpectation.career_level),
         selectinload(DomainLevelExpectation.competency), selectinload(DomainLevelExpectation.sources),
@@ -127,7 +137,7 @@ def create_expectation(payload: ExpectationCreate, db: Session = Depends(get_db)
 def create_source(payload: ResearchSourceCreate, db: Session = Depends(get_db)) -> ResearchSource:
     item = ResearchSource(**payload.model_dump(exclude_none=True))
     db.add(item)
-    db.commit()
+    commit_or_conflict(db)
     db.refresh(item)
     return item
 
@@ -140,7 +150,7 @@ def link_source(expectation_id: int, source_id: int, payload: ExpectationSourceC
         raise missing("Research source", source_id)
     link = ExpectationSource(expectation_id=expectation_id, source_id=source_id, supporting_excerpt=payload.supporting_excerpt)
     db.add(link)
-    db.commit()
+    commit_or_conflict(db)
     return {"expectation_id": expectation_id, "source_id": source_id, "supporting_excerpt": link.supporting_excerpt}
 
 
@@ -148,6 +158,6 @@ def link_source(expectation_id: int, source_id: int, payload: ExpectationSourceC
 def create_analysis_version(payload: AnalysisVersionCreate, db: Session = Depends(get_db)) -> AnalysisVersion:
     item = AnalysisVersion(**payload.model_dump())
     db.add(item)
-    db.commit()
+    commit_or_conflict(db)
     db.refresh(item)
     return item

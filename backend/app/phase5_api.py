@@ -131,7 +131,7 @@ def create_submission(db: Session, *, content: str, source_title: str | None, so
     db.flush()
     active_provider, active_model_id, active_model_name = model_selection.active_selection(db)
     submission = ResearchSubmission(
-        source_id=source.id, source_type=source_type, original_filename=filename,
+        source_id=source.id, source_type=source_type, original_filename=(filename[:255] if filename else None),
         content_sha256=digest, content_size=len(content.encode("utf-8")), status="received",
         model_provider=active_provider, model_id=active_model_id, model_name=active_model_name,
         evaluation_version=model_selection.active_evaluation_version(db),
@@ -405,7 +405,7 @@ def publish_draft(draft_id: int, db: Session = Depends(get_db)) -> WorkflowRespo
     published = published_expectation(db, item)
     if published is None:
         published = DomainLevelExpectation(
-            domain_id=item.domain_id, career_level_id=item.career_level_id, competency_id=item.competency_id,
+            domain_id=item.domain_id, career_level_id=item.career_level_id, competency_id=item.competency_id, industry_id=item.industry_id,
             technical_knowledge=item.technical_knowledge, practical_capability=item.practical_capability,
             qualifications=item.qualifications, tools_technologies=item.tools_technologies,
             expectation_description=item.expectation_description, proficiency_level=item.proficiency_level,
@@ -414,8 +414,15 @@ def publish_draft(draft_id: int, db: Session = Depends(get_db)) -> WorkflowRespo
         )
         db.add(published)
         db.flush()
-        for evidence in item.evidence:
+    for evidence in item.evidence:
+        link = db.scalar(select(ExpectationSource).where(
+            ExpectationSource.expectation_id == published.id,
+            ExpectationSource.source_id == evidence.source_id,
+        ))
+        if link is None:
             db.add(ExpectationSource(expectation_id=published.id, source_id=evidence.source_id, supporting_excerpt=evidence.supporting_excerpt))
+        elif evidence.supporting_excerpt not in link.supporting_excerpt:
+            link.supporting_excerpt = f"{link.supporting_excerpt}; {evidence.supporting_excerpt}"
     item.published_expectation_id = published.id
     item.status = "published"
     db.commit()

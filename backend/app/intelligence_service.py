@@ -49,7 +49,7 @@ from .intelligence_schemas import (
     TrendPoint,
 )
 
-PROFICIENCY_RANK = {"not_familiar": 0, "basic": 1, "intermediate": 2, "advanced": 3, "expert": 4}
+PROFICIENCY_RANK = {"not_familiar": 0, "basic": 1, "proficient": 2, "intermediate": 2, "advanced": 3, "expert": 4}
 
 
 @dataclass(frozen=True)
@@ -134,9 +134,10 @@ def _rows(
     if category_item:
         query = query.where(Competency.category_id == category_item.id)
     if date_from:
-        query = query.where(ResearchSource.collected_at >= date_from)
+        query = query.where(ResearchSource.collected_at >= _utc(date_from))
     if date_to:
-        query = query.where(ResearchSource.collected_at <= date_to)
+        date_to_utc = _utc(date_to)
+        query = query.where(ResearchSource.collected_at < date_to_utc + timedelta(days=1) if date_to.tzinfo is None else ResearchSource.collected_at <= date_to_utc)
     result = db.execute(query.order_by(ResearchSource.collected_at.desc(), ResearchSource.id.desc())).all()
     rows = [EvidenceRow(*row) for row in result]
     return rows, (industry_item, domain_item, level_item, category_item)
@@ -162,7 +163,7 @@ def _revision_versions(db: Session, expectation_ids: set[int]) -> dict[int, int]
     if not expectation_ids:
         return {}
     rows = db.execute(select(ExpectationRevision.expectation_id, func.max(ExpectationRevision.version)).where(ExpectationRevision.expectation_id.in_(expectation_ids)).group_by(ExpectationRevision.expectation_id)).all()
-    return {expectation_id: int(version) for expectation_id, version in rows}
+    return {expectation_id: int(version) + 1 for expectation_id, version in rows}
 
 
 def _distribution(rows: list[EvidenceRow], attribute: str, denominator: int) -> list[DistributionItem]:
@@ -353,6 +354,11 @@ def _period_start(value: datetime, window: str) -> datetime:
     return datetime(value.year, value.month, 1, tzinfo=timezone.utc)
 
 
+def _add_months(value: datetime, months: int) -> datetime:
+    total_months = value.year * 12 + value.month - 1 + months
+    return datetime(total_months // 12, total_months % 12 + 1, 1, tzinfo=timezone.utc)
+
+
 def trends(db: Session, *, window: str, industry: str | None, domain: str | None, career_level: str | None, date_from: datetime | None, date_to: datetime | None, minimum_sample_size: int, minimum_coverage: int) -> SkillTrendsResponse:
     rows, _ = _rows(db, industry=industry, domain=domain, career_level=career_level, date_from=date_from, date_to=date_to)
     unique_rows = []
@@ -377,9 +383,10 @@ def trends(db: Session, *, window: str, industry: str | None, domain: str | None
         for period in periods:
             if window.startswith("rolling"):
                 months = 6 if window == "rolling_6m" else 12
-                start = period - timedelta(days=months * 31)
-                period_rows = [row for row in unique_rows if row.competency.id == competency_id and start <= _utc(row.source.collected_at) < period + timedelta(days=32)]
-                relevant_period_sources = {row.source.id for row in unique_rows if start <= _utc(row.source.collected_at) < period + timedelta(days=32)}
+                start = _add_months(period, -(months - 1))
+                end = _add_months(period, 1)
+                period_rows = [row for row in unique_rows if row.competency.id == competency_id and start <= _utc(row.source.collected_at) < end]
+                relevant_period_sources = {row.source.id for row in unique_rows if start <= _utc(row.source.collected_at) < end}
             else:
                 next_period = (period.replace(day=28) + timedelta(days=4)).replace(day=1) if window != "quarterly" else (period + timedelta(days=92)).replace(day=1)
                 period_rows = [row for row in competency_rows if period <= _utc(row.source.collected_at) < next_period]

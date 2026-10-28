@@ -17,6 +17,8 @@ def test_taxonomy_matches_revised_domain_and_track_requirements(client):
         "Governance, Risk, and Compliance",
         "Identity and Access Management",
         "Security Operations",
+        "AI System Security",
+        "AI-Enabled Security Products",
     }
     embedded = next(domain for domain in taxonomy["domains"] if domain["name"] == "Embedded Systems Security")
     assert [child["name"] for child in embedded["children"]] == [
