@@ -1,9 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { getAdminSessionKey } from "./api";
 
 const GROUP_STATE_KEY = "cybersec-career-intelligence.navigation-groups";
 const SIDEBAR_MODE_KEY = "cybersec-career-intelligence.sidebar-mode";
+const SIDEBAR_WIDTH_KEY = "cybersec-career-intelligence.sidebar-width";
+const DEFAULT_SIDEBAR_WIDTH = 252;
+const MIN_SIDEBAR_WIDTH = 200;
+const MAX_SIDEBAR_WIDTH = 440;
+const COLLAPSED_SIDEBAR_WIDTH = 76;
 
 export const navigationGroups = [
   {
@@ -80,6 +85,19 @@ function readSessionJson(key, fallback) {
   }
 }
 
+function clampSidebarWidth(width) {
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(width)));
+}
+
+function readSidebarWidth() {
+  try {
+    const stored = Number(window.sessionStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return stored ? clampSidebarWidth(stored) : DEFAULT_SIDEBAR_WIDTH;
+  } catch {
+    return DEFAULT_SIDEBAR_WIDTH;
+  }
+}
+
 function flattenItems(items) {
   return items.flatMap((item) => [item, ...(item.children || [])]);
 }
@@ -108,6 +126,7 @@ function defaultGroupState() {
 export default function SidebarNavigation({ view, onNavigate, mobileOpen, onClose }) {
   const [collapsed, setCollapsed] = useState(() => typeof window !== "undefined" && window.sessionStorage.getItem(SIDEBAR_MODE_KEY) === "collapsed");
   const [groups, setGroups] = useState(() => typeof window === "undefined" ? defaultGroupState() : readSessionJson(GROUP_STATE_KEY, defaultGroupState()));
+  const [width, setWidth] = useState(() => typeof window === "undefined" ? DEFAULT_SIDEBAR_WIDTH : readSidebarWidth());
   const [flyoutGroup, setFlyoutGroup] = useState(null);
   const [search, setSearch] = useState("");
   const [adminAuthorized, setAdminAuthorized] = useState(() => Boolean(getAdminSessionKey()));
@@ -125,6 +144,46 @@ export default function SidebarNavigation({ view, onNavigate, mobileOpen, onClos
       setGroups((current) => current[activeGroup.id] ? current : { ...current, [activeGroup.id]: true });
     }
   }, [activeGroup?.id]);
+
+  // The main content and status bar offset themselves by this variable, so they follow the sidebar width.
+  useEffect(() => {
+    document.documentElement.style.setProperty("--sidebar-width", `${collapsed ? COLLAPSED_SIDEBAR_WIDTH : width}px`);
+  }, [collapsed, width]);
+
+  const widthRef = useRef(width);
+  widthRef.current = width;
+
+  function persistWidth(next) {
+    const clamped = clampSidebarWidth(next);
+    setWidth(clamped);
+    try { window.sessionStorage.setItem(SIDEBAR_WIDTH_KEY, String(clamped)); } catch { /* storage unavailable */ }
+  }
+
+  function startResize(event) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = widthRef.current;
+    document.body.classList.add("sidebar-resizing");
+    const onMove = (moveEvent) => setWidth(clampSidebarWidth(startWidth + moveEvent.clientX - startX));
+    const onUp = () => {
+      document.body.classList.remove("sidebar-resizing");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      persistWidth(widthRef.current);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  function resizeWithKeyboard(event) {
+    const step = event.shiftKey ? 40 : 16;
+    if (event.key === "ArrowLeft") persistWidth(width - step);
+    else if (event.key === "ArrowRight") persistWidth(width + step);
+    else if (event.key === "Home") persistWidth(MIN_SIDEBAR_WIDTH);
+    else if (event.key === "End") persistWidth(MAX_SIDEBAR_WIDTH);
+    else return;
+    event.preventDefault();
+  }
 
   useEffect(() => {
     const onAdminSessionChange = () => setAdminAuthorized(Boolean(getAdminSessionKey()));
@@ -160,14 +219,14 @@ export default function SidebarNavigation({ view, onNavigate, mobileOpen, onClos
 
   function renderItem(item, nested = false) {
     const active = view === item.id;
-    return <button type="button" key={`${item.id}-${item.label}`} className={`nav-item ${active ? "active" : ""} ${nested ? "nav-item-nested" : ""}`} aria-current={active ? "page" : undefined} title={collapsed ? item.label : undefined} onClick={() => navigate(item)}><span className="nav-icon" aria-hidden="true">{item.icon}</span><span className="nav-label">{item.label}</span></button>;
+    return <button type="button" key={`${item.id}-${item.label}`} className={`nav-item ${active ? "active" : ""} ${nested ? "nav-item-nested" : ""}`} aria-current={active ? "page" : undefined} title={item.label} onClick={() => navigate(item)}><span className="nav-icon" aria-hidden="true">{item.icon}</span><span className="nav-label">{item.label}</span></button>;
   }
 
   function renderGroup(group) {
     const expanded = groups[group.id];
     const isActive = activeGroup?.id === group.id;
     return <div className={`nav-group ${isActive ? "has-active" : ""}`} key={group.id}>
-      <button type="button" className={`nav-group-toggle ${isActive ? "active" : ""}`} aria-expanded={collapsed ? flyoutGroup === group.id : Boolean(expanded)} aria-controls={`nav-group-${group.id}`} title={collapsed ? group.label : undefined} onClick={() => toggleGroup(group)}><span className="nav-icon" aria-hidden="true">{group.icon}</span><span className="nav-label">{group.label}</span><span className="nav-chevron" aria-hidden="true">{collapsed ? "›" : expanded ? "⌄" : "›"}</span></button>
+      <button type="button" className={`nav-group-toggle ${isActive ? "active" : ""}`} aria-expanded={collapsed ? flyoutGroup === group.id : Boolean(expanded)} aria-controls={`nav-group-${group.id}`} title={group.label} onClick={() => toggleGroup(group)}><span className="nav-icon" aria-hidden="true">{group.icon}</span><span className="nav-label">{group.label}</span><span className="nav-chevron" aria-hidden="true">{collapsed ? "›" : expanded ? "⌄" : "›"}</span></button>
       {collapsed && flyoutGroup === group.id && <div className="nav-flyout" id={`nav-group-${group.id}`} role="menu"><strong>{group.label}</strong>{group.items.map((item) => <button type="button" role="menuitem" className={view === item.id ? "active" : ""} key={`${group.id}-${item.id}-${item.label}`} onClick={() => navigate(item)}>{item.label}</button>)}</div>}
       {!collapsed && expanded && <div className="nav-group-items" id={`nav-group-${group.id}`}>{group.items.map((item) => <div className="nav-item-wrap" key={`${group.id}-${item.id}-${item.label}`}>{item.group && <span className="nav-subgroup-label">{item.group}</span>}{renderItem(item, Boolean(item.group))}</div>)}</div>}
     </div>;
@@ -184,6 +243,7 @@ export default function SidebarNavigation({ view, onNavigate, mobileOpen, onClos
         {visibleGroups.map(renderGroup)}
       </nav>
       <div className="sidebar-footer">{renderItem(profileItem)}<div className="version-label nav-label">KNOWLEDGE BASE · PHASE 4</div></div>
+      {!collapsed && <div className="sidebar-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize navigation" aria-valuemin={MIN_SIDEBAR_WIDTH} aria-valuemax={MAX_SIDEBAR_WIDTH} aria-valuenow={width} tabIndex={0} title="Drag to resize · double-click to reset" onPointerDown={startResize} onKeyDown={resizeWithKeyboard} onDoubleClick={() => persistWidth(DEFAULT_SIDEBAR_WIDTH)} />}
     </aside>
     {mobileOpen && <button type="button" className="mobile-scrim" aria-label="Close navigation" onClick={onClose} />}
   </>;
