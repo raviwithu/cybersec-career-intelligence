@@ -82,4 +82,25 @@ describe("grouped sidebar navigation", () => {
     expect(onNavigate).toHaveBeenCalledWith("domains");
     expect(onClose).toHaveBeenCalled();
   });
+
+  it("resizes with the keyboard, clamps the width, and remembers it", () => {
+    renderSidebar();
+    const handle = screen.getByRole("separator", { name: "Resize navigation" });
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(handle.getAttribute("aria-valuenow")).toBe("268");
+    expect(document.documentElement.style.getPropertyValue("--sidebar-width")).toBe("268px");
+    expect(sessionStorage.getItem("cybersec-career-intelligence.sidebar-width")).toBe("268");
+    fireEvent.keyDown(handle, { key: "End" });
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(handle.getAttribute("aria-valuenow")).toBe("440");
+    fireEvent.doubleClick(handle);
+    expect(handle.getAttribute("aria-valuenow")).toBe("252");
+  });
+
+  it("uses the collapsed width for the layout offset and hides the resize handle", () => {
+    renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse navigation" }));
+    expect(screen.queryByRole("separator", { name: "Resize navigation" })).toBeNull();
+    expect(document.documentElement.style.getPropertyValue("--sidebar-width")).toBe("76px");
+  });
 });
