@@ -228,8 +228,9 @@ def _apply_draft(db: Session, topic: KnowledgeTopic, draft: KnowledgeTopicDraft)
 
 
 def create_topic(db: Session, draft: KnowledgeTopicDraft, actor: str) -> KnowledgeTopic:
-    _validate_unique_name(db, draft.name, slugify(draft.slug or draft.name))
-    topic = KnowledgeTopic(name=draft.name.strip(), slug=slugify(draft.slug or draft.name), description=draft.description.strip(), category_id=draft.category_id, parent_topic_id=draft.parent_topic_id, aliases=list(draft.aliases), publication_status="draft", is_active=True, version=1, display_order=draft.display_order, created_at=now(), updated_at=now())
+    stable_key = slugify(draft.slug or draft.name)
+    _validate_unique_name(db, draft.name, stable_key)
+    topic = KnowledgeTopic(name=draft.name.strip(), slug=stable_key, topic_key=stable_key, description=draft.description.strip(), category_id=draft.category_id, parent_topic_id=draft.parent_topic_id, aliases=list(draft.aliases), publication_status="draft", is_active=True, version=1, display_order=draft.display_order, created_at=now(), updated_at=now())
     db.add(topic)
     db.flush()
     _apply_draft(db, topic, draft)
@@ -428,7 +429,8 @@ def publish_topics(db: Session, proposal_ids: list[int] | None, topic_ids: list[
         data = proposal.proposed_snapshot
         if proposal.proposal_type == "new_topic" and proposal.topic_id is None:
             draft = draft_from_snapshot(data)
-            topic = KnowledgeTopic(name=draft.name.strip(), slug=slugify(draft.slug or draft.name), description=draft.description.strip(), category_id=draft.category_id, parent_topic_id=draft.parent_topic_id, aliases=list(draft.aliases), publication_status="draft", is_active=True, version=1, display_order=draft.display_order, created_at=now(), updated_at=now())
+            stable_key = slugify(draft.slug or draft.name)
+            topic = KnowledgeTopic(name=draft.name.strip(), slug=stable_key, topic_key=stable_key, description=draft.description.strip(), category_id=draft.category_id, parent_topic_id=draft.parent_topic_id, aliases=list(draft.aliases), publication_status="draft", is_active=True, version=1, display_order=draft.display_order, created_at=now(), updated_at=now())
             db.add(topic)
             db.flush()
             _apply_draft(db, topic, draft)

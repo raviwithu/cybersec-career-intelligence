@@ -63,6 +63,15 @@ export function fetchCareerMatrix(params = {}) { return request(`/api/v1/career-
 export function fetchComparison(domain, levels, params = {}) { return request(`/api/v1/compare${queryString({ domain, levels: levels.join(","), ...params })}`); }
 export function fetchSearch(params = {}) { return request(`/api/v1/search${queryString(params)}`); }
 export function fetchKnowledgeTopics(params = {}) { return request(`/api/v1/knowledge-topics${queryString(params)}`); }
+export function fetchKnowledgeContractTopics(params = {}) { return request(`/api/v1/knowledge/topics${queryString(params)}`); }
+export function fetchKnowledgeContractTopic(identifier) { return request(`/api/v1/knowledge/topics/${encodeURIComponent(identifier)}`); }
+export function fetchKnowledgeContractCoverage(identifier) { return request(`/api/v1/knowledge/topics/${encodeURIComponent(identifier)}/coverage`); }
+export function fetchKnowledgeAdminTopic(id, adminKey) { return request(`/api/v1/knowledge/admin/topics/${id}`, { headers: adminHeaders(adminKey) }); }
+export function fetchKnowledgeReviewQueue(params = {}, adminKey) { return request(`/api/v1/knowledge/admin/proposals${queryString(params)}`, { headers: adminHeaders(adminKey) }); }
+export function fetchKnowledgeProposal(id, adminKey) { return request(`/api/v1/knowledge/proposals/${id}`, { headers: adminHeaders(adminKey) }); }
+export function createKnowledgeProposal(payload, adminKey, idempotencyKey) { return request("/api/v1/knowledge/proposals", { method: "POST", headers: { ...adminHeaders(adminKey), ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}) }, body: JSON.stringify(payload) }); }
+export function reviewKnowledgeProposal(id, payload, adminKey) { return request(`/api/v1/knowledge/admin/proposals/${id}/review`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function publishKnowledgeProposal(id, payload, adminKey) { return request(`/api/v1/knowledge/admin/proposals/${id}/publish`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
 
 export function fetchResearchSources(params = {}) { return request(`/api/v1/research-sources${queryString(params)}`); }
 
