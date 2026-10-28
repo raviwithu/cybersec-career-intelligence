@@ -11,7 +11,10 @@ def test_domain_hierarchy_and_missing_resource(client):
     response = client.get("/api/v1/domains")
     assert response.status_code == 200
     domains = response.json()
-    assert len(domains) == 10
+    assert len(domains) == 11
+    security_automation = next(item for item in domains if item["slug"] == "security-automation")
+    assert security_automation["parent_id"] is None
+    assert "SOAR" in security_automation["description"]
     embedded = next(item for item in domains if item["slug"] == "embedded-systems-security")
     assert len(embedded["children"]) == 5
     assert all(child["parent_id"] == embedded["id"] for child in embedded["children"])
@@ -138,7 +141,7 @@ def test_search_filters_pagination_and_empty_results(client):
     assert client.get("/api/v1/search?keyword=x&page_size=0").status_code == 422
 
 
-def test_seed_reference_data_is_idempotent_for_ai_domains():
+def test_seed_reference_data_is_idempotent_for_security_domains():
     from sqlalchemy import func, select
 
     from app.database import SessionLocal
@@ -148,6 +151,7 @@ def test_seed_reference_data_is_idempotent_for_ai_domains():
     expected = {
         "ai-system-security": ("AI System Security", "Use when the asset being protected is an AI or ML system."),
         "ai-enabled-security-products": ("AI-Enabled Security Products", "Use when AI is the tool used to deliver security outcomes rather than the asset being protected."),
+        "security-automation": ("Security Automation", "Use when workflow automation is the primary security capability"),
     }
     with SessionLocal() as db:
         seed_reference_data(db)
