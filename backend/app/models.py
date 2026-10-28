@@ -96,13 +96,29 @@ class SecurityDomain(Base):
     name: Mapped[str] = mapped_column(String(160), unique=True)
     slug: Mapped[str] = mapped_column(String(160), unique=True, index=True)
     description: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     display_order: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     parent: Mapped["SecurityDomain | None"] = relationship(remote_side=[id], back_populates="children")
     children: Mapped[list["SecurityDomain"]] = relationship(back_populates="parent", cascade="all, delete-orphan")
+    aliases: Mapped[list["SecurityDomainAlias"]] = relationship(back_populates="domain", cascade="all, delete-orphan")
     expectations: Mapped[list["DomainLevelExpectation"]] = relationship(back_populates="domain")
+
+
+class SecurityDomainAlias(Base):
+    __tablename__ = "security_domain_aliases"
+    __table_args__ = (UniqueConstraint("normalized_alias", name="uq_security_domain_alias_normalized"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain_id: Mapped[int] = mapped_column(ForeignKey("security_domains.id", ondelete="CASCADE"), index=True)
+    alias: Mapped[str] = mapped_column(String(160), index=True)
+    normalized_alias: Mapped[str] = mapped_column(String(160), index=True)
+    requires_context: Mapped[bool] = mapped_column(Boolean, default=False)
+    context_hint: Mapped[str | None] = mapped_column(String(255))
+
+    domain: Mapped[SecurityDomain] = relationship(back_populates="aliases")
 
 
 class CareerLevel(Base):
@@ -113,9 +129,27 @@ class CareerLevel(Base):
     slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     career_track: Mapped[str] = mapped_column(String(30), default="shared")
     description: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     display_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
+    aliases: Mapped[list["CareerLevelAlias"]] = relationship(back_populates="career_level", cascade="all, delete-orphan")
     expectations: Mapped[list["DomainLevelExpectation"]] = relationship(back_populates="career_level")
+
+
+class CareerLevelAlias(Base):
+    __tablename__ = "career_level_aliases"
+    __table_args__ = (UniqueConstraint("normalized_alias", name="uq_career_level_alias_normalized"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    career_level_id: Mapped[int] = mapped_column(ForeignKey("career_levels.id", ondelete="CASCADE"), index=True)
+    alias: Mapped[str] = mapped_column(String(80), index=True)
+    normalized_alias: Mapped[str] = mapped_column(String(80), index=True)
+    requires_context: Mapped[bool] = mapped_column(Boolean, default=False)
+    context_hint: Mapped[str | None] = mapped_column(String(255))
+
+    career_level: Mapped[CareerLevel] = relationship(back_populates="aliases")
 
 
 class CompetencyCategory(Base):
@@ -125,8 +159,42 @@ class CompetencyCategory(Base):
     name: Mapped[str] = mapped_column(String(120), unique=True)
     slug: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     description: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
+    aliases: Mapped[list["CompetencyCategoryAlias"]] = relationship(back_populates="category", cascade="all, delete-orphan")
     competencies: Mapped[list["Competency"]] = relationship(back_populates="category")
+
+
+class CompetencyCategoryAlias(Base):
+    __tablename__ = "competency_category_aliases"
+    __table_args__ = (UniqueConstraint("normalized_alias", name="uq_competency_category_alias_normalized"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    category_id: Mapped[int] = mapped_column(ForeignKey("competency_categories.id", ondelete="CASCADE"), index=True)
+    alias: Mapped[str] = mapped_column(String(120), index=True)
+    normalized_alias: Mapped[str] = mapped_column(String(120), index=True)
+    requires_context: Mapped[bool] = mapped_column(Boolean, default=False)
+    context_hint: Mapped[str | None] = mapped_column(String(255))
+
+    category: Mapped[CompetencyCategory] = relationship(back_populates="aliases")
+
+
+class TaxonomyChangeHistory(Base):
+    __tablename__ = "taxonomy_change_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    taxonomy_type: Mapped[str] = mapped_column(String(40), index=True)
+    entry_id: Mapped[int] = mapped_column(Integer, index=True)
+    action: Mapped[str] = mapped_column(String(30), index=True)
+    previous_values: Mapped[dict | None] = mapped_column(JSON)
+    updated_values: Mapped[dict | None] = mapped_column(JSON)
+    actor: Mapped[str] = mapped_column(String(120), default="administrator")
+    merge_source_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    merge_target_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
 
 
 class Competency(Base):

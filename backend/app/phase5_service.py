@@ -90,16 +90,17 @@ def _json_text(value: object) -> str:
 
 
 def taxonomy(db: Session) -> dict[str, list[dict]]:
-    domains = list(db.scalars(select(SecurityDomain).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
-    levels = list(db.scalars(select(CareerLevel).order_by(CareerLevel.display_order)).all())
-    categories = list(db.scalars(select(CompetencyCategory).order_by(CompetencyCategory.name)).all())
-    industries = list(db.scalars(select(Industry).where(Industry.is_active.is_(True)).order_by(Industry.display_order, Industry.name)).all())
+    domains = list(db.scalars(select(SecurityDomain).where(SecurityDomain.is_active.is_(True)).options(selectinload(SecurityDomain.aliases)).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
+    levels = list(db.scalars(select(CareerLevel).where(CareerLevel.is_active.is_(True)).options(selectinload(CareerLevel.aliases)).order_by(CareerLevel.display_order)).all())
+    categories = list(db.scalars(select(CompetencyCategory).where(CompetencyCategory.is_active.is_(True)).options(selectinload(CompetencyCategory.aliases)).order_by(CompetencyCategory.display_order, CompetencyCategory.name)).all())
+    industries = list(db.scalars(select(Industry).where(Industry.is_active.is_(True)).options(selectinload(Industry.aliases)).order_by(Industry.display_order, Industry.name)).all())
+    alias_data = lambda item: [{"alias": alias.alias, "requires_context": alias.requires_context, "context_hint": alias.context_hint} for alias in item.aliases]
     return {
-        "domains": [{"slug": item.slug, "name": item.name, "description": item.description, "parent_id": item.parent_id} for item in domains],
-        "career_levels": [{"slug": item.slug, "name": item.name, "track": item.career_track} for item in levels],
-        "categories": [{"slug": item.slug, "name": item.name} for item in categories],
-        "industries": [{"slug": item.slug, "name": item.name, "description": item.description} for item in industries],
-        "competencies": [{"slug": item.slug, "name": item.name, "category_slug": item.category.slug if item.category else None} for item in db.scalars(select(Competency).options(selectinload(Competency.category)).order_by(Competency.name)).all()],
+        "domains": [{"slug": item.slug, "name": item.name, "description": item.description, "parent_id": item.parent_id, "aliases": alias_data(item)} for item in domains],
+        "career_levels": [{"slug": item.slug, "name": item.name, "track": item.career_track, "description": item.description, "aliases": alias_data(item)} for item in levels],
+        "categories": [{"slug": item.slug, "name": item.name, "description": item.description, "aliases": alias_data(item)} for item in categories],
+        "industries": [{"slug": item.slug, "name": item.name, "description": item.description, "parent_id": item.parent_id, "aliases": alias_data(item)} for item in industries],
+        "competencies": [{"slug": item.slug, "name": item.name, "category_slug": item.category.slug if item.category else None} for item in db.scalars(select(Competency).join(Competency.category).where(CompetencyCategory.is_active.is_(True)).options(selectinload(Competency.category)).order_by(Competency.name)).all()],
     }
 
 
@@ -119,6 +120,10 @@ def normalize_competency(candidate: str, competencies: list[Competency]) -> tupl
 
 def classify_domains(requirement: ExtractedRequirement, domains: list[SecurityDomain]) -> list[SecurityDomain]:
     lookup = {item.slug.casefold(): item for item in domains} | {item.name.casefold(): item for item in domains}
+    for domain in domains:
+        for alias in getattr(domain, "aliases", []):
+            if not alias.requires_context:
+                lookup[alias.normalized_alias] = domain
     matches: list[SecurityDomain] = []
     for value in [*requirement.domain_slugs, *requirement.security_subdomains]:
         item = lookup.get(value.casefold())
@@ -136,6 +141,10 @@ def classify_domain(requirement: ExtractedRequirement, domains: list[SecurityDom
 
 def classify_level(requirement: ExtractedRequirement, levels: list[CareerLevel]) -> CareerLevel | None:
     lookup = {item.slug.casefold(): item for item in levels} | {item.name.casefold(): item for item in levels}
+    for level in levels:
+        for alias in getattr(level, "aliases", []):
+            if not alias.requires_context:
+                lookup[alias.normalized_alias] = level
     requested = (requirement.career_level or "").strip().casefold()
     requested = LEVEL_ALIASES.get(requested, requested)
     if requested in lookup:
@@ -158,11 +167,19 @@ def classify_level(requirement: ExtractedRequirement, levels: list[CareerLevel])
 
 def category_for(requirement: ExtractedRequirement, categories: list[CompetencyCategory]) -> CompetencyCategory | None:
     lookup = {item.slug.casefold(): item for item in categories} | {item.name.casefold(): item for item in categories}
+    for category in categories:
+        for alias in getattr(category, "aliases", []):
+            if not alias.requires_context:
+                lookup[alias.normalized_alias] = category
     return lookup.get((requirement.category_slug or CATEGORY_FALLBACK).casefold()) or lookup.get(CATEGORY_FALLBACK)
 
 
 def classify_industries(requirement: ExtractedRequirement, industries: list[Industry]) -> tuple[Industry | None, list[Industry], str]:
     lookup = {item.slug.casefold(): item for item in industries} | {item.name.casefold(): item for item in industries}
+    for industry in industries:
+        for alias in getattr(industry, "aliases", []):
+            if not alias.requires_context:
+                lookup[alias.normalized_alias] = industry
     evidence = requirement.industry_classification_evidence.strip()
     primary = next((lookup.get(value.casefold()) for value in requirement.industry_slugs if lookup.get(value.casefold())), None)
     secondary: list[Industry] = []
@@ -176,13 +193,13 @@ def classify_industries(requirement: ExtractedRequirement, industries: list[Indu
 
 
 def consolidate(db: Session, submission: ResearchSubmission, extraction: ExtractionResult, settings: Settings) -> None:
-    domains = list(db.scalars(select(SecurityDomain)).all())
-    industries = list(db.scalars(select(Industry).where(Industry.is_active.is_(True))).all())
-    levels = list(db.scalars(select(CareerLevel)).all())
-    categories = list(db.scalars(select(CompetencyCategory)).all())
+    domains = list(db.scalars(select(SecurityDomain).where(SecurityDomain.is_active.is_(True)).options(selectinload(SecurityDomain.aliases))).all())
+    industries = list(db.scalars(select(Industry).where(Industry.is_active.is_(True)).options(selectinload(Industry.aliases))).all())
+    levels = list(db.scalars(select(CareerLevel).where(CareerLevel.is_active.is_(True)).options(selectinload(CareerLevel.aliases))).all())
+    categories = list(db.scalars(select(CompetencyCategory).where(CompetencyCategory.is_active.is_(True)).options(selectinload(CompetencyCategory.aliases))).all())
     competencies = list(db.scalars(select(Competency).options(selectinload(Competency.category))).all())
     grouped: dict[tuple[int, int, int, int | None], list[tuple[ExtractedRequirement, Competency]]] = defaultdict(list)
-    category_lookup = {item.slug.casefold() for item in categories} | {item.name.casefold() for item in categories}
+    category_lookup = {item.slug.casefold() for item in categories} | {item.name.casefold() for item in categories} | {alias.normalized_alias for item in categories for alias in getattr(item, "aliases", []) if not alias.requires_context}
     for requirement in extraction.requirements:
         domain_candidates = classify_domains(requirement, domains)
         domain = domain_candidates[0] if domain_candidates else None

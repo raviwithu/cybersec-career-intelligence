@@ -190,9 +190,9 @@ def review_dashboard(
     approved = [_change_card(item) for item in filtered if item.status in {"accepted", "modified", "merged"}]
     rejected = [_change_card(item) for item in filtered if item.status == "rejected"]
     history = [_change_card(item) for item in filtered if item.status == "published"]
-    domains = list(db.scalars(select(SecurityDomain).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
-    levels = list(db.scalars(select(CareerLevel).order_by(CareerLevel.display_order)).all())
-    categories = list(db.scalars(select(CompetencyCategory).order_by(CompetencyCategory.name)).all())
+    domains = list(db.scalars(select(SecurityDomain).where(SecurityDomain.is_active.is_(True)).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
+    levels = list(db.scalars(select(CareerLevel).where(CareerLevel.is_active.is_(True)).order_by(CareerLevel.display_order)).all())
+    categories = list(db.scalars(select(CompetencyCategory).where(CompetencyCategory.is_active.is_(True)).order_by(CompetencyCategory.display_order, CompetencyCategory.name)).all())
     sources = list(db.scalars(select(ResearchSource).order_by(ResearchSource.source_title)).all())
     return ReviewDashboardResponse(
         pending_reviews=pending,

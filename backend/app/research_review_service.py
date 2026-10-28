@@ -369,7 +369,7 @@ def _check_version(change: ReviewChange, expected_version: int) -> None:
 def _validate_snapshot(db: Session, snapshot: dict[str, Any]) -> None:
     domain_ids = snapshot.get("domain_ids") or []
     requested_domain_ids = set(domain_ids)
-    found_domain_ids = set(db.scalars(select(SecurityDomain.id).where(SecurityDomain.id.in_(requested_domain_ids))).all()) if requested_domain_ids else set()
+    found_domain_ids = set(db.scalars(select(SecurityDomain.id).where(SecurityDomain.id.in_(requested_domain_ids), SecurityDomain.is_active.is_(True))).all()) if requested_domain_ids else set()
     missing_domain_ids = sorted(requested_domain_ids - found_domain_ids)
     if not requested_domain_ids:
         raise HTTPException(status_code=422, detail="At least one security domain is required")
@@ -377,10 +377,13 @@ def _validate_snapshot(db: Session, snapshot: dict[str, Any]) -> None:
         raise HTTPException(status_code=422, detail=f"Security domain ids were not found: {missing_domain_ids}")
     for model, key, label in ((CareerLevel, "career_level_id", "career level"), (CompetencyCategory, "category_id", "competency category")):
         value = snapshot.get(key)
-        if value is None or db.get(model, value) is None:
-            raise HTTPException(status_code=422, detail=f"A valid {label} is required")
-    if snapshot.get("industry_id") is not None and db.get(Industry, snapshot["industry_id"]) is None:
-        raise HTTPException(status_code=422, detail="A valid industry is required")
+        item = db.get(model, value) if value is not None else None
+        if item is None or not item.is_active:
+            raise HTTPException(status_code=422, detail=f"A valid active {label} is required")
+    if snapshot.get("industry_id") is not None:
+        industry = db.get(Industry, snapshot["industry_id"])
+        if industry is None or not industry.is_active:
+            raise HTTPException(status_code=422, detail="A valid active industry is required")
     if snapshot.get("industry_classification_status") == "classified" and (snapshot.get("industry_id") is None or not snapshot.get("industry_classification_evidence", "").strip()):
         raise HTTPException(status_code=422, detail="Classified industry findings require an industry and supporting evidence")
     if not snapshot.get("competency_name", "").strip():

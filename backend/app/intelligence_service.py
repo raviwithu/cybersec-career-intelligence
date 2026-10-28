@@ -73,7 +73,7 @@ def _normalize_ids(db: Session, *, industry: str | None, domain: str | None, car
     domain_ids: list[int] | None = None
     domain_item = None
     if domain:
-        domains = list(db.scalars(select(SecurityDomain).order_by(SecurityDomain.display_order)).all())
+        domains = list(db.scalars(select(SecurityDomain).where(SecurityDomain.is_active.is_(True)).order_by(SecurityDomain.display_order)).all())
         matches = [item for item in domains if item.slug.casefold() == domain.casefold() or item.name.casefold() == domain.casefold()]
         if not matches:
             raise HTTPException(status_code=404, detail=f"Security domain '{domain}' was not found")
@@ -91,12 +91,12 @@ def _normalize_ids(db: Session, *, industry: str | None, domain: str | None, car
             pending.extend(children[current])
     level_item = None
     if career_level:
-        level_item = db.scalar(select(CareerLevel).where(or_(CareerLevel.slug == career_level, func.lower(CareerLevel.name) == career_level.casefold())))
+        level_item = db.scalar(select(CareerLevel).where(CareerLevel.is_active.is_(True), or_(CareerLevel.slug == career_level, func.lower(CareerLevel.name) == career_level.casefold())))
         if level_item is None:
             raise HTTPException(status_code=404, detail=f"Career level '{career_level}' was not found")
     category_item = None
     if category:
-        category_item = db.scalar(select(CompetencyCategory).where(or_(CompetencyCategory.slug == category, func.lower(CompetencyCategory.name) == category.casefold())))
+        category_item = db.scalar(select(CompetencyCategory).where(CompetencyCategory.is_active.is_(True), or_(CompetencyCategory.slug == category, func.lower(CompetencyCategory.name) == category.casefold())))
         if category_item is None:
             raise HTTPException(status_code=404, detail=f"Competency category '{category}' was not found")
     return industry_item, domain_item, domain_ids, level_item, category_item
@@ -124,6 +124,12 @@ def _rows(
         .join(SecurityDomain, SecurityDomain.id == DomainLevelExpectation.domain_id)
         .join(CareerLevel, CareerLevel.id == DomainLevelExpectation.career_level_id)
         .outerjoin(Industry, Industry.id == DomainLevelExpectation.industry_id)
+        .where(
+            SecurityDomain.is_active.is_(True),
+            CareerLevel.is_active.is_(True),
+            CompetencyCategory.is_active.is_(True),
+            or_(Industry.id.is_(None), Industry.is_active.is_(True)),
+        )
     )
     if industry_item:
         query = query.where(expectation_scope_clause(industry_item.id))

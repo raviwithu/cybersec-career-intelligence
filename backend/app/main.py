@@ -17,6 +17,7 @@ from .job_search_api import router as job_search_router
 from .knowledge import router as knowledge_router
 from .phase5_api import router as phase5_router
 from .phase6_api import router as phase6_router
+from .taxonomy_api import router as taxonomy_router
 from .research_review_api import router as research_review_router
 from .logging_config import configure_logging
 from .models import CareerProfile
@@ -50,6 +51,7 @@ app.include_router(knowledge_router, prefix=settings.api_prefix)
 app.include_router(read_router, prefix=settings.api_prefix)
 app.include_router(phase5_router, prefix=settings.api_prefix)
 app.include_router(phase6_router, prefix=settings.api_prefix)
+app.include_router(taxonomy_router, prefix=settings.api_prefix)
 app.include_router(job_search_router, prefix=settings.api_prefix)
 app.include_router(research_review_router, prefix=settings.api_prefix)
 app.include_router(intelligence_router, prefix=settings.api_prefix)

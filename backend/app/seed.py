@@ -12,6 +12,9 @@ from .models import (
     Industry,
     IndustryAlias,
     SecurityDomain,
+    SecurityDomainAlias,
+    CareerLevelAlias,
+    CompetencyCategoryAlias,
 )
 
 ILLUSTRATIVE_PREFIX = "Illustrative development seed; not verified market research. "
@@ -45,6 +48,26 @@ DOMAIN_SEED = [
     ("ai-enabled-security-products", "AI-Enabled Security Products", "Building and operating security products that use AI or machine learning as a core capability: ML-based threat detection and anomaly detection, AI-assisted SOC triage and investigation, LLM-powered security copilots and automation, malware and phishing classification models, and the data pipelines, model evaluation, false-positive tuning, and drift monitoring behind them. Use when AI is the tool used to deliver security outcomes rather than the asset being protected.", None, 10),
     ("security-automation", "Security Automation", "Automating security workflows and controls through SOAR, workflow orchestration, security-as-code, policy-as-code, automated vulnerability management, control validation, and repeatable detection or response actions. Use when workflow automation is the primary security capability, rather than AI being the protected asset or the enabling technology.", None, 11),
 ]
+
+DOMAIN_ALIAS_SEED = [
+    ("security-operations", "SecOps", False, None),
+    ("governance-risk-compliance", "GRC", False, None),
+]
+
+CAREER_LEVEL_ALIAS_SEED = [
+    ("junior", "Entry", False, None),
+    ("intermediate", "Mid-level", False, None),
+    ("senior", "Lead", False, None),
+    ("architect", "Staff", False, None),
+    ("architect", "Principal", False, None),
+    ("director", "Head", False, None),
+]
+
+CATEGORY_ALIAS_SEED = [
+    ("security-standards", "Standards and Regulations", False, None),
+    ("education", "Qualifications", False, None),
+]
+
 
 EMBEDDED_SUBDOMAINS = [
     ("embedded-application-security", "Embedded Application Security", "Security of software applications running on embedded devices.", 1),
@@ -161,6 +184,12 @@ def seed_reference_data(db: Session) -> None:
             db.flush()
         domains[slug] = domain
 
+    for domain_slug, alias, requires_context, context_hint in DOMAIN_ALIAS_SEED:
+        domain = domains[domain_slug]
+        normalized = alias.casefold().strip()
+        if db.scalar(select(SecurityDomainAlias).where(SecurityDomainAlias.normalized_alias == normalized)) is None:
+            db.add(SecurityDomainAlias(domain_id=domain.id, alias=alias, normalized_alias=normalized, requires_context=requires_context, context_hint=context_hint))
+
     embedded_parent = domains["embedded-systems-security"]
     for slug, name, description, display_order in EMBEDDED_SUBDOMAINS:
         child = _domain(db, slug)
@@ -170,6 +199,14 @@ def seed_reference_data(db: Session) -> None:
     for slug, name, track, description, display_order in CAREER_LEVEL_SEED:
         if db.scalar(select(CareerLevel).where(CareerLevel.slug == slug)) is None:
             db.add(CareerLevel(slug=slug, name=name, career_track=track, description=description, display_order=display_order))
+    db.flush()
+
+    levels = {item.slug: item for item in db.scalars(select(CareerLevel)).all()}
+    for level_slug, alias, requires_context, context_hint in CAREER_LEVEL_ALIAS_SEED:
+        level = levels[level_slug]
+        normalized = alias.casefold().strip()
+        if db.scalar(select(CareerLevelAlias).where(CareerLevelAlias.normalized_alias == normalized)) is None:
+            db.add(CareerLevelAlias(career_level_id=level.id, alias=alias, normalized_alias=normalized, requires_context=requires_context, context_hint=context_hint))
 
     categories = {}
     for slug, name in CATEGORY_SEED:
@@ -179,6 +216,12 @@ def seed_reference_data(db: Session) -> None:
             db.add(category)
             db.flush()
         categories[slug] = category
+
+    for category_slug, alias, requires_context, context_hint in CATEGORY_ALIAS_SEED:
+        category = categories[category_slug]
+        normalized = alias.casefold().strip()
+        if db.scalar(select(CompetencyCategoryAlias).where(CompetencyCategoryAlias.normalized_alias == normalized)) is None:
+            db.add(CompetencyCategoryAlias(category_id=category.id, alias=alias, normalized_alias=normalized, requires_context=requires_context, context_hint=context_hint))
 
     competencies = {}
     for slug, name, category_slug, description in COMPETENCY_SEED:

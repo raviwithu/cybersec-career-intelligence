@@ -466,6 +466,14 @@ npm run dev
 
 The default development API base is `http://localhost:8100`. Set `VITE_API_BASE_URL` if the backend is hosted elsewhere. The Compose production-style frontend uses Nginx and proxies `/api/` to the backend service.
 
+## Taxonomy Management
+
+Research administrators can open **Research Admin → Taxonomy Management** to manage the shared Security Domains, Industries, Career Levels, and Competency Categories used throughout the application. The workspace supports searchable lists, hierarchical domain/subdomain and industry relationships, aliases, ordering, active/inactive lifecycle, dependency impact, transactional merges, protected deletion, and an audit history.
+
+Active database taxonomy values are used by research ingestion, AI classification, Research Review, Career Readiness, explorers, comparisons, matrix filters, and analytics. Deactivation hides an entry from new classification choices without removing historical evidence or published expectations. Set `ADMIN_API_KEY` in the project `.env` and apply the Phase 9 migration before using mutations.
+
+See [Taxonomy Management documentation](docs/taxonomy-management.md) for the API endpoints, migration details, merge safeguards, and deployment instructions.
+
 ## Testing and validation
 
 Run the repository’s automated checks:
@@ -483,7 +491,7 @@ cd ..
 docker compose config --quiet
 ```
 
-The backend tests cover health behavior, knowledge-base APIs, research workflows, provider discovery, authentication failures, response normalization, model selection, evaluation, migrations, and submission deletion safety/cleanup. Frontend tests cover the main application, Research Admin workflows, deletion confirmation, list refresh, and API error handling.
+The backend tests cover health behavior, knowledge-base APIs, research workflows, provider discovery, authentication failures, response normalization, model selection, evaluation, migrations, submission deletion safety/cleanup, and taxonomy CRUD, hierarchy, alias, merge, lifecycle, deletion, and audit behavior. Frontend tests cover the main application, Research Admin workflows, Taxonomy Management, deletion confirmation, list refresh, and API error handling.
 
 For migration validation in a disposable SQLite file, use the existing Alembic configuration with a temporary `DATABASE_URL`, then remove the file. Production-like deployments should use PostgreSQL from Compose.
 
@@ -526,6 +534,7 @@ For migration validation in a disposable SQLite file, use the existing Alembic c
 - [Phase 3 REST API details](docs/phase3-api.md)
 - [Phase 4 frontend details](docs/phase4-frontend.md)
 - [Phase 5 research and provider workflow](docs/phase5-research.md)
+- [Taxonomy Management](docs/taxonomy-management.md)
 
 ## License
 

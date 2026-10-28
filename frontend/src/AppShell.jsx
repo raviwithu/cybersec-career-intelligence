@@ -6,6 +6,7 @@ import { CompetenciesPage, ComparePage, DashboardPage, DomainsPage, MatrixPage, 
 import CareerReadinessPage from "./CareerReadinessPage";
 import AutomatedResearchPage from "./AutomatedResearchPage";
 import ResearchAdminPage from "./ResearchAdminPage";
+import TaxonomyManagementPage from "./TaxonomyManagementPage";
 import ResearchReviewPage from "./ResearchReviewPage";
 import IntelligencePage from "./IntelligencePage";
 import { useApi } from "./useApi";
@@ -19,6 +20,7 @@ const navigation = [
   { id: "competencies", label: "Competencies", icon: "◎" },
   { id: "search", label: "Global search", icon: "⌕" },
   { id: "research", label: "Research admin", icon: "✦" },
+  { id: "taxonomy-management", label: "Taxonomy Management", icon: "⌘" },
   { id: "automated-research", label: "Automated Research", icon: "↻" },
   { id: "research-review", label: "Research Review", icon: "✓" },
   { id: "intelligence-dashboard", label: "Intelligence Dashboard", icon: "◉" },
@@ -86,7 +88,8 @@ export default function AppShell() {
           : view === "competencies" ? <CompetenciesPage domains={data.domains} levels={data.levels} categories={data.categories} selectedIndustry={selectedIndustry} selectedCompetencyId={selectedCompetencyId} onSelectCompetency={setSelectedCompetencyId} />
             : view === "search" ? <SearchPage domains={data.domains} levels={data.levels} selectedIndustry={selectedIndustry} onCompetency={openCompetency} onDomain={openDomain} />
             : view === "research" ? <ResearchAdminPage />
-              : view === "automated-research" ? <AutomatedResearchPage onOpenReview={() => navigate("research-review")} />
+              : view === "taxonomy-management" ? <TaxonomyManagementPage />
+                : view === "automated-research" ? <AutomatedResearchPage onOpenReview={() => navigate("research-review")} />
                 : view === "research-review" ? <ResearchReviewPage />
                   : intelligenceViews[view] ? <IntelligencePage data={data} initialView={intelligenceViews[view]} selectedCompetencyId={selectedCompetencyId} onNavigate={navigate} />
                     : <ProfilePage />;

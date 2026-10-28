@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, selectinload, with_loader_criteria
 
 from .admin_auth import require_admin
 from .database import get_db
@@ -50,14 +50,16 @@ def serialize_expectation(item: DomainLevelExpectation) -> ExpectationResponse:
 
 @router.get("/taxonomy")
 def taxonomy(db: Session = Depends(get_db)) -> dict:
-    domains = db.scalars(select(SecurityDomain).where(SecurityDomain.parent_id.is_(None)).options(selectinload(SecurityDomain.children)).order_by(SecurityDomain.display_order)).all()
-    levels = db.scalars(select(CareerLevel).order_by(CareerLevel.display_order)).all()
-    categories = db.scalars(select(CompetencyCategory).order_by(CompetencyCategory.name)).all()
+    active_domains = with_loader_criteria(SecurityDomain, SecurityDomain.is_active.is_(True), include_aliases=True)
+    domains = db.scalars(select(SecurityDomain).where(SecurityDomain.parent_id.is_(None), SecurityDomain.is_active.is_(True)).options(selectinload(SecurityDomain.children), selectinload(SecurityDomain.aliases), active_domains).order_by(SecurityDomain.display_order)).all()
+    levels = db.scalars(select(CareerLevel).where(CareerLevel.is_active.is_(True)).options(selectinload(CareerLevel.aliases)).order_by(CareerLevel.display_order)).all()
+    categories = db.scalars(select(CompetencyCategory).where(CompetencyCategory.is_active.is_(True)).options(selectinload(CompetencyCategory.aliases)).order_by(CompetencyCategory.display_order, CompetencyCategory.name)).all()
     competencies = db.scalars(select(Competency).options(selectinload(Competency.category)).order_by(Competency.name)).all()
     return {
         "domains": [{
             "id": domain.id, "name": domain.name, "slug": domain.slug, "description": domain.description,
-            "display_order": domain.display_order,
+            "display_order": domain.display_order, "is_active": domain.is_active,
+            "aliases": [{"alias": alias.alias, "requires_context": alias.requires_context, "context_hint": alias.context_hint} for alias in domain.aliases],
             "children": [DomainResponse.model_validate(child).model_dump(mode="json") for child in sorted(domain.children, key=lambda item: item.display_order)],
         } for domain in domains],
         "career_levels": [CareerLevelResponse.model_validate(level).model_dump(mode="json") for level in levels],
