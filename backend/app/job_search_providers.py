@@ -153,13 +153,16 @@ class JSearchProvider:
         raise last_error or CollectionError("JSearch request failed")
 
     def search(self, criteria: JobSearchCriteria, *, cursor: str | None = None, limit: int) -> JobSearchPage:
-        page = int(cursor) if cursor and cursor.isdigit() else 1
+        # Cursor is "<page>" (legacy /search) or "<page>:<api cursor>" (/search-v2).
+        page_text, _, api_cursor = (cursor or "").partition(":")
+        page = int(page_text) if page_text.isdigit() else 1
         query = " ".join(criteria.keywords)
         if criteria.location:
             query = f"{query} in {criteria.location}"
         params = {
             "query": query,
-            "page": str(page),
+            "page": "" if api_cursor else str(page),
+            "cursor": api_cursor,
             "num_pages": "1",
             "country": criteria.country,
             "date_posted": {"any": "all", "24h": "today"}.get(criteria.date_posted, criteria.date_posted),
@@ -168,11 +171,22 @@ class JSearchProvider:
         }
         payload = self._request_json(self.settings.jsearch_api_endpoint, params)
         self.stats.pages_requested += 1
-        rows = payload.get("data", [])
+        data = payload.get("data", [])
+        next_api_cursor = None
+        if isinstance(data, dict):
+            rows = data.get("jobs", [])
+            next_api_cursor = data.get("cursor") if isinstance(data.get("cursor"), str) else None
+        else:
+            rows = data
         if not isinstance(rows, list):
             raise CollectionError("JSearch response did not contain a data list", status_code=422)
         items = [item for row in rows if isinstance(row, dict) for item in [self._item(row, criteria.country)] if item is not None]
-        next_cursor = str(page + 1) if items and page < min(criteria.max_pages, self.settings.jsearch_max_pages_per_run) else None
+        next_cursor = None
+        if items and page < min(criteria.max_pages, self.settings.jsearch_max_pages_per_run):
+            if isinstance(data, dict):
+                next_cursor = f"{page + 1}:{next_api_cursor}" if next_api_cursor else None
+            else:
+                next_cursor = str(page + 1)
         total = payload.get("estimated_total") or payload.get("total")
         return JobSearchPage(items=items[:limit], total=int(total) if isinstance(total, int) else None, next_cursor=next_cursor)
 

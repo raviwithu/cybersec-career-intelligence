@@ -251,6 +251,31 @@ def test_jsearch_parses_official_fields_paginates_and_fetches_details():
     assert "rapid-secret" not in str(page.items[0].metadata)
 
 
+def test_jsearch_v2_parses_jobs_and_follows_api_cursor():
+    first_page = {"status": "OK", "data": {"cursor": "api-cursor-2", "jobs": [{
+        "job_id": "v2-1", "job_title": "Security Manager", "job_apply_link": "https://jobs.example/v2-one",
+        "job_description": "Complete security manager description " * 8, "job_country": "US",
+    }]}}
+    last_page = {"status": "OK", "data": {"cursor": None, "jobs": [{
+        "job_id": "v2-2", "job_title": "Information Security Manager", "job_apply_link": "https://jobs.example/v2-two",
+        "job_description": "Complete information security description " * 8, "job_country": "US",
+    }]}}
+    fetcher = JSearchFetcher([json.dumps(first_page).encode(), json.dumps(last_page).encode()])
+    from app.job_search_providers import JSearchProvider
+
+    provider = JSearchProvider(jsearch_settings(), fetcher=fetcher)
+    criteria = JobSearchCriteria(["security manager"], "", "", "today", "", "any", 10, "us", 3)
+    page = provider.search(criteria, limit=10)
+    next_page = provider.search(criteria, cursor=page.next_cursor, limit=10)
+
+    assert page.items[0].title == "Security Manager"
+    assert page.next_cursor == "2:api-cursor-2"
+    assert "cursor=api-cursor-2" in fetcher.calls[1][0]
+    assert "page=" not in fetcher.calls[1][0]
+    assert next_page.items[0].title == "Information Security Manager"
+    assert next_page.next_cursor is None
+
+
 def test_jsearch_rate_limit_retries_and_request_budget():
     from app.job_search_providers import JSearchProvider
 
