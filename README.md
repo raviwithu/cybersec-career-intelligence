@@ -4,7 +4,7 @@ CyberSec Career Intelligence is a competency intelligence platform for analyzing
 
 It is **not** a job board, job tracker, job aggregator, applicant-tracking system, or company-research platform. The application turns research inputs into reviewable, taxonomy-aware competency expectations.
 
-> **Development status:** Phases 1–5 are implemented. The seeded competency and expectation records are explicitly illustrative development data, not verified market research.
+> **Development status:** Phases 1–7 are implemented. The seeded competency and expectation records are explicitly illustrative development data, not verified market research; intelligence analytics use only published source-linked evidence.
 
 ## Features
 
@@ -33,6 +33,17 @@ It is **not** a job board, job tracker, job aggregator, applicant-tracking syste
 - Deletion requires administrator authentication and confirmation; failed, rejected, and approved-but-unpublished submissions can be removed with their unpublished findings, drafts, evidence links, and review decisions.
 - Deletion is blocked while processing and whenever published expectations, published changes, or published batches depend on the submission; shared taxonomy and published knowledge are preserved.
 - Only explicitly published expectations are visible through the public knowledge-base APIs.
+
+
+### Phase 7 competency intelligence
+
+- Competency-frequency dashboard, career progression comparison, industry comparison, emerging-skill trends, evidence explorer, and historical published-evidence views.
+- All analytics use distinct published research sources as denominators; repeated expectation links within a source do not inflate rates.
+- Explicit uncertainty, coverage, sample-size, and “missing evidence is not evidence of absence” warnings accompany comparative results.
+- Private competency profiles use one-time bearer keys; only a hash is persisted, assessments are optional, and no personal profile is exposed through public catalog endpoints.
+- Gap analysis distinguishes matching, development-area, and unassessed competencies. Roadmaps separate published evidence from practical learning suggestions.
+- The career-intelligence assistant retrieves published evidence first, cites retained excerpts, refuses unsupported scopes, and uses the existing host Ollama/OpenWebUI providers only.
+- Phase 7 does not add job/company tracking entities; existing authorized provider-search functionality remains separate from intelligence analytics.
 
 ### AI providers and model management
 
@@ -86,7 +97,7 @@ Technical and management career paths are deliberately distinct. Junior, Interme
 
 ## Architecture
 
-The application runs as four project-owned Compose services and connects to AI providers outside the Compose application stack when configured:
+The application runs as five project-owned Compose services and connects to AI providers outside the Compose application stack when configured:
 
 ```mermaid
 flowchart LR
@@ -114,7 +125,7 @@ flowchart LR
 | --- | --- | --- |
 | Frontend | React, Vite, Nginx | Knowledge-base exploration and administrator research console. |
 | Backend | FastAPI, Uvicorn, SQLAlchemy | REST API, validation, research workflow, provider orchestration, and migrations. |
-| Database | `pgvector/pgvector:pg16` | Taxonomy, competencies, expectations, sources, research submissions, drafts, and model selections/evaluations. |
+| Database | `pgvector/pgvector:pg16` | Taxonomy, competencies, expectations, sources, research submissions, drafts, private competency profiles, and model selections/evaluations. |
 | Redis | `redis:7-alpine` | Connectivity/readiness integration. The current application does not implement a Redis queue or cache worker. |
 | Ollama | Host-managed external service | Optional local inference provider. It is not a Compose service in this project. |
 | OpenWebUI | Optional external/provider endpoint | Optional authenticated inference and model-discovery provider. It may proxy local Ollama models or external services. |
@@ -172,7 +183,7 @@ The following are separated between repository-verified facts and practical esti
 **Verified by this repository:**
 
 - Docker Compose configuration resolves successfully with the required `.env` values.
-- The project defines four services: `backend`, `frontend`, `postgres`, and `redis`.
+- The project defines five services: `backend`, `frontend`, `research-scheduler`, `postgres`, and `redis`.
 - The backend and frontend Dockerfiles define health checks.
 - PostgreSQL and Redis have Compose health checks; backend startup waits for both healthy dependencies, and frontend startup waits for the backend health check.
 - The Compose stack uses project-specific network and volume names: `cybersec-career-intelligence-network` and `cybersec-career-intelligence-postgres-data`.

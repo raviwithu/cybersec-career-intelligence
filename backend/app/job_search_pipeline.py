@@ -25,11 +25,14 @@ def create_job_search_run(db: Session, search: JobSearch, *, trigger: str, actor
     return run
 
 
-def _criteria(search: JobSearch, max_results: int | None = None) -> JobSearchCriteria:
+def _criteria(search: JobSearch, settings: Settings, max_results: int | None = None) -> JobSearchCriteria:
+    configured_max = max_results or search.max_results
+    if search.provider_type == "jsearch":
+        configured_max = min(configured_max, settings.jsearch_max_results_per_run)
     return JobSearchCriteria(
         keywords=search.keywords or [], location=search.location, experience_level=search.experience_level,
         date_posted=search.date_posted, employment_type=search.employment_type, work_mode=search.work_mode,
-        max_results=max_results or search.max_results,
+        max_results=configured_max, country=search.country or "us", max_pages=search.max_pages,
     )
 
 
@@ -72,10 +75,13 @@ def _process_result(db: Session, run: JobSearchRun, search: JobSearch, source: A
     try:
         description = _complete_description(provider, item)
         result.description_text = description
+        result.description_complete = True
         result.content_hash = _fingerprint(description)
         run.descriptions_retrieved += 1
+        run.complete_descriptions += 1
         if was_manual_review:
             run.results_unavailable = max(0, run.results_unavailable - 1)
+            run.partial_descriptions = max(0, run.partial_descriptions - 1)
         version, duplicate, duplicate_version = _create_version(db, source, CollectedItem(title=item.title, url=item.url, content=description, metadata={**(item.metadata or {}), "job_search_id": search.id, "job_search_result_id": result.id, "provider_type": search.provider_type}))
         db.flush()
         result.content_version_id = version.id if version else None
@@ -99,6 +105,7 @@ def _process_result(db: Session, run: JobSearchRun, search: JobSearch, source: A
         if result.status == "manual_review_required":
             run.manual_review_required += 1
             run.results_unavailable += 1
+            run.partial_descriptions += 1
         else:
             run.failed += 1
     except (ValueError, TypeError) as exc:
@@ -114,7 +121,13 @@ def _pages(provider: JobSearchProvider, criteria: JobSearchCriteria) -> tuple[li
     reported_total: int | None = None
     while len(items) < criteria.max_results:
         page_limit = min(100, criteria.max_results - len(items))
-        page = provider.search(criteria, cursor=cursor, limit=page_limit)
+        try:
+            page = provider.search(criteria, cursor=cursor, limit=page_limit)
+        except CollectionError as exc:
+            if items:
+                setattr(provider, "partial_error", str(exc))
+                break
+            raise
         if reported_total is None:
             reported_total = page.total
         items.extend(page.items[:page_limit])
@@ -148,24 +161,32 @@ def execute_job_search_run(db: Session, run: JobSearchRun, settings: Settings, *
     try:
         provider = provider or build_provider(search.provider_type, settings)
         run.provider_status = "configured"
-        criteria = _criteria(search, max_results)
+        criteria = _criteria(search, settings, max_results)
         discovered, reported_total = (imported_items or [], provider_total) if imported_items is not None else _pages(provider, criteria)
         unique, duplicate_count = _deduplicate(discovered)
         run.provider_total = reported_total
+        provider_stats = getattr(provider, "stats", None)
+        run.pages_requested = int(getattr(provider_stats, "pages_requested", 0))
+        run.api_requests_used = int(getattr(provider_stats, "api_requests", 0))
+        run.rate_limit_errors = int(getattr(provider_stats, "rate_limit_errors", 0))
+        run.quota_errors = int(getattr(provider_stats, "quota_errors", 0))
         run.results_retrieved = len(discovered)
         run.unique_results = len(unique)
         run.duplicates_skipped = duplicate_count
         search.configuration = {**(search.configuration or {}), "last_provider_total": reported_total, "last_retrieved": len(discovered), "last_unique": len(unique)}
         for item in unique:
-            result = JobSearchResult(search_id=search.id, run_id=run.id, external_id=item.external_id, canonical_url=item.url, title=item.title[:300], location=item.location[:300], snippet=item.snippet[:20_000], description_url=item.description_url, metadata_payload=item.metadata or {})
+            result = JobSearchResult(search_id=search.id, run_id=run.id, external_id=item.external_id, canonical_url=item.url, title=item.title[:300], location=item.location[:300], country=item.country[:2], employment_type=item.employment_type[:80], posted_at=item.posted_at, snippet=item.snippet[:20_000], description_url=item.description_url, metadata_payload=item.metadata or {})
             db.add(result)
             db.flush()
             run.results_queued += 1
             _process_result(db, run, search, source, result, item, provider, settings, provider_registry)
         run.requested_result_ids = [result.id for result in run.results]
-        run.status = "completed_with_errors" if run.failed or run.manual_review_required else "completed"
+        partial_error = getattr(provider, "partial_error", None)
+        if partial_error:
+            run.error_message = partial_error
+        run.status = "completed_with_errors" if run.failed or run.manual_review_required or partial_error else "completed"
         search.last_status = run.status
-        search.last_error = None if run.status == "completed" else "One or more results require review or retry"
+        search.last_error = None if run.status == "completed" else (run.error_message or "One or more results require review or retry")
     except Exception as exc:
         db.rollback()
         run = db.get(JobSearchRun, run.id)
@@ -175,12 +196,20 @@ def execute_job_search_run(db: Session, run: JobSearchRun, settings: Settings, *
         search.last_status = run.status
         search.last_error = run.error_message
     finally:
+        provider_stats = getattr(provider, "stats", None)
+        run.pages_requested = max(run.pages_requested, int(getattr(provider_stats, "pages_requested", 0)))
+        run.api_requests_used = max(run.api_requests_used, int(getattr(provider_stats, "api_requests", 0)))
+        run.rate_limit_errors = max(run.rate_limit_errors, int(getattr(provider_stats, "rate_limit_errors", 0)))
+        run.quota_errors = max(run.quota_errors, int(getattr(provider_stats, "quota_errors", 0)))
         run.completed_at = now()
         run.summary = {
-            "provider_total": run.provider_total, "results_retrieved": run.results_retrieved, "unique_results": run.unique_results,
-            "results_queued": run.results_queued, "descriptions_retrieved": run.descriptions_retrieved,
+            "provider_total": run.provider_total, "pages_requested": run.pages_requested, "api_requests_used": run.api_requests_used,
+            "results_retrieved": run.results_retrieved, "unique_results": run.unique_results,
+            "results_queued": run.results_queued, "complete_descriptions": run.complete_descriptions,
+            "partial_descriptions": run.partial_descriptions, "descriptions_retrieved": run.descriptions_retrieved,
             "successfully_analyzed": run.successfully_analyzed, "duplicates_skipped": run.duplicates_skipped,
             "manual_review_required": run.manual_review_required, "failed": run.failed,
+            "rate_limit_errors": run.rate_limit_errors, "quota_errors": run.quota_errors,
         }
         db.commit()
         lock.release()
@@ -210,7 +239,7 @@ def retry_job_search_results(db: Session, run_id: int, settings: Settings, *, pr
         for result in run.results:
             if result.status not in {"failed", "manual_review_required"}:
                 continue
-            item = JobSearchItem(title=result.title, url=result.canonical_url, description_url=result.description_url, description=result.description_text, snippet=result.snippet, location=result.location, external_id=result.external_id, metadata=result.metadata_payload)
+            item = JobSearchItem(title=result.title, url=result.canonical_url, description_url=result.description_url, description=result.description_text, snippet=result.snippet, location=result.location, external_id=result.external_id, metadata=result.metadata_payload, country=result.country, employment_type=result.employment_type, posted_at=result.posted_at)
             _process_result(db, run, search, source, result, item, provider, settings, provider_registry or providers)
         run.status = "completed_with_errors" if run.failed or run.manual_review_required else "completed"
     except Exception as exc:
@@ -241,7 +270,7 @@ def run_due_job_searches(settings: Settings) -> int:
         searches = list(db.scalars(select(JobSearch).where(JobSearch.enabled.is_(True), JobSearch.search_frequency != "manual", JobSearch.next_run_at.is_not(None), JobSearch.next_run_at <= now())).all())
         for search in searches:
             run = create_job_search_run(db, search, trigger="scheduled", actor="scheduler")
-            search.next_run_at = now() + timedelta(days=1 if search.search_frequency == "daily" else 7)
+            search.next_run_at = now() + timedelta(minutes=max(search.interval_minutes, 5))
             db.commit()
             execute_job_search_run(db, run, settings)
             count += 1

@@ -80,6 +80,12 @@ class AIProviderRegistry:
             return client.extract(content, taxonomy)
         return client.extract(content, taxonomy, model=model_id)
 
+
+    def complete_selected(self, provider: str, model_id: str, system: str, prompt: str) -> str:
+        self._validate_model_id(model_id)
+        client = self.client(provider)
+        return client.complete(system, prompt, model=model_id)
+
     def test_model(self, provider: str, model_id: str) -> float:
         self._validate_model_id(model_id)
         return self.client(provider).test_model(model_id)

@@ -22,6 +22,39 @@ class CareerProfile(Base):
 
 
 
+class CompetencyProfile(Base):
+    __tablename__ = "competency_profiles"
+    __table_args__ = (UniqueConstraint("profile_token_hash", name="uq_competency_profile_token_hash"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    profile_token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    target_industry_id: Mapped[int | None] = mapped_column(ForeignKey("industries.id", ondelete="SET NULL"), index=True)
+    target_domain_id: Mapped[int | None] = mapped_column(ForeignKey("security_domains.id", ondelete="SET NULL"), index=True)
+    target_career_level_id: Mapped[int | None] = mapped_column(ForeignKey("career_levels.id", ondelete="SET NULL"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    target_industry: Mapped["Industry | None"] = relationship()
+    target_domain: Mapped["SecurityDomain | None"] = relationship()
+    target_career_level: Mapped["CareerLevel | None"] = relationship()
+    assessments: Mapped[list["CompetencyAssessment"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
+
+
+class CompetencyAssessment(Base):
+    __tablename__ = "competency_assessments"
+    __table_args__ = (UniqueConstraint("profile_id", "competency_id", name="uq_competency_assessment_profile_competency"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("competency_profiles.id", ondelete="CASCADE"), index=True)
+    competency_id: Mapped[int] = mapped_column(ForeignKey("competencies.id", ondelete="CASCADE"), index=True)
+    proficiency: Mapped[str] = mapped_column(String(30), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    profile: Mapped[CompetencyProfile] = relationship(back_populates="assessments")
+    competency: Mapped["Competency"] = relationship()
+
+
+
 class Industry(Base):
     __tablename__ = "industries"
 
@@ -246,11 +279,13 @@ class JobSearch(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
     location: Mapped[str] = mapped_column(String(200), default="")
+    country: Mapped[str] = mapped_column(String(2), default="us")
     experience_level: Mapped[str] = mapped_column(String(80), default="")
     date_posted: Mapped[str] = mapped_column(String(40), default="any")
     employment_type: Mapped[str] = mapped_column(String(80), default="")
     work_mode: Mapped[str] = mapped_column(String(40), default="")
     max_results: Mapped[int] = mapped_column(Integer, default=100)
+    max_pages: Mapped[int] = mapped_column(Integer, default=3)
     search_frequency: Mapped[str] = mapped_column(String(20), default="manual")
     interval_minutes: Mapped[int] = mapped_column(Integer, default=1440)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
@@ -276,15 +311,21 @@ class JobSearchRun(Base):
     status: Mapped[str] = mapped_column(String(30), default="queued", index=True)
     provider_status: Mapped[str] = mapped_column(String(40), default="unconfigured")
     provider_total: Mapped[int | None] = mapped_column(Integer)
+    pages_requested: Mapped[int] = mapped_column(Integer, default=0)
+    api_requests_used: Mapped[int] = mapped_column(Integer, default=0)
     results_retrieved: Mapped[int] = mapped_column(Integer, default=0)
     unique_results: Mapped[int] = mapped_column(Integer, default=0)
     results_queued: Mapped[int] = mapped_column(Integer, default=0)
     results_unavailable: Mapped[int] = mapped_column(Integer, default=0)
+    complete_descriptions: Mapped[int] = mapped_column(Integer, default=0)
+    partial_descriptions: Mapped[int] = mapped_column(Integer, default=0)
     descriptions_retrieved: Mapped[int] = mapped_column(Integer, default=0)
     successfully_analyzed: Mapped[int] = mapped_column(Integer, default=0)
     duplicates_skipped: Mapped[int] = mapped_column(Integer, default=0)
     manual_review_required: Mapped[int] = mapped_column(Integer, default=0)
     failed: Mapped[int] = mapped_column(Integer, default=0)
+    rate_limit_errors: Mapped[int] = mapped_column(Integer, default=0)
+    quota_errors: Mapped[int] = mapped_column(Integer, default=0)
     requested_result_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
     summary: Mapped[dict] = mapped_column(JSON, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text)
@@ -308,9 +349,13 @@ class JobSearchResult(Base):
     canonical_url: Mapped[str] = mapped_column(String(1000), index=True)
     title: Mapped[str] = mapped_column(String(300))
     location: Mapped[str] = mapped_column(String(300), default="")
+    country: Mapped[str] = mapped_column(String(2), default="")
+    employment_type: Mapped[str] = mapped_column(String(80), default="")
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     snippet: Mapped[str] = mapped_column(Text, default="")
     description_url: Mapped[str | None] = mapped_column(String(1000))
     description_text: Mapped[str | None] = mapped_column(Text)
+    description_complete: Mapped[bool] = mapped_column(Boolean, default=False)
     content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     content_version_id: Mapped[int | None] = mapped_column(ForeignKey("research_content_versions.id", ondelete="SET NULL"), index=True)
     status: Mapped[str] = mapped_column(String(30), default="queued", index=True)

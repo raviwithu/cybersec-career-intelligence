@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -54,6 +55,11 @@ def test_provider_status_does_not_claim_linkedin_without_authorized_configuratio
     assert statuses["linkedin_authorized"]["configured"] is False
     assert statuses["import"]["status"] == "configured"
 
+
+def test_jsearch_connection_does_not_call_network_when_unconfigured(client):
+    response = client.post("/api/v1/research/automated/job-searches/provider-status/jsearch/test", headers=ADMIN_HEADERS)
+    assert response.status_code == 503
+    assert "not configured" in response.json()["detail"]
 
 def test_search_result_pagination_and_deduplication():
     first = JobSearchPage(items=[JobSearchItem("A", "https://example.test/a?utm_source=x"), JobSearchItem("A duplicate", "https://example.test/a")], total=3, next_cursor="next")
@@ -175,4 +181,117 @@ def test_job_search_schedule_and_retry_manual_review(client, monkeypatch):
     assert retried.status_code == 200, retried.text
     assert retried.json()["successfully_analyzed"] == 1
     assert retried.json()["manual_review_required"] == 0
+
+
+
+class JSearchFetcher:
+    sleep = staticmethod(lambda _: None)
+
+    def __init__(self, responses):
+        self.responses = iter(responses)
+        self.calls = []
+
+    def fetch(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        response = next(self.responses)
+        if isinstance(response, Exception):
+            raise response
+        return response, "application/json", 200
+
+
+def jsearch_settings(**overrides):
+    values = {
+        "jsearch_api_key": "rapid-secret",
+        "jsearch_api_host": "jsearch.p.rapidapi.com",
+        "jsearch_api_endpoint": "https://jsearch.p.rapidapi.com/search",
+        "jsearch_job_details_endpoint": "https://jsearch.p.rapidapi.com/job-details",
+        "jsearch_timeout_seconds": 3,
+        "jsearch_max_requests_per_run": 10,
+        "jsearch_max_pages_per_run": 3,
+        "jsearch_retry_count": 2,
+        "jsearch_retry_base_seconds": 0,
+        "jsearch_rate_limit_sleep_seconds": 0,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_jsearch_parses_official_fields_paginates_and_fetches_details():
+    first_page = {
+        "status": "OK", "estimated_total": 2, "data": [{
+            "job_id": "j-1", "job_title": "Cloud Security Engineer", "job_apply_link": "https://jobs.example/one",
+            "job_description": "Short listing", "job_city": "Austin", "job_state": "TX", "job_country": "US",
+            "job_employment_type": "FULLTIME", "job_posted_at_datetime_utc": "2026-10-01T10:00:00Z",
+            "job_required_skills": ["AWS", "Terraform"], "job_is_remote": False,
+        }],
+    }
+    second_page = {"status": "OK", "data": [{
+        "job_id": "j-2", "job_title": "Product Security Engineer", "job_apply_link": "https://jobs.example/two",
+        "job_description": "Complete product security description " * 8, "job_country": "US", "job_employment_type": "CONTRACTOR",
+    }]}
+    details = {"status": "OK", "data": [{"job_description": "Complete cloud security description " * 8}]}
+    fetcher = JSearchFetcher([json.dumps(first_page).encode(), json.dumps(second_page).encode(), json.dumps(details).encode()])
+    from app.job_search_providers import JSearchProvider
+
+    provider = JSearchProvider(jsearch_settings(), fetcher=fetcher)
+    criteria = JobSearchCriteria(["security engineer"], "Austin", "", "all", "", "any", 2, "us", 2)
+    page = provider.search(criteria, limit=1)
+    next_page = provider.search(criteria, cursor=page.next_cursor, limit=1)
+    description = provider.retrieve_description(page.items[0])
+
+    assert page.total == 2
+    assert page.next_cursor == "2"
+    assert next_page.items[0].employment_type == "CONTRACTOR"
+    assert "job_required_skills" not in next_page.items[0].metadata
+    assert len(description) > 120
+    assert fetcher.calls[0][1]["headers"]["X-RapidAPI-Key"] == "rapid-secret"
+    assert fetcher.calls[0][1]["headers"]["X-RapidAPI-Host"] == "jsearch.p.rapidapi.com"
+    assert provider.stats.pages_requested == 2
+    assert provider.stats.api_requests == 3
+    assert "rapid-secret" not in str(page.items[0].metadata)
+
+
+def test_jsearch_rate_limit_retries_and_request_budget():
+    from app.job_search_providers import JSearchProvider
+
+    fetcher = JSearchFetcher([
+        CollectionError("rate limited", status_code=429, retryable=True),
+        b'{"status":"OK","data":[]}',
+    ])
+    provider = JSearchProvider(jsearch_settings(), fetcher=fetcher)
+    page = provider.search(JobSearchCriteria(["security"], "", "", "all", "", "any", 1), limit=1)
+    assert page.items == []
+    assert provider.stats.rate_limit_errors == 1
+    assert provider.stats.api_requests == 2
+
+    limited = JSearchProvider(jsearch_settings(jsearch_max_requests_per_run=1), fetcher=JSearchFetcher([b'{"status":"OK","data":[]}']))
+    limited.search(JobSearchCriteria(["security"], "", "", "all", "", "any", 1), limit=1)
+    with pytest.raises(CollectionError, match="request budget"):
+        limited.search(JobSearchCriteria(["security"], "", "", "all", "", "any", 1), limit=1)
+    assert limited.stats.quota_errors == 1
+
+
+def test_jsearch_run_invokes_analysis_for_each_complete_description(client, monkeypatch):
+    created = client.post("/api/v1/research/automated/job-searches", headers=ADMIN_HEADERS, json={
+        "name": "JSearch analysis coverage", "provider_type": "jsearch", "keywords": ["security"], "max_results": 2,
+    })
+    assert created.status_code == 201, created.text
+
+    class Provider:
+        provider_type = "jsearch"
+        def __init__(self): self.analyzed = 0
+        def search(self, criteria, *, cursor=None, limit):
+            return JobSearchPage(items=[JobSearchItem("One", "https://jobs.example/one"), JobSearchItem("Two", "https://jobs.example/two")], total=2)
+        def retrieve_description(self, item):
+            self.analyzed += 1
+            return f"Complete description for {item.title}. " * 15
+
+    provider = Provider()
+    monkeypatch.setattr("app.job_search_pipeline.build_provider", lambda *args, **kwargs: provider)
+    monkeypatch.setattr("app.job_search_pipeline._analyze_version", lambda *args, **kwargs: True)
+    run = client.post(f"/api/v1/research/automated/job-searches/{created.json()['id']}/runs", headers=ADMIN_HEADERS, json={})
+    assert run.status_code == 201, run.text
+    assert run.json()["descriptions_retrieved"] == 2
+    assert run.json()["successfully_analyzed"] == 2
+    assert provider.analyzed == 2
 

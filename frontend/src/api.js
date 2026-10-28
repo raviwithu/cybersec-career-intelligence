@@ -178,3 +178,23 @@ export function importJobSearchResults(id, payload, adminKey) { return request(`
 export function fetchJobSearchRuns(id, adminKey) { return request(`/api/v1/research/automated/job-searches/${id}/runs`, { headers: adminHeaders(adminKey) }); }
 export function fetchJobSearchRunResults(runId, adminKey) { return request(`/api/v1/research/automated/job-searches/runs/${runId}/results`, { headers: adminHeaders(adminKey) }); }
 export function retryJobSearchRun(runId, adminKey) { return request(`/api/v1/research/automated/job-searches/runs/${runId}/retry`, { method: "POST", headers: adminHeaders(adminKey) }); }
+export function testJSearchConnection(adminKey) { return request("/api/v1/research/automated/job-searches/provider-status/jsearch/test", { method: "POST", headers: adminHeaders(adminKey) }); }
+export function previewJobSearch(id, adminKey) { return request(`/api/v1/research/automated/job-searches/${id}/preview`, { method: "POST", headers: adminHeaders(adminKey) }); }
+export function pauseJobSearch(id, adminKey) { return request(`/api/v1/research/automated/job-searches/${id}/pause`, { method: "POST", headers: adminHeaders(adminKey) }); }
+export function resumeJobSearch(id, adminKey) { return request(`/api/v1/research/automated/job-searches/${id}/resume`, { method: "POST", headers: adminHeaders(adminKey) }); }
+
+
+function profileHeaders(profileKey) { return profileKey ? { "X-Profile-Key": profileKey } : {}; }
+export function fetchIntelligenceDashboard(params = {}) { return request(`/api/v1/intelligence/dashboard${queryString(params)}`); }
+export function fetchCompetencyFrequency(params = {}) { return request(`/api/v1/intelligence/competency-frequency${queryString(params)}`); }
+export function fetchCareerProgression(params = {}) { return request(`/api/v1/intelligence/progression${queryString(params)}`); }
+export function fetchIndustryComparison(params = {}) { return request(`/api/v1/intelligence/industry-comparison${queryString(params)}`); }
+export function fetchSkillTrends(params = {}) { return request(`/api/v1/intelligence/trends${queryString(params)}`); }
+export function fetchIntelligenceEvidence(params = {}) { return request(`/api/v1/intelligence/evidence${queryString(params)}`); }
+export function fetchHistoricalIntelligence(params = {}) { return request(`/api/v1/intelligence/historical${queryString(params)}`); }
+export function createCompetencyProfile(payload) { return request("/api/v1/intelligence/profiles", { method: "POST", body: JSON.stringify(payload) }); }
+export function fetchCompetencyProfile(profileKey) { return request("/api/v1/intelligence/profiles/me", { headers: profileHeaders(profileKey) }); }
+export function updateCompetencyAssessments(payload, profileKey) { return request("/api/v1/intelligence/profiles/me/assessments", { method: "PUT", headers: profileHeaders(profileKey), body: JSON.stringify(payload) }); }
+export function fetchCompetencyGap(profileKey) { return request("/api/v1/intelligence/profiles/me/gaps", { headers: profileHeaders(profileKey) }); }
+export function fetchCareerRoadmap(profileKey) { return request("/api/v1/intelligence/profiles/me/roadmap", { headers: profileHeaders(profileKey) }); }
+export function askCareerIntelligence(payload) { return request("/api/v1/intelligence/ask", { method: "POST", body: JSON.stringify(payload) }); }

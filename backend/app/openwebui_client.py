@@ -145,6 +145,11 @@ class OpenWebUIClient:
                 return "".join(parts)
         raise ProviderError("openwebui", "OpenWebUI response did not contain text content")
 
+
+    def complete(self, system: str, prompt: str, model: str | None = None) -> str:
+        model_id = model or self.model
+        return self._content(self._completion(model_id, [{"role": "system", "content": system}, {"role": "user", "content": prompt}])).strip()
+
     def extract(self, content: str, taxonomy: dict[str, list[dict[str, Any]]], model: str | None = None) -> ExtractionResult:
         model_id = model or self.model
         try:

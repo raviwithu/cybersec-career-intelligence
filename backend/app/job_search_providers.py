@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Protocol
+from urllib.parse import urlencode
 
 import json
 from bs4 import BeautifulSoup
@@ -21,6 +24,8 @@ class JobSearchCriteria:
     employment_type: str
     work_mode: str
     max_results: int
+    country: str = "us"
+    max_pages: int = 3
 
 
 @dataclass(frozen=True)
@@ -33,6 +38,9 @@ class JobSearchItem:
     location: str = ""
     external_id: str | None = None
     metadata: dict[str, Any] | None = None
+    country: str = ""
+    employment_type: str = ""
+    posted_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +74,10 @@ def provider_statuses(settings: Settings) -> list[dict[str, Any]]:
         _status("licensed_api", "Licensed job-data provider", bool(settings.licensed_job_provider_base_url and settings.licensed_job_provider_api_key), [
             "Requires a licensed provider endpoint and API key configured outside the database.",
         ]),
+        _status("jsearch", "JSearch via RapidAPI", bool(getattr(settings, "jsearch_api_key", None)), [
+            "Uses the official JSearch RapidAPI search and job-details endpoints.",
+            "Request, page, result, retry, and rate-limit budgets are bounded by backend settings.",
+        ]),
         _status("employer_ats", "Employer career page or ATS API", bool(settings.employer_ats_api_base_url), [
             "Supports only a configured public employer or ATS endpoint with a documented response contract.",
         ]),
@@ -73,6 +85,147 @@ def provider_statuses(settings: Settings) -> list[dict[str, Any]]:
             "Import does not claim live LinkedIn access; full descriptions still require permitted source URLs or complete exported descriptions.",
         ]),
     ]
+
+
+class JSearchProvider:
+    provider_type = "jsearch"
+
+    def __init__(self, settings: Settings, fetcher: SecureResearchFetcher | None = None):
+        self.settings = settings
+        self.fetcher = fetcher or SecureResearchFetcher(settings)
+        self.stats = SimpleNamespace(api_requests=0, pages_requested=0, rate_limit_errors=0, quota_errors=0)
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.settings.jsearch_api_key)
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Accept": "application/json",
+            "X-RapidAPI-Key": self.settings.jsearch_api_key or "",
+            "X-RapidAPI-Host": self.settings.jsearch_api_host,
+        }
+
+    def _request_json(self, endpoint: str, params: dict[str, str]) -> dict[str, Any]:
+        if not self.configured:
+            raise CollectionError("JSearch provider is not configured", status_code=503, retryable=False)
+        if self.stats.api_requests >= self.settings.jsearch_max_requests_per_run:
+            self.stats.quota_errors += 1
+            raise CollectionError("JSearch request budget exhausted for this run", status_code=429, retryable=False)
+        query = urlencode({key: value for key, value in params.items() if value not in (None, "")})
+        target = f"{endpoint}{'&' if '?' in endpoint else '?'}{query}"
+        last_error: CollectionError | None = None
+        for attempt in range(max(0, self.settings.jsearch_retry_count) + 1):
+            if self.stats.api_requests >= self.settings.jsearch_max_requests_per_run:
+                self.stats.quota_errors += 1
+                raise CollectionError("JSearch request budget exhausted for this run", status_code=429, retryable=False)
+            self.stats.api_requests += 1
+            try:
+                body, _, _ = self.fetcher.fetch(
+                    target,
+                    accept="application/json",
+                    respect_robots=False,
+                    headers=self._headers(),
+                    timeout_seconds=self.settings.jsearch_timeout_seconds,
+                )
+                payload = json.loads(body)
+                if not isinstance(payload, dict):
+                    raise CollectionError("JSearch returned an invalid response", status_code=422)
+                if str(payload.get("status", "SUCCESS")).upper() not in {"SUCCESS", "OK"}:
+                    raise CollectionError("JSearch rejected the request", status_code=422)
+                return payload
+            except CollectionError as exc:
+                last_error = exc
+                if exc.status_code in {401, 403}:
+                    self.stats.quota_errors += 1
+                    raise CollectionError("JSearch authentication or subscription access failed", status_code=exc.status_code) from exc
+                if exc.status_code == 429:
+                    self.stats.rate_limit_errors += 1
+                    if attempt >= self.settings.jsearch_retry_count:
+                        raise CollectionError("JSearch rate limit reached; retry the run later", status_code=429, retryable=True) from exc
+                    self.fetcher.sleep(max(self.settings.jsearch_rate_limit_sleep_seconds, self.settings.jsearch_retry_base_seconds * (2**attempt)))
+                    continue
+                if not exc.retryable or attempt >= self.settings.jsearch_retry_count:
+                    raise CollectionError("JSearch request failed", status_code=exc.status_code, retryable=exc.retryable) from exc
+                self.fetcher.sleep(min(self.settings.jsearch_retry_base_seconds * (2**attempt), 8))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise CollectionError("JSearch returned invalid JSON", status_code=422) from exc
+        raise last_error or CollectionError("JSearch request failed")
+
+    def search(self, criteria: JobSearchCriteria, *, cursor: str | None = None, limit: int) -> JobSearchPage:
+        page = int(cursor) if cursor and cursor.isdigit() else 1
+        query = " ".join(criteria.keywords)
+        if criteria.location:
+            query = f"{query} in {criteria.location}"
+        params = {
+            "query": query,
+            "page": str(page),
+            "num_pages": "1",
+            "country": criteria.country,
+            "date_posted": {"any": "all", "24h": "today"}.get(criteria.date_posted, criteria.date_posted),
+            "employment_types": criteria.employment_type.upper(),
+            "remote_jobs": "true" if criteria.work_mode == "remote" else "",
+        }
+        payload = self._request_json(self.settings.jsearch_api_endpoint, params)
+        self.stats.pages_requested += 1
+        rows = payload.get("data", [])
+        if not isinstance(rows, list):
+            raise CollectionError("JSearch response did not contain a data list", status_code=422)
+        items = [item for row in rows if isinstance(row, dict) for item in [self._item(row, criteria.country)] if item is not None]
+        next_cursor = str(page + 1) if items and page < min(criteria.max_pages, self.settings.jsearch_max_pages_per_run) else None
+        total = payload.get("estimated_total") or payload.get("total")
+        return JobSearchPage(items=items[:limit], total=int(total) if isinstance(total, int) else None, next_cursor=next_cursor)
+
+    def retrieve_description(self, item: JobSearchItem) -> str:
+        if item.description and len(normalize_content(BeautifulSoup(item.description, "html.parser").get_text(" ", strip=True))) >= MIN_COMPLETE_DESCRIPTION_CHARS:
+            return normalize_content(BeautifulSoup(item.description, "html.parser").get_text(" ", strip=True))
+        if item.external_id:
+            payload = self._request_json(self.settings.jsearch_job_details_endpoint, {"job_id": item.external_id, "country": item.country or "us"})
+            rows = payload.get("data", [])
+            if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+                description = rows[0].get("job_description")
+                if isinstance(description, str) and len(normalize_content(BeautifulSoup(description, "html.parser").get_text(" ", strip=True))) >= MIN_COMPLETE_DESCRIPTION_CHARS:
+                    return normalize_content(BeautifulSoup(description, "html.parser").get_text(" ", strip=True))
+        raise CollectionError("JSearch returned only a partial or unavailable job description; manual review is required", status_code=422)
+
+    def test_connection(self) -> JobSearchPage:
+        return self.search(JobSearchCriteria(["cybersecurity"], "", "", "all", "", "any", 1, "us", 1), limit=1)
+
+    @staticmethod
+    def _item(row: dict[str, Any], default_country: str) -> JobSearchItem | None:
+        title = row.get("job_title")
+        url = row.get("job_apply_link") or row.get("job_google_link")
+        if not isinstance(title, str) or not title.strip() or not isinstance(url, str) or not url.strip():
+            return None
+        try:
+            canonical_url = normalize_url(url)
+        except ValueError:
+            return None
+        description = row.get("job_description") if isinstance(row.get("job_description"), str) else None
+        city = row.get("job_city") or ""
+        state = row.get("job_state") or ""
+        country = row.get("job_country") or default_country
+        location = row.get("job_location") or ", ".join(str(value) for value in (city, state, country) if value)
+        metadata_keys = (
+            "job_publisher", "employer_name", "employer_website", "job_is_remote", "job_highlights",
+            "job_required_skills", "job_required_education", "job_experience_required", "job_experience_in_place_of_work",
+            "job_onet_soc", "job_onet_job_zone", "job_occupational_categories", "job_salary", "job_min_salary", "job_max_salary",
+        )
+        metadata = {"provider_type": "jsearch", **{key: row[key] for key in metadata_keys if key in row and row[key] is not None}}
+        posted = row.get("job_posted_at_datetime_utc") or row.get("job_posted_at_datetime")
+        posted_at = None
+        if isinstance(posted, str):
+            try:
+                posted_at = datetime.fromisoformat(posted.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        return JobSearchItem(
+            title=title[:300], url=canonical_url, description_url=canonical_url, description=description,
+            snippet=(description or "")[:20_000], location=str(location)[:300], external_id=str(row.get("job_id")) if row.get("job_id") else None,
+            metadata=metadata, country=str(country)[:2].casefold(), employment_type=str(row.get("job_employment_type") or "")[:80], posted_at=posted_at,
+        )
+
+
 
 
 def _status(provider_type: str, display_name: str, configured: bool, limitations: list[str]) -> dict[str, Any]:
@@ -191,6 +344,10 @@ def build_provider(provider_type: str, settings: Settings, *, fetcher: SecureRes
         if not settings.licensed_job_provider_base_url or not settings.licensed_job_provider_api_key:
             raise JobSearchProviderUnavailable("No licensed job-data provider is configured")
         return _HTTPJobSearchProvider(provider_type, settings.licensed_job_provider_base_url, settings.licensed_job_provider_api_key, settings, fetcher)
+    if provider_type == "jsearch":
+        if not settings.jsearch_api_key:
+            raise JobSearchProviderUnavailable("No JSearch API key is configured")
+        return JSearchProvider(settings, fetcher)
     if provider_type == "employer_ats":
         if not settings.employer_ats_api_base_url:
             raise JobSearchProviderUnavailable("No employer or ATS provider is configured")

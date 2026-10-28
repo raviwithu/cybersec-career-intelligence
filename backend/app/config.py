@@ -46,6 +46,17 @@ class Settings(BaseSettings):
     licensed_job_provider_api_key: str | None = None
     employer_ats_api_base_url: str | None = None
     employer_ats_api_key: str | None = None
+    jsearch_api_key: str | None = None
+    jsearch_api_host: str = "jsearch.p.rapidapi.com"
+    jsearch_api_endpoint: str = "https://jsearch.p.rapidapi.com/search"
+    jsearch_job_details_endpoint: str = "https://jsearch.p.rapidapi.com/job-details"
+    jsearch_timeout_seconds: float = 15.0
+    jsearch_max_requests_per_run: int = 10
+    jsearch_max_results_per_run: int = 100
+    jsearch_max_pages_per_run: int = 3
+    jsearch_retry_count: int = 2
+    jsearch_retry_base_seconds: float = 1.0
+    jsearch_rate_limit_sleep_seconds: float = 2.0
     job_search_retention_days: int = 90
 
     cors_origins: str = "http://localhost:3100,http://127.0.0.1:3100"
