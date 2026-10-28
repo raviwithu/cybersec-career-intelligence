@@ -77,8 +77,6 @@ class KnowledgeSourceReference(BaseModel):
     def validate_access(self):
         if self.is_private and self.access_scope == "public":
             self.access_scope = "private"
-        if self.verification_status in {"verified", "authoritative"} and self.source_type.casefold() in {"cve", "rag", "ai"}:
-            raise ValueError("Retrieved or AI-derived sources must remain unverified until administrator verification")
         return self
 
 
@@ -123,8 +121,10 @@ class KnowledgeProposalCreate(BaseModel):
                 "ADD_REFERENCE": "references", "ADD_VULNERABILITY_EXAMPLE": "real_world_examples", "UPDATE_CAREER_LEVEL_GUIDANCE": "career_level_guidance",
             }
             self.section = section_map.get(self.action, self.section)
-        if self.action == "ADD_TOPIC_RELATIONSHIP" and "target_topic_id" not in self.proposed_content:
-            raise ValueError("target_topic_id is required for topic relationships")
+        if self.action == "ADD_TOPIC_RELATIONSHIP":
+            target_id = self.proposed_content.get("target_topic_id")
+            if not isinstance(target_id, int) or isinstance(target_id, bool) or target_id < 1:
+                raise ValueError("target_topic_id must be a positive integer for topic relationships")
         return self
 
 
@@ -135,6 +135,18 @@ class KnowledgeProposalReview(BaseModel):
     proposed_content: dict[str, Any] | None = None
     verified_source_ids: list[int] = Field(default_factory=list, max_length=30)
     merge_target_topic_id: int | None = Field(default=None, ge=1)
+
+    @field_validator("proposed_content", mode="before")
+    @classmethod
+    def clean_review_content(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            raise ValueError("proposed_content must be an object")
+        cleaned = _clean_value(value)
+        if len(json.dumps(cleaned, ensure_ascii=False)) > 200_000:
+            raise ValueError("proposed_content exceeds the permitted size")
+        return cleaned
 
     @model_validator(mode="after")
     def validate_review(self):
@@ -206,6 +218,7 @@ class KnowledgeProposalResponse(BaseModel):
     status: str
     version: int
     base_section_version: int
+    merge_target_topic_id: int | None = None
     original_content: dict[str, Any] | None
     proposed_content: dict[str, Any]
     change_reason: str
