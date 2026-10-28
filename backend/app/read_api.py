@@ -24,11 +24,13 @@ from .read_schemas import (
     CareerComparisonResponse,
     CareerMatrixResponse,
     CategoryRead,
+    CategoryAliasRead,
     ComparisonCompetency,
     ComparisonLevel,
     CompetencyDetail,
     CompetencyListItem,
     CompetencyPage,
+    DomainAliasRead,
     DomainRead,
     DomainRef,
     ExpectationPage,
@@ -37,6 +39,7 @@ from .read_schemas import (
     ExpectationSummary,
     IndustryRead,
     IndustryRef,
+    LevelAliasRead,
     LevelRead,
     MatrixCell,
     MatrixDomain,
@@ -92,6 +95,8 @@ def domain_tree(items: list[SecurityDomain], selected_id: int | None = None) -> 
             description=item.description,
             parent_id=item.parent_id,
             display_order=item.display_order,
+            is_active=item.is_active,
+            aliases=[DomainAliasRead(alias=alias.alias, requires_context=alias.requires_context, context_hint=alias.context_hint) for alias in getattr(item, "aliases", [])],
             created_at=item.created_at,
             updated_at=item.updated_at,
             children=[build(child) for child in sorted(by_parent[item.id], key=lambda value: (value.display_order, value.name))],
@@ -218,13 +223,13 @@ def domain_filter(column, requested: str):
 
 @router.get("/domains", response_model=list[DomainRead], tags=["domains"])
 def list_domains(db: Session = Depends(get_db)) -> list[DomainRead]:
-    items = list(db.scalars(select(SecurityDomain).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
+    items = list(db.scalars(select(SecurityDomain).where(SecurityDomain.is_active.is_(True)).options(selectinload(SecurityDomain.aliases)).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
     return domain_tree(items)
 
 
 @router.get("/domains/{domain_id}", response_model=DomainRead, tags=["domains"])
 def get_domain(domain_id: int, db: Session = Depends(get_db)) -> DomainRead:
-    items = list(db.scalars(select(SecurityDomain).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
+    items = list(db.scalars(select(SecurityDomain).where(SecurityDomain.is_active.is_(True)).options(selectinload(SecurityDomain.aliases)).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
     if not any(item.id == domain_id for item in items):
         raise not_found("Security domain", domain_id)
     return domain_tree(items, selected_id=domain_id)[0]
@@ -232,11 +237,12 @@ def get_domain(domain_id: int, db: Session = Depends(get_db)) -> DomainRead:
 
 @router.get("/levels", response_model=list[LevelRead], tags=["career-levels"])
 def list_levels(db: Session = Depends(get_db)) -> list[LevelRead]:
-    return [LevelRead.model_validate(item) for item in db.scalars(select(CareerLevel).order_by(CareerLevel.display_order)).all()]
+    items = list(db.scalars(select(CareerLevel).where(CareerLevel.is_active.is_(True)).options(selectinload(CareerLevel.aliases)).order_by(CareerLevel.display_order)).all())
+    return [LevelRead(id=item.id, name=item.name, slug=item.slug, career_track=item.career_track, description=item.description, display_order=item.display_order, is_active=item.is_active, aliases=[LevelAliasRead(alias=alias.alias, requires_context=alias.requires_context, context_hint=alias.context_hint) for alias in item.aliases]) for item in items]
 
 
 def descendant_domain_ids(db: Session, requested: str) -> list[int]:
-    domains = list(db.scalars(select(SecurityDomain)).all())
+    domains = list(db.scalars(select(SecurityDomain).where(SecurityDomain.is_active.is_(True))).all())
     matches_for_request = [item for item in domains if matches(item.slug, requested) or matches(item.name, requested)]
     if not matches_for_request:
         return []
@@ -263,7 +269,8 @@ def list_industries(db: Session = Depends(get_db)) -> list[IndustryRead]:
 
 @router.get("/categories", response_model=list[CategoryRead], tags=["categories"])
 def list_categories(db: Session = Depends(get_db)) -> list[CategoryRead]:
-    return [CategoryRead.model_validate(item) for item in db.scalars(select(CompetencyCategory).order_by(CompetencyCategory.name)).all()]
+    items = list(db.scalars(select(CompetencyCategory).where(CompetencyCategory.is_active.is_(True)).options(selectinload(CompetencyCategory.aliases)).order_by(CompetencyCategory.display_order, CompetencyCategory.name)).all())
+    return [CategoryRead(id=item.id, name=item.name, slug=item.slug, description=item.description, display_order=item.display_order, is_active=item.is_active, aliases=[CategoryAliasRead(alias=alias.alias, requires_context=alias.requires_context, context_hint=alias.context_hint) for alias in item.aliases]) for item in items]
 
 
 @router.get("/competencies", response_model=CompetencyPage, tags=["competencies"])
@@ -279,8 +286,8 @@ def list_competencies(
     db: Session = Depends(get_db),
 ) -> CompetencyPage:
     industry_id = resolve_industry(db, industry, context).id if industry else None
-    query = select(Competency).options(*competency_options(industry_id))
-    expectation_filters = []
+    query = select(Competency).where(Competency.category.has(CompetencyCategory.is_active.is_(True))).options(*competency_options(industry_id))
+    expectation_filters = [DomainLevelExpectation.domain.has(SecurityDomain.is_active.is_(True)), DomainLevelExpectation.career_level.has(CareerLevel.is_active.is_(True))]
     if industry_id is not None:
         expectation_filters.append(expectation_scope_clause(industry_id))
     if domain:
@@ -310,7 +317,7 @@ def get_competency(
     db: Session = Depends(get_db),
 ) -> CompetencyDetail:
     industry_id = resolve_industry(db, industry, context).id if industry else None
-    query = select(Competency).where(Competency.id == competency_id).options(*competency_options(industry_id, detail=True))
+    query = select(Competency).where(Competency.id == competency_id, Competency.category.has(CompetencyCategory.is_active.is_(True))).options(*competency_options(industry_id, detail=True))
     item = db.scalar(query)
     if item is None:
         raise not_found("Competency", competency_id)
@@ -428,9 +435,13 @@ def career_matrix(
     db: Session = Depends(get_db),
 ) -> CareerMatrixResponse:
     industry_id = resolve_industry(db, industry, context).id if industry else None
-    domains = list(db.scalars(select(SecurityDomain).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
-    levels = list(db.scalars(select(CareerLevel).order_by(CareerLevel.display_order)).all())
-    expectation_query = select(DomainLevelExpectation).options(selectinload(DomainLevelExpectation.domain), selectinload(DomainLevelExpectation.career_level), selectinload(DomainLevelExpectation.competency).selectinload(Competency.category))
+    domains = list(db.scalars(select(SecurityDomain).where(SecurityDomain.is_active.is_(True)).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
+    levels = list(db.scalars(select(CareerLevel).where(CareerLevel.is_active.is_(True)).options(selectinload(CareerLevel.aliases)).order_by(CareerLevel.display_order)).all())
+    expectation_query = select(DomainLevelExpectation).where(
+        DomainLevelExpectation.domain.has(SecurityDomain.is_active.is_(True)),
+        DomainLevelExpectation.career_level.has(CareerLevel.is_active.is_(True)),
+        DomainLevelExpectation.competency.has(Competency.category.has(CompetencyCategory.is_active.is_(True))),
+    ).options(selectinload(DomainLevelExpectation.domain), selectinload(DomainLevelExpectation.career_level), selectinload(DomainLevelExpectation.competency).selectinload(Competency.category))
     if industry_id is not None:
         expectation_query = expectation_query.where(expectation_scope_clause(industry_id))
     expectations = list(db.scalars(expectation_query).all())
@@ -463,10 +474,10 @@ def compare_levels(
     if len(requested_levels) < 2 or len(requested_levels) > 6 or len(set(item.casefold() for item in requested_levels)) != len(requested_levels):
         raise HTTPException(status_code=422, detail="levels must contain between two and six distinct comma-separated levels")
     industry_id = resolve_industry(db, industry, context).id if industry else None
-    domain_item = db.scalar(select(SecurityDomain).where(domain_filter(SecurityDomain, domain)))
+    domain_item = db.scalar(select(SecurityDomain).where(SecurityDomain.is_active.is_(True), domain_filter(SecurityDomain, domain)))
     if domain_item is None:
         raise not_found("Security domain", domain)
-    all_levels = list(db.scalars(select(CareerLevel).order_by(CareerLevel.display_order)).all())
+    all_levels = list(db.scalars(select(CareerLevel).where(CareerLevel.is_active.is_(True)).options(selectinload(CareerLevel.aliases)).order_by(CareerLevel.display_order)).all())
     chosen_levels = []
     for requested in requested_levels:
         level_item = next((item for item in all_levels if matches(item.slug, requested) or matches(item.name, requested)), None)
@@ -476,6 +487,7 @@ def compare_levels(
     comparison_query = select(DomainLevelExpectation).where(
         DomainLevelExpectation.domain_id.in_(descendant_domain_ids(db, domain_item.slug)),
         DomainLevelExpectation.career_level_id.in_([level.id for level in chosen_levels]),
+        DomainLevelExpectation.competency.has(Competency.category.has(CompetencyCategory.is_active.is_(True))),
     ).options(*expectation_options(industry_id))
     if industry_id is not None:
         comparison_query = comparison_query.where(expectation_scope_clause(industry_id))
@@ -531,12 +543,13 @@ def search(
     industry_id = resolve_industry(db, industry, context).id if industry else None
     term = f"%{keyword}%"
     results: list[SearchResult] = []
-    domain_query = select(SecurityDomain).where(or_(SecurityDomain.name.ilike(term), SecurityDomain.description.ilike(term))).order_by(SecurityDomain.name)
+    domain_query = select(SecurityDomain).where(SecurityDomain.is_active.is_(True), or_(SecurityDomain.name.ilike(term), SecurityDomain.description.ilike(term))).order_by(SecurityDomain.name)
     if domain:
         domain_query = domain_query.where(domain_filter(SecurityDomain, domain))
     results.extend(SearchResult(result_type="domain", id=item.id, name=item.name, description=item.description) for item in db.scalars(domain_query).all())
 
     expectation_query = select(DomainLevelExpectation).join(DomainLevelExpectation.domain).join(DomainLevelExpectation.career_level).join(DomainLevelExpectation.competency).options(*expectation_options(industry_id)).where(
+        SecurityDomain.is_active.is_(True), CareerLevel.is_active.is_(True), Competency.category.has(CompetencyCategory.is_active.is_(True)),
         or_(Competency.name.ilike(term), Competency.description.ilike(term), DomainLevelExpectation.expectation_description.ilike(term), SecurityDomain.name.ilike(term))
     )
     if domain:
@@ -548,8 +561,8 @@ def search(
     for item in db.scalars(expectation_query.order_by(DomainLevelExpectation.id)).unique().all():
         results.append(SearchResult(result_type="expectation", id=item.id, name=item.competency.name, description=item.expectation_description, domain=ref_domain(item.domain), career_level=ref_level_short(item.career_level), competency_id=item.competency_id))
 
-    competency_query = select(Competency).options(*competency_options(industry_id)).where(or_(Competency.name.ilike(term), Competency.description.ilike(term)))
-    expectation_filters = []
+    competency_query = select(Competency).options(*competency_options(industry_id)).where(Competency.category.has(CompetencyCategory.is_active.is_(True)), or_(Competency.name.ilike(term), Competency.description.ilike(term)))
+    expectation_filters = [DomainLevelExpectation.domain.has(SecurityDomain.is_active.is_(True)), DomainLevelExpectation.career_level.has(CareerLevel.is_active.is_(True))]
     if domain:
         expectation_filters.append(DomainLevelExpectation.domain_id.in_(descendant_domain_ids(db, domain)))
     if level:

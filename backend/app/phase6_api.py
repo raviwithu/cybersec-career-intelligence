@@ -285,8 +285,8 @@ def pending_findings(limit: int = Query(default=100, ge=1, le=500), db: Session 
 @router.get("/coverage", response_model=CoverageResponse, dependencies=[Depends(require_admin)])
 def coverage(db: Session = Depends(get_db)) -> CoverageResponse:
     industries = list(db.scalars(select(Industry).where(Industry.is_active.is_(True)).order_by(Industry.display_order, Industry.name)).all())
-    domains = list(db.scalars(select(SecurityDomain).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
-    levels = list(db.scalars(select(CareerLevel).order_by(CareerLevel.display_order)).all())
+    domains = list(db.scalars(select(SecurityDomain).where(SecurityDomain.is_active.is_(True)).order_by(SecurityDomain.display_order, SecurityDomain.name)).all())
+    levels = list(db.scalars(select(CareerLevel).where(CareerLevel.is_active.is_(True)).order_by(CareerLevel.display_order)).all())
     cells = []
     for industry in industries:
         for domain in domains:

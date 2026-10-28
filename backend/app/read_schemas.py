@@ -41,6 +41,8 @@ class IndustryRef(BaseModel):
 
 
 class IndustryAliasRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     alias: str
     requires_context: bool
     context_hint: str | None = None
@@ -52,6 +54,15 @@ class IndustryRead(IndustryRef):
     display_order: int = 0
     aliases: list[IndustryAliasRead] = Field(default_factory=list)
 
+
+class DomainAliasRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    alias: str
+    requires_context: bool
+    context_hint: str | None = None
+
+
 class DomainRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -61,9 +72,19 @@ class DomainRead(BaseModel):
     description: str
     parent_id: int | None
     display_order: int
+    is_active: bool = True
+    aliases: list[DomainAliasRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     children: list[DomainRead] = Field(default_factory=list)
+
+
+class LevelAliasRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    alias: str
+    requires_context: bool
+    context_hint: str | None = None
 
 
 class LevelRead(BaseModel):
@@ -75,6 +96,16 @@ class LevelRead(BaseModel):
     career_track: str
     description: str
     display_order: int
+    is_active: bool = True
+    aliases: list[LevelAliasRead] = Field(default_factory=list)
+
+
+class CategoryAliasRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    alias: str
+    requires_context: bool
+    context_hint: str | None = None
 
 
 class CategoryRead(BaseModel):
@@ -84,6 +115,9 @@ class CategoryRead(BaseModel):
     name: str
     slug: str
     description: str
+    display_order: int = 0
+    is_active: bool = True
+    aliases: list[CategoryAliasRead] = Field(default_factory=list)
 
 
 class ResearchSourceRead(BaseModel):

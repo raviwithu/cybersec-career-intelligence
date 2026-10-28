@@ -153,6 +153,15 @@ export function rejectResearchReviewChange(id, expected_version, reviewer_note, 
 export function fetchResearchPublicationPreview(adminKey) { return request("/api/v1/research/review/publication-preview", { headers: adminHeaders(adminKey) }); }
 export function publishResearchReview(payload, adminKey) { return request("/api/v1/research/review/publish", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
 export function fetchResearchReviewHistory(adminKey) { return request("/api/v1/research/review/history", { headers: adminHeaders(adminKey) }); }
+export function fetchTaxonomyManagement(params = {}, adminKey) { return request(`/api/v1/research/taxonomy${queryString(params)}`, { headers: adminHeaders(adminKey) }); }
+export function createTaxonomyEntry(type, payload, adminKey) { return request(`/api/v1/research/taxonomy/${type}`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function updateTaxonomyEntry(type, id, payload, adminKey) { return request(`/api/v1/research/taxonomy/${type}/${id}`, { method: "PATCH", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function fetchTaxonomyImpact(type, id, adminKey) { return request(`/api/v1/research/taxonomy/${type}/${id}/impact`, { headers: adminHeaders(adminKey) }); }
+export function mergeTaxonomyEntry(type, id, payload, adminKey) { return request(`/api/v1/research/taxonomy/${type}/${id}/merge`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function setTaxonomyActive(type, id, active, adminKey) { return request(`/api/v1/research/taxonomy/${type}/${id}/${active ? "reactivate" : "deactivate"}`, { method: "POST", headers: adminHeaders(adminKey) }); }
+export function deleteTaxonomyEntry(type, id, adminKey) { return request(`/api/v1/research/taxonomy/${type}/${id}`, { method: "DELETE", headers: adminHeaders(adminKey) }); }
+export function fetchTaxonomyHistory(params = {}, adminKey) { return request(`/api/v1/research/taxonomy/history${queryString(params)}`, { headers: adminHeaders(adminKey) }); }
+
 
 export function fetchAutomatedResearchDashboard(adminKey) { return request("/api/v1/research/automated/dashboard", { headers: adminHeaders(adminKey) }); }
 export function fetchAutomatedResearchSources(adminKey) { return request("/api/v1/research/automated/sources", { headers: adminHeaders(adminKey) }); }
