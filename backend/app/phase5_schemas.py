@@ -1,7 +1,12 @@
+import json
+import logging
+import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+
+logger = logging.getLogger("cybersec.research")
 
 
 class ExtractedRequirement(BaseModel):
@@ -39,10 +44,97 @@ class ExtractedRequirement(BaseModel):
     def max_years_is_reasonable(cls, value: int | None) -> int | None:
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_model_output(cls, data):
+        # Models routinely return near-miss shapes (null text, "5+" years, 85 for 0.85,
+        # over-long text); coerce those instead of failing the whole extraction.
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        for name, field in cls.model_fields.items():
+            value = data.get(name)
+            if value is None:
+                if name in data and field.annotation in (str, list[str]):
+                    data.pop(name)
+                continue
+            if field.annotation == list[str]:
+                items = value if isinstance(value, list) else [value]
+                data[name] = [str(item).strip() for item in items if item is not None and str(item).strip()][:_max_length(field)]
+            elif name in {"experience_years_min", "experience_years_max"}:
+                data[name] = _years(value)
+            elif name == "confidence":
+                data[name] = _confidence(value)
+            elif isinstance(value, (int, float)) and field.annotation in (str, str | None):
+                data[name] = str(value)
+            if isinstance(data.get(name), str) and (limit := _max_length(field)):
+                data[name] = data[name].strip()[:limit]
+        return data
+
+
+def _max_length(field) -> int | None:
+    return next((item.max_length for item in field.metadata if getattr(item, "max_length", None)), None)
+
+
+def _years(value) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        match = re.search(r"\d+", value)
+        value = int(match.group()) if match else None
+    if isinstance(value, float):
+        value = int(value)
+    return value if isinstance(value, int) and 0 <= value <= 80 else None
+
+
+def _confidence(value) -> float | None:
+    if isinstance(value, str):
+        try:
+            value = float(value.strip().rstrip("%"))
+        except ValueError:
+            return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if 1 < value <= 100:
+        value = value / 100
+    return float(value) if 0 <= value <= 1 else None
+
 
 class ExtractionResult(BaseModel):
     requirements: list[ExtractedRequirement] = Field(default_factory=list, max_length=100)
     unclassified_notes: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_invalid_requirements(cls, data):
+        # One unusable requirement (e.g. no evidence excerpt) should not discard the rest.
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        notes = data.get("unclassified_notes") or []
+        notes = [n if isinstance(n, str) else json.dumps(n, ensure_ascii=False) for n in (notes if isinstance(notes, list) else [notes])]
+        requirements = data.get("requirements")
+        if isinstance(requirements, list):
+            kept, errors = [], []
+            for index, item in enumerate(requirements[:100]):
+                try:
+                    kept.append(ExtractedRequirement.model_validate(item))
+                except ValidationError as exc:
+                    errors.append(f"requirements.{index}: {_first_error(exc)}")
+            if errors and not kept:
+                raise ValueError(f"no valid requirements ({errors[0]})")
+            if errors:
+                logger.warning("extraction_requirements_dropped count=%d first=%s", len(errors), errors[0])
+                notes = notes[:19] + [f"{len(errors)} extracted requirement(s) were discarded because they failed validation."]
+            data["requirements"] = kept
+        data["unclassified_notes"] = [note[:2000] for note in notes[:20]]
+        return data
+
+
+def _first_error(exc: ValidationError) -> str:
+    error = exc.errors()[0]
+    location = ".".join(str(part) for part in error["loc"]) or "value"
+    return f"{location}: {error['msg']}"
 
 
 class SubmissionCreate(BaseModel):
