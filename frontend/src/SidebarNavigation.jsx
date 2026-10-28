@@ -12,6 +12,7 @@ export const navigationGroups = [
     icon: "◈",
     items: [
       { id: "domains", label: "Domain Explorer", icon: "◈" },
+      { id: "knowledge-base", label: "Knowledge Base", icon: "▤" },
       { id: "industry-intelligence", label: "Industry Explorer", icon: "◇" },
       { id: "competencies", label: "Competency Explorer", icon: "◎" },
       { id: "matrix", label: "Career Matrix", icon: "▦" },
@@ -50,6 +51,7 @@ export const navigationGroups = [
     adminOnly: true,
     items: [
       { id: "research-ingestion", label: "Research Ingestion", icon: "↻" },
+      { id: "knowledge-review", label: "Knowledge Review", icon: "▣" },
       { id: "research-review", label: "Research Review", icon: "✓" },
       { id: "career-readiness-review", label: "Career Readiness Review", icon: "◇" },
       { id: "knowledge-topics", label: "Knowledge Topic Management", icon: "☷" },
@@ -96,7 +98,7 @@ export function findNavigationItem(view) {
 export function getViewFromLocation() {
   if (typeof window === "undefined") return "dashboard";
   const view = window.location.hash.replace(/^#/, "");
-  return view && (findNavigationItem(view) || view === "research-ingestion" || view === "publication-history" || view === "research-coverage") ? view : "dashboard";
+  return view && (findNavigationItem(view) || view === "knowledge-topic" || view === "research-ingestion" || view === "publication-history" || view === "research-coverage") ? view : "dashboard";
 }
 
 function defaultGroupState() {
@@ -167,7 +169,7 @@ export default function SidebarNavigation({ view, onNavigate, mobileOpen, onClos
     return <div className={`nav-group ${isActive ? "has-active" : ""}`} key={group.id}>
       <button type="button" className={`nav-group-toggle ${isActive ? "active" : ""}`} aria-expanded={collapsed ? flyoutGroup === group.id : Boolean(expanded)} aria-controls={`nav-group-${group.id}`} title={collapsed ? group.label : undefined} onClick={() => toggleGroup(group)}><span className="nav-icon" aria-hidden="true">{group.icon}</span><span className="nav-label">{group.label}</span><span className="nav-chevron" aria-hidden="true">{collapsed ? "›" : expanded ? "⌄" : "›"}</span></button>
       {collapsed && flyoutGroup === group.id && <div className="nav-flyout" id={`nav-group-${group.id}`} role="menu"><strong>{group.label}</strong>{group.items.map((item) => <button type="button" role="menuitem" className={view === item.id ? "active" : ""} key={`${group.id}-${item.id}-${item.label}`} onClick={() => navigate(item)}>{item.label}</button>)}</div>}
-      {!collapsed && expanded && <div className="nav-group-items" id={`nav-group-${group.id}`}>{group.items.map((item, index) => <div className="nav-item-wrap" key={`${group.id}-${item.id}-${item.label}`}>{item.group && item.group !== group.items[index - 1]?.group && <span className="nav-subgroup-label">{item.group}</span>}{renderItem(item, Boolean(item.group))}</div>)}</div>}
+      {!collapsed && expanded && <div className="nav-group-items" id={`nav-group-${group.id}`}>{group.items.map((item) => <div className="nav-item-wrap" key={`${group.id}-${item.id}-${item.label}`}>{item.group && <span className="nav-subgroup-label">{item.group}</span>}{renderItem(item, Boolean(item.group))}</div>)}</div>}
     </div>;
   }
 

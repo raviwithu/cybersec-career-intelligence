@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     ollama_timeout_seconds: float = 90.0
     ollama_retries: int = 2
     admin_api_key: str | None = None
+    knowledge_integration_keys: str = ""
+    knowledge_proposal_rate_limit_per_minute: int = 30
+    knowledge_excerpt_max_chars: int = 6000
     max_request_bytes: int = 1_048_576
     max_research_bytes: int = 500_000
     url_import_timeout_seconds: float = 10.0

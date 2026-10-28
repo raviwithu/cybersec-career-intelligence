@@ -313,6 +313,7 @@ def seed_reference_data(db: Session) -> None:
             topic = KnowledgeTopic(
                 name=competency.name,
                 slug=competency.slug,
+                topic_key=competency.slug,
                 description=competency.description,
                 category_id=competency.category_id,
                 aliases=[],

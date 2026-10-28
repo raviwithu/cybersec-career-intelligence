@@ -11,6 +11,8 @@ import ResearchReviewPage from "./ResearchReviewPage";
 import CareerReadinessAdminPage from "./CareerReadinessAdminPage";
 import IntelligencePage from "./IntelligencePage";
 import ResearchIngestionPage from "./ResearchIngestionPage";
+import KnowledgeTopicPage from "./KnowledgeTopicPage";
+import KnowledgeReviewPage from "./KnowledgeReviewPage";
 import SidebarNavigation, { findNavigationItem, getViewFromLocation } from "./SidebarNavigation";
 import { useApi } from "./useApi";
 
@@ -44,6 +46,7 @@ export default function AppShell() {
   const [selectedLevel, setSelectedLevel] = useState(null);
   const [compareLevels, setCompareLevels] = useState(["senior", "architect"]);
   const [selectedCompetencyId, setSelectedCompetencyId] = useState(null);
+  const [selectedTopicKey, setSelectedTopicKey] = useState("");
   const bootstrap = useApi(() => Promise.all([fetchHealth(), fetchDomains(), fetchLevels(), fetchCategories(), fetchIndustries(), fetchCareerMatrix(selectedIndustry ? { industry: selectedIndustry } : {}), fetchCompetencies({ page: 1, page_size: 1, ...(selectedIndustry ? { industry: selectedIndustry } : {}) }), fetchExpectations({ page: 1, page_size: 1, ...(selectedIndustry ? { industry: selectedIndustry } : {}) })]).then(([health, domains, levels, categories, industries, matrix, competencies, expectations]) => ({ health, domains, levels, categories, industries, matrix, competencies, expectations })), [selectedIndustry]);
   const data = bootstrap.data;
   const allDomains = useMemo(() => flattenDomains(data?.domains || []), [data?.domains]);
@@ -53,6 +56,7 @@ export default function AppShell() {
     setView(nextView); setMobileOpen(false);
     if (window.location.hash !== `#${nextView}`) window.location.hash = nextView;
     if (nextView === "evidence-explorer" && payload) setSelectedCompetencyId(payload);
+    if (nextView === "knowledge-topic") setSelectedTopicKey(payload || "");
     // Domains and counts load once at startup; refresh them so newly published research appears without a page reload.
     if (!nextView.startsWith("research")) bootstrap.refresh();
   }
@@ -71,12 +75,15 @@ export default function AppShell() {
   const content = view === "dashboard" ? <DashboardPage domains={data.domains} levels={data.levels} matrix={data.matrix} competencyTotal={data.competencies.meta.total} expectationTotal={data.expectations.meta.total} onNavigate={navigate} />
     : view === "readiness" ? <CareerReadinessPage domains={data.domains} levels={data.levels} categories={data.categories} industries={data.industries} selectedIndustry={selectedIndustry} onNavigate={navigate} onContextChange={updateReadinessContext} onIndustryChange={setSelectedIndustry} onCompetency={openCompetency} />
     : view === "domains" ? <DomainsPage domains={data.domains} levels={data.levels} categories={data.categories} matrix={data.matrix} selectedDomain={selectedDomain} selectedLevel={selectedLevel} selectedIndustry={selectedIndustry} onSelectDomain={selectDomain} onSelectLevel={setSelectedLevel} onCompetency={openCompetency} />
+      : view === "knowledge-base" ? <KnowledgeTopicPage onNavigate={navigate} />
+        : view === "knowledge-topic" ? <KnowledgeTopicPage topicKey={selectedTopicKey} onNavigate={navigate} />
       : view === "matrix" ? <MatrixPage matrix={data.matrix} domains={data.domains} levels={data.levels} onCell={selectMatrixCell} />
         : view === "compare" ? <ComparePage domains={allDomains} levels={data.levels} selectedDomain={selectedDomain || allDomains[0]} selectedIndustry={selectedIndustry} compareLevels={compareLevels} onDomainChange={(domain) => setSelectedDomainSlug(domain.slug)} onLevelsChange={setCompareLevels} onCompetency={openCompetency} />
           : view === "competencies" ? <CompetenciesPage domains={data.domains} levels={data.levels} categories={data.categories} selectedIndustry={selectedIndustry} selectedCompetencyId={selectedCompetencyId} onSelectCompetency={setSelectedCompetencyId} />
             : view === "search" ? <SearchPage domains={data.domains} levels={data.levels} selectedIndustry={selectedIndustry} onCompetency={openCompetency} onDomain={openDomain} />
             : view === "research" ? <ResearchAdminPage />
               : view === "research-ingestion" ? <ResearchIngestionPage onOpenReview={() => navigate("research-review")} />
+                : view === "knowledge-review" ? <KnowledgeReviewPage />
                 : view === "automated-research" ? <AutomatedResearchPage onOpenReview={() => navigate("research-review")} />
                   : view === "taxonomy-management" ? <TaxonomyManagementPage />
                   : view === "research-coverage" ? <AutomatedResearchPage onOpenReview={() => navigate("research-review")} initialTab="coverage" />
