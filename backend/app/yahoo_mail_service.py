@@ -119,6 +119,10 @@ def update_connection(db: Session, connection: YahooMailConnection, payload: Mai
     values = payload.model_dump(exclude_none=True)
     if "initial_sync_from" in values:
         values["initial_sync_from"] = _utc(values["initial_sync_from"])
+    if "folder" in values and values["folder"] != connection.folder:
+        # UIDs are only meaningful within one mailbox, so a new folder starts a fresh checkpoint.
+        connection.last_uid = 0
+        connection.uidvalidity = None
     for key, value in values.items():
         setattr(connection, key, value)
     if payload.automatic_sync_enabled is True:
@@ -153,10 +157,10 @@ def _insert_candidate(db: Session, email: YahooAlertEmail, item: dict[str, Any],
     url = canonical_job_url(item["job_url"])
     if not url:
         raise ValueError("extracted job URL is invalid")
-    duplicate_status, duplicate_reason = _candidate_duplicate(db, url, item.get("title", ""), item.get("employer", ""), item.get("location", ""))
     existing = db.scalar(select(YahooJobCandidate).where(YahooJobCandidate.alert_email_id == email.id, YahooJobCandidate.job_url == url))
     if existing is not None:
         return existing, True
+    duplicate_status, duplicate_reason = _candidate_duplicate(db, url, item.get("title", ""), item.get("employer", ""), item.get("location", ""))
     description = normalize_content(item.get("description", ""))[:settings.max_research_bytes]
     description_complete = bool(item.get("description_complete")) and len(description) >= 240
     candidate = YahooJobCandidate(
@@ -188,10 +192,27 @@ def _date_range(connection: YahooMailConnection, request: MailSyncRequest) -> tu
     return date_from, date_to
 
 
+def _record_message_error(db: Session, run: YahooMailSyncRun, uid: int, message: str) -> None:
+    scanned = run.messages_scanned
+    db.rollback()
+    db.refresh(run)
+    run.messages_scanned = scanned
+    run.errors += 1
+    run.summary = {**(run.summary or {}), f"uid_{uid}": message[:300]}
+    db.commit()
+
+
 def sync_connection(db: Session, connection: YahooMailConnection, settings: Settings, request: MailSyncRequest, actor: str) -> YahooMailSyncRun:
     lock = SourceLock(settings, f"cybersec:yahoo-mail:{connection.id}")
     if not lock.acquire():
         raise YahooMailError("Another Yahoo Mail synchronization is already running")
+    try:
+        return _sync_locked(db, connection, settings, request, actor)
+    finally:
+        lock.release()
+
+
+def _sync_locked(db: Session, connection: YahooMailConnection, settings: Settings, request: MailSyncRequest, actor: str) -> YahooMailSyncRun:
     date_from, date_to = _date_range(connection, request)
     run = YahooMailSyncRun(connection_id=connection.id, mode=request.mode, mailbox=connection.folder, date_from=date_from, date_to=date_to, uidvalidity_before=connection.uidvalidity, last_uid_before=connection.last_uid, created_by=actor)
     db.add(run)
@@ -202,7 +223,8 @@ def sync_connection(db: Session, connection: YahooMailConnection, settings: Sett
     try:
         with YahooImapClient(settings) as client:
             client.login(connection.email_address, decrypt_app_password(settings, connection.encrypted_app_password), connection.folder)
-            if connection.uidvalidity and connection.uidvalidity != client.uidvalidity:
+            uidvalidity_reset = bool(connection.uidvalidity) and connection.uidvalidity != client.uidvalidity
+            if uidvalidity_reset:
                 minimum_uid = 0
             else:
                 minimum_uid = 0 if request.mode == "initial" else connection.last_uid
@@ -236,13 +258,16 @@ def sync_connection(db: Session, connection: YahooMailConnection, settings: Sett
                         if not existed:
                             run.jobs_extracted += 1
                     db.commit()
-                except (ValueError, YahooMailError) as exc:
-                    run.errors += 1
-                    run.summary = {**(run.summary or {}), f"uid_{uid}": str(exc)[:300]}
-                    db.rollback()
-                    db.refresh(run)
+                except YahooMailError as exc:
+                    if exc.retryable:
+                        # Connection-level failure: abort without advancing the checkpoint so these UIDs are retried.
+                        raise
+                    _record_message_error(db, run, uid, str(exc))
+                except Exception as exc:
+                    # A malformed or unexpected message is recorded and skipped so it cannot block every later sync.
+                    _record_message_error(db, run, uid, f"{type(exc).__name__}: {exc}")
             connection.uidvalidity = client.uidvalidity
-            connection.last_uid = max([connection.last_uid, *uids], default=connection.last_uid)
+            connection.last_uid = max(uids, default=0) if uidvalidity_reset else max([connection.last_uid, *uids])
             connection.last_successful_sync = now()
             connection.status = "connected"
             connection.messages_scanned += run.messages_scanned
@@ -274,7 +299,6 @@ def sync_connection(db: Session, connection: YahooMailConnection, settings: Sett
         run.last_uid_after = connection.last_uid
         run.summary = {**(run.summary or {}), "messages_scanned": run.messages_scanned, "alerts_detected": run.alerts_detected, "jobs_extracted": run.jobs_extracted, "duplicates": run.duplicates, "errors": run.errors}
         db.commit()
-        lock.release()
     return run
 
 
@@ -365,12 +389,20 @@ def review_candidate(db: Session, candidate: YahooJobCandidate, action: str, pay
     return candidate
 
 
+BULK_REVIEW_STATUSES = {"approve": "approve", "reject": "rejected", "defer": "deferred"}
+
+
 def bulk_review(db: Session, payload: BulkReview, actor: str) -> list[YahooJobCandidate]:
     candidates = list(db.scalars(select(YahooJobCandidate).where(YahooJobCandidate.id.in_(payload.candidate_ids))).all())
     if len(candidates) != len(set(payload.candidate_ids)):
         raise ValueError("One or more candidates were not found")
+    action = BULK_REVIEW_STATUSES[payload.action]
+    if action == "approve" and not payload.allow_partial:
+        partial = [candidate.id for candidate in candidates if not candidate.description_complete]
+        if partial:
+            raise ValueError(f"Candidates {', '.join(map(str, sorted(partial)))} have partial descriptions; nothing was changed")
     for candidate in candidates:
-        review_candidate(db, candidate, payload.action, CandidateReview(note=payload.note, allow_partial=payload.allow_partial), actor)
+        review_candidate(db, candidate, action, CandidateReview(note=payload.note, allow_partial=payload.allow_partial), actor)
     return candidates
 
 
