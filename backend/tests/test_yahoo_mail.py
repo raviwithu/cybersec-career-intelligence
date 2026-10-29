@@ -456,7 +456,7 @@ def test_approval_blocked_count_only_tracks_unresolved_fetch_failures(client, mo
     from app.yahoo_mail_service import fetch_pending_descriptions
 
     deferred_id, rejected_id, edited_id, retried_id, approved_id = ids = _candidates("9006", [False] * 5)
-    counts = lambda: client.get("/api/v1/admin/mail/job-candidates/counts", headers=ADMIN_HEADERS).json()["approval_blocked_no_description"]
+    counts = lambda: client.get("/api/v1/admin/mail/job-candidates/counts", headers=ADMIN_HEADERS).json().get("ingestion_approval_blocked", 0)
 
     class Denied:
         def __init__(self, _settings): pass
@@ -478,15 +478,19 @@ def test_approval_blocked_count_only_tracks_unresolved_fetch_failures(client, mo
     # Each way the administrator resolves a blocked job removes it from the count.
     client.post(f"/api/v1/admin/mail/job-candidates/{deferred_id}/defer", headers=ADMIN_HEADERS, json={})
     client.post(f"/api/v1/admin/mail/job-candidates/{rejected_id}/reject", headers=ADMIN_HEADERS, json={})
-    client.patch(f"/api/v1/admin/mail/job-candidates/{edited_id}", headers=ADMIN_HEADERS, json={"description_text": "Corrected description. " * 20})
+    # A short manual description still resolves the block: the administrator supplied it, it was not a failed fetch.
+    client.patch(f"/api/v1/admin/mail/job-candidates/{edited_id}", headers=ADMIN_HEADERS, json={"description_text": "Short manual summary."})
     client.post(f"/api/v1/admin/mail/job-candidates/{approved_id}/approve", headers=ADMIN_HEADERS, json={"note": "", "allow_partial": True})
     assert counts() - before == 1
     monkeypatch.setattr("app.yahoo_mail_service.UrlImporter", lambda _settings: type("Importer", (), {"import_job": lambda self, _url: type("Imported", (), {"job_description": "Full description. " * 30, "extraction_method": "html"})()})())
     assert client.post(f"/api/v1/admin/mail/job-candidates/{retried_id}/retry-description", headers=ADMIN_HEADERS).status_code == 200
     assert counts() - before == 0
     with SessionLocal() as db:
-        assert db.get(YahooJobCandidate, edited_id).ingestion_status == "not_approved"
-        assert db.get(YahooJobCandidate, retried_id).review_status == "pending"
+        edited, retried = db.get(YahooJobCandidate, edited_id), db.get(YahooJobCandidate, retried_id)
+        assert (edited.ingestion_status, edited.description_status) == ("not_approved", "partial")
+        assert retried.review_status == "pending"
+        # The scheduler's "could not be retrieved" note goes with the block.
+        assert edited.review_note is None and retried.review_note is None
 
 
 def test_scheduler_does_not_override_a_review_made_during_the_fetch(client, monkeypatch):
@@ -512,5 +516,47 @@ def test_scheduler_does_not_override_a_review_made_during_the_fetch(client, monk
     fetch_pending_descriptions(settings)
     with SessionLocal() as db:
         rejected, deferred = (db.get(YahooJobCandidate, candidate_id) for candidate_id in ids)
-        assert (rejected.review_status, rejected.ingestion_status, rejected.description_complete) == ("rejected", "not_approved", True)
+        assert (rejected.review_status, rejected.ingestion_status, rejected.description_complete) == ("rejected", "not_approved", False)
         assert (deferred.review_status, deferred.ingestion_status) == ("deferred", "not_approved")
+
+
+def test_scheduler_does_not_overwrite_a_description_edited_during_the_fetch(client, monkeypatch):
+    from app.config import get_settings
+    from app.yahoo_mail_service import fetch_pending_descriptions
+
+    candidate_id = _candidates("9009", [False])[0]
+    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": [candidate_id], "action": "approve"})
+    corrected = "Administrator corrected description. " * 10
+
+    class EditedMidFetch:
+        def __init__(self, _settings): pass
+
+        def import_job(self, _url):
+            client.patch(f"/api/v1/admin/mail/job-candidates/{candidate_id}", headers=ADMIN_HEADERS, json={"description_text": corrected})
+            return type("Imported", (), {"job_description": "Scraped description. " * 30, "extraction_method": "html"})()
+
+    monkeypatch.setattr("app.yahoo_mail_service.UrlImporter", EditedMidFetch)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "jsearch_api_key", None)
+    fetch_pending_descriptions(settings)
+    with SessionLocal() as db:
+        item = db.get(YahooJobCandidate, candidate_id)
+        assert (item.description_text, item.extraction_method) == (corrected, "administrator_corrected")
+        assert (item.review_status, item.ingestion_status) == ("pending", "not_approved")
+
+
+def test_candidate_list_filters_by_ingestion_and_can_skip_counts(client):
+    ids = _candidates("9010", [True, False])
+    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": ids, "action": "approve"})
+    page = client.get("/api/v1/admin/mail/job-candidates", headers=ADMIN_HEADERS, params={"ingestion": "fetching_description", "counts": "false"}).json()
+    assert ids[1] in {item["id"] for item in page["items"]} and ids[0] not in {item["id"] for item in page["items"]}
+    assert page["counts"] == {}
+
+
+def test_candidate_counts_revision_changes_when_a_row_changes(client):
+    candidate_id = _candidates("9011", [False])[0]
+    revision = lambda: client.get("/api/v1/admin/mail/job-candidates/counts", headers=ADMIN_HEADERS).json()["revision"]
+    before = revision()
+    # Editing a title leaves every total unchanged but must still be visible to the inbox poll.
+    client.patch(f"/api/v1/admin/mail/job-candidates/{candidate_id}", headers=ADMIN_HEADERS, json={"title": "Renamed role"})
+    assert revision() != before

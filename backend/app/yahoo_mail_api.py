@@ -27,7 +27,7 @@ from .yahoo_mail_schemas import (
     SyncRunResponse,
 )
 from .yahoo_mail_service import (
-    APPROVAL_BLOCKED,
+    FETCHING_DESCRIPTION,
     MailConfigurationError,
     bulk_review,
     candidate_response,
@@ -156,13 +156,15 @@ def _candidate_counts(db: Session) -> dict[str, int]:
         counts[value] = int(count)
     for value, count in db.execute(select(YahooJobCandidate.ingestion_status, func.count()).group_by(YahooJobCandidate.ingestion_status)).all():
         counts[f"ingestion_{value}"] = int(count)
-    duplicates, extraction_failed = db.execute(select(
+    duplicates, extraction_failed, last_updated = db.execute(select(
         func.coalesce(func.sum(case((YahooJobCandidate.duplicate_status == "duplicate", 1), else_=0)), 0),
         func.coalesce(func.sum(case((YahooJobCandidate.description_status == "failed", 1), else_=0)), 0),
+        func.max(YahooJobCandidate.updated_at),
     )).one()
     counts["duplicates"] = int(duplicates)
     counts["extraction_failed"] = int(extraction_failed)
-    counts["approval_blocked_no_description"] = counts.get(f"ingestion_{APPROVAL_BLOCKED}", 0)
+    # Changes whenever any candidate row changes, so the inbox poll also notices edits that leave every total unchanged.
+    counts["revision"] = int(last_updated.timestamp() * 1_000_000) if last_updated else 0
     return counts
 
 
@@ -178,6 +180,8 @@ def list_candidates(
     source: str | None = None,
     search: str | None = None,
     description: str | None = Query(default=None, pattern="^(complete|partial)$"),
+    ingestion: str | None = None,
+    include_counts: bool = Query(default=True, alias="counts"),
     db: Session = Depends(get_db),
 ):
     query = _candidate_query().order_by(YahooJobCandidate.created_at.desc())
@@ -192,8 +196,11 @@ def list_candidates(
         query = query.where(YahooJobCandidate.description_complete.is_(True))
     elif description == "partial":
         query = query.where(YahooJobCandidate.description_complete.is_(False))
+    if ingestion:
+        query = query.where(YahooJobCandidate.ingestion_status == ingestion)
     items = list(db.scalars(query).unique().all())
-    return CandidatePage(items=[candidate_response(item) for item in items], total=len(items), counts=_candidate_counts(db))
+    # The inbox poll already holds fresh counts and passes counts=false to skip recomputing them.
+    return CandidatePage(items=[candidate_response(item) for item in items], total=len(items), counts=_candidate_counts(db) if include_counts else {})
 
 
 @router.get("/job-candidates/{candidate_id}", response_model=CandidateResponse, dependencies=[Depends(require_admin)])
@@ -212,6 +219,9 @@ def patch_candidate(candidate_id: int, payload: CandidateUpdate, db: Session = D
         item.description_complete = len(item.description_text.strip()) >= 240
         item.description_status = "complete" if item.description_complete else "partial"
         item.extraction_method = "administrator_corrected"
+        if item.ingestion_status == FETCHING_DESCRIPTION:
+            # The administrator supplied the description, so the scheduler must not overwrite it; they approve it themselves.
+            item.ingestion_status = "not_approved"
         clear_approval_block(item)
     values.pop("note", None)
     for key, value in values.items():

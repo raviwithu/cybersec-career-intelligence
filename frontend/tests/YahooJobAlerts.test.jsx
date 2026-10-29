@@ -64,7 +64,7 @@ describe("Yahoo Job Alerts administrator page", () => {
     let listCalls = 0;
     let countCalls = 0;
     let otherCalls = 0;
-    let counts = { pending: 3, extraction_failed: 5, approval_blocked_no_description: 2, ingestion_fetching_description: 120, ingestion_queued: 40, ingestion_processing: 1, ingestion_analyzed: 85, ingestion_not_approved: 300 };
+    let counts = { pending: 3, extraction_failed: 5, ingestion_approval_blocked: 2, ingestion_fetching_description: 120, ingestion_queued: 40, ingestion_processing: 1, ingestion_analyzed: 85, ingestion_not_approved: 300 };
     global.fetch = vi.fn((url) => {
       if (url.includes("/job-candidates/counts")) { countCalls += 1; return response(counts); }
       if (url.includes("/job-candidates")) { listCalls += 1; return response({ items: [], total: 0, counts }); }
@@ -111,6 +111,52 @@ describe("Yahoo Job Alerts administrator page", () => {
       expect(await screen.findByText(/Administrator key rejected/)).toBeTruthy();
       await vi.advanceTimersByTimeAsync(45000);
       expect(countCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumes polling after a successful retry following a rejected key", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let countCalls = 0;
+    let rejectKey = true;
+    global.fetch = vi.fn((url) => {
+      if (url.includes("/job-candidates/counts")) { countCalls += 1; return rejectKey ? Promise.resolve({ ok: false, status: 403, json: () => Promise.resolve({ detail: "Administrator key rejected" }) }) : response({ pending: 0, ingestion_queued: 2 }); }
+      if (url.includes("/job-candidates")) return response({ items: [], total: 0, counts: { pending: 0, ingestion_queued: 2 } });
+      return response([]);
+    });
+    try {
+      render(<YahooJobAlertsPage />);
+      await screen.findByRole("region", { name: "Approval pipeline status" });
+      await vi.advanceTimersByTimeAsync(15000);
+      await screen.findByText(/Administrator key rejected/);
+      rejectKey = false;
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      await waitFor(() => expect(screen.queryByText(/Administrator key rejected/)).toBeNull());
+      await vi.advanceTimersByTimeAsync(15000);
+      await waitFor(() => expect(countCalls).toBe(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reloads the list without recomputing counts when only the row revision changes", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const listUrls = [];
+    let counts = { pending: 1, ingestion_fetching_description: 1, revision: 1 };
+    global.fetch = vi.fn((url) => {
+      if (url.includes("/job-candidates/counts")) return response(counts);
+      if (url.includes("/job-candidates")) { listUrls.push(url); return response({ items: [], total: 0, counts }); }
+      return response([]);
+    });
+    try {
+      render(<YahooJobAlertsPage />);
+      await screen.findByRole("region", { name: "Approval pipeline status" });
+      counts = { ...counts, revision: 2 };
+      await vi.advanceTimersByTimeAsync(15000);
+      await waitFor(() => expect(listUrls).toHaveLength(2));
+      expect(listUrls[1]).toContain("counts=false");
+      expect(listUrls[0]).not.toContain("counts=false");
     } finally {
       vi.useRealTimers();
     }
