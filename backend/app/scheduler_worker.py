@@ -6,6 +6,7 @@ from .config import get_settings
 from .logging_config import configure_logging
 from .job_search_pipeline import run_due_job_searches
 from .phase6_pipeline import run_due_schedules
+from .yahoo_mail_service import run_due_yahoo_mail
 
 configure_logging()
 logger = logging.getLogger("cybersec.research_scheduler")
@@ -28,7 +29,7 @@ def main() -> None:
     while True:
         _touch_heartbeat()
         try:
-            processed = run_due_schedules(settings) + run_due_job_searches(settings)
+            processed = run_due_schedules(settings) + run_due_job_searches(settings) + run_due_yahoo_mail(settings)
             if processed:
                 logger.info("scheduled_research_runs_completed count=%d", processed)
         except Exception:

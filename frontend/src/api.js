@@ -163,6 +163,23 @@ export function fetchKnowledgeTopicProposals(params = {}, adminKey) { return req
 export function reviewKnowledgeTopicProposal(id, payload, adminKey) { return request(`/api/v1/research/career-readiness/proposals/${id}/review`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
 export function publishKnowledgeTopicProposals(payload, adminKey) { return request("/api/v1/research/career-readiness/proposals/publish", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
 
+export function fetchYahooConnections(adminKey) { return request("/api/v1/admin/mail/connections", { headers: adminHeaders(adminKey) }); }
+export function saveYahooConnection(payload, adminKey) { return request("/api/v1/admin/mail/connections", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function updateYahooConnection(id, payload, adminKey) { return request(`/api/v1/admin/mail/connections/${id}`, { method: "PATCH", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function testYahooConnection(payload, adminKey) { return request("/api/v1/admin/mail/connections/test", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function disconnectYahooConnection(id, adminKey) { return request(`/api/v1/admin/mail/connections/${id}/disconnect`, { method: "POST", headers: adminHeaders(adminKey) }); }
+export function syncYahooConnection(id, payload, adminKey) { return request(`/api/v1/admin/mail/connections/${id}/sync`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function fetchYahooSyncRuns(params = {}, adminKey) { return request(`/api/v1/admin/mail/sync-runs${queryString(params)}`, { headers: adminHeaders(adminKey) }); }
+export function fetchYahooAlertSources(params = {}, adminKey) { return request(`/api/v1/admin/mail/alert-sources${queryString(params)}`, { headers: adminHeaders(adminKey) }); }
+export function updateYahooAlertSource(id, payload, adminKey) { return request(`/api/v1/admin/mail/alert-sources/${id}`, { method: "PATCH", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function fetchYahooCandidates(params = {}, adminKey) { return request(`/api/v1/admin/mail/job-candidates${queryString(params)}`, { headers: adminHeaders(adminKey) }); }
+export function fetchYahooCandidate(id, adminKey) { return request(`/api/v1/admin/mail/job-candidates/${id}`, { headers: adminHeaders(adminKey) }); }
+export function updateYahooCandidate(id, payload, adminKey) { return request(`/api/v1/admin/mail/job-candidates/${id}`, { method: "PATCH", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function reviewYahooCandidate(id, action, payload, adminKey) { return request(`/api/v1/admin/mail/job-candidates/${id}/${action}`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload || {}) }); }
+export function bulkReviewYahooCandidates(payload, adminKey) { return request("/api/v1/admin/mail/job-candidates/bulk-review", { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function retryYahooDescription(id, adminKey) { return request(`/api/v1/admin/mail/job-candidates/${id}/retry-description`, { method: "POST", headers: adminHeaders(adminKey) }); }
+
+
 export function publishResearchDraft(id, adminKey) { return request(`/api/v1/research/drafts/${id}/publish`, { method: "POST", headers: adminHeaders(adminKey) }); }
 
 

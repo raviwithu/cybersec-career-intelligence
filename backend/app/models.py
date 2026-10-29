@@ -725,6 +725,180 @@ class JobSearchResult(Base):
     content_version: Mapped["ResearchContentVersion | None"] = relationship()
     duplicate_of: Mapped["JobSearchResult | None"] = relationship(remote_side=[id])
 
+
+class YahooMailConnection(Base):
+    __tablename__ = "yahoo_mail_connections"
+    __table_args__ = (UniqueConstraint("email_address", name="uq_yahoo_mail_connection_email"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email_address: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    auth_method: Mapped[str] = mapped_column(String(30), default="app_password")
+    encrypted_app_password: Mapped[str] = mapped_column(Text)
+    folder: Mapped[str] = mapped_column(String(255), default="Inbox")
+    initial_sync_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    automatic_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    sync_interval_minutes: Mapped[int] = mapped_column(Integer, default=360)
+    next_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    uidvalidity: Mapped[str | None] = mapped_column(String(120))
+    last_uid: Mapped[int] = mapped_column(Integer, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    status: Mapped[str] = mapped_column(String(30), default="disconnected", index=True)
+    last_successful_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_error: Mapped[str | None] = mapped_column(Text)
+    messages_scanned: Mapped[int] = mapped_column(Integer, default=0)
+    alerts_detected: Mapped[int] = mapped_column(Integer, default=0)
+    jobs_extracted: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    alert_sources: Mapped[list["YahooAlertSource"]] = relationship(back_populates="connection", cascade="all, delete-orphan")
+    sync_runs: Mapped[list["YahooMailSyncRun"]] = relationship(back_populates="connection", cascade="all, delete-orphan")
+    alert_emails: Mapped[list["YahooAlertEmail"]] = relationship(back_populates="connection", cascade="all, delete-orphan")
+
+
+class YahooAlertSource(Base):
+    __tablename__ = "yahoo_alert_sources"
+    __table_args__ = (UniqueConstraint("connection_id", "sender_address", name="uq_yahoo_alert_source_sender"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    connection_id: Mapped[int] = mapped_column(ForeignKey("yahoo_mail_connections.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(180), default="LinkedIn Job Alerts")
+    sender_address: Mapped[str] = mapped_column(String(320), default="jobalerts-noreply@linkedin.com", index=True)
+    subject_pattern: Mapped[str] = mapped_column(String(300), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    extraction_adapter: Mapped[str] = mapped_column(String(60), default="linkedin_job_alert")
+    detection_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_detected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    connection: Mapped[YahooMailConnection] = relationship(back_populates="alert_sources")
+    emails: Mapped[list["YahooAlertEmail"]] = relationship(back_populates="alert_source")
+
+
+class YahooMailSyncRun(Base):
+    __tablename__ = "yahoo_mail_sync_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    connection_id: Mapped[int] = mapped_column(ForeignKey("yahoo_mail_connections.id", ondelete="CASCADE"), index=True)
+    mode: Mapped[str] = mapped_column(String(20), default="incremental", index=True)
+    status: Mapped[str] = mapped_column(String(30), default="running", index=True)
+    mailbox: Mapped[str] = mapped_column(String(255), default="Inbox")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    date_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    date_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    uidvalidity_before: Mapped[str | None] = mapped_column(String(120))
+    uidvalidity_after: Mapped[str | None] = mapped_column(String(120))
+    last_uid_before: Mapped[int] = mapped_column(Integer, default=0)
+    last_uid_after: Mapped[int] = mapped_column(Integer, default=0)
+    messages_scanned: Mapped[int] = mapped_column(Integer, default=0)
+    alerts_detected: Mapped[int] = mapped_column(Integer, default=0)
+    jobs_extracted: Mapped[int] = mapped_column(Integer, default=0)
+    duplicates: Mapped[int] = mapped_column(Integer, default=0)
+    errors: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(String(120), default="scheduler")
+
+    connection: Mapped[YahooMailConnection] = relationship(back_populates="sync_runs")
+    emails: Mapped[list["YahooAlertEmail"]] = relationship(back_populates="sync_run")
+
+
+class YahooAlertEmail(Base):
+    __tablename__ = "yahoo_alert_emails"
+    __table_args__ = (UniqueConstraint("connection_id", "mailbox", "uidvalidity", "uid", name="uq_yahoo_alert_email_uid"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    connection_id: Mapped[int] = mapped_column(ForeignKey("yahoo_mail_connections.id", ondelete="CASCADE"), index=True)
+    sync_run_id: Mapped[int | None] = mapped_column(ForeignKey("yahoo_mail_sync_runs.id", ondelete="SET NULL"), index=True)
+    alert_source_id: Mapped[int | None] = mapped_column(ForeignKey("yahoo_alert_sources.id", ondelete="SET NULL"), index=True)
+    mailbox: Mapped[str] = mapped_column(String(255), default="Inbox")
+    uidvalidity: Mapped[str] = mapped_column(String(120))
+    uid: Mapped[int] = mapped_column(Integer)
+    message_id: Mapped[str | None] = mapped_column(String(500), index=True)
+    sender_address: Mapped[str] = mapped_column(String(320), index=True)
+    subject: Mapped[str] = mapped_column(String(500), default="")
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    authentication_headers: Mapped[dict] = mapped_column(JSON, default=dict)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    processing_status: Mapped[str] = mapped_column(String(30), default="processed", index=True)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    connection: Mapped[YahooMailConnection] = relationship(back_populates="alert_emails")
+    sync_run: Mapped[YahooMailSyncRun | None] = relationship(back_populates="emails")
+    alert_source: Mapped[YahooAlertSource | None] = relationship(back_populates="emails")
+    candidates: Mapped[list["YahooJobCandidate"]] = relationship(back_populates="alert_email", cascade="all, delete-orphan")
+
+
+class YahooJobCandidate(Base):
+    __tablename__ = "yahoo_job_candidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    alert_email_id: Mapped[int] = mapped_column(ForeignKey("yahoo_alert_emails.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    employer: Mapped[str] = mapped_column(String(300), default="")
+    location: Mapped[str] = mapped_column(String(300), default="")
+    work_mode: Mapped[str] = mapped_column(String(40), default="")
+    job_url: Mapped[str] = mapped_column(String(1000), index=True)
+    source_provider: Mapped[str] = mapped_column(String(80), default="LinkedIn Job Alerts")
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    description_text: Mapped[str] = mapped_column(Text, default="")
+    description_complete: Mapped[bool] = mapped_column(Boolean, default=False)
+    description_status: Mapped[str] = mapped_column(String(30), default="partial", index=True)
+    extraction_method: Mapped[str] = mapped_column(String(60), default="linkedin_job_alert")
+    review_status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    duplicate_status: Mapped[str] = mapped_column(String(30), default="unique", index=True)
+    duplicate_reason: Mapped[str | None] = mapped_column(String(500))
+    ingestion_status: Mapped[str] = mapped_column(String(30), default="not_approved", index=True)
+    research_content_version_id: Mapped[int | None] = mapped_column(ForeignKey("research_content_versions.id", ondelete="SET NULL"), index=True)
+    research_submission_id: Mapped[int | None] = mapped_column(ForeignKey("research_submissions.id", ondelete="SET NULL"), index=True)
+    metadata_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    approved_by: Mapped[str | None] = mapped_column(String(120))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    review_note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    alert_email: Mapped[YahooAlertEmail] = relationship(back_populates="candidates")
+    content_version: Mapped["ResearchContentVersion | None"] = relationship()
+    research_submission: Mapped["ResearchSubmission | None"] = relationship()
+    provenance: Mapped[list["YahooJobProvenance"]] = relationship(back_populates="candidate", cascade="all, delete-orphan")
+    reviews: Mapped[list["YahooJobReview"]] = relationship(back_populates="candidate", cascade="all, delete-orphan")
+
+
+class YahooJobProvenance(Base):
+    __tablename__ = "yahoo_job_provenance"
+    __table_args__ = (UniqueConstraint("candidate_id", "provenance_type", "source_url", name="uq_yahoo_job_provenance_source"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("yahoo_job_candidates.id", ondelete="CASCADE"), index=True)
+    provenance_type: Mapped[str] = mapped_column(String(40))
+    provider_job_id: Mapped[str | None] = mapped_column(String(255))
+    source_url: Mapped[str | None] = mapped_column(String(1000))
+    source_label: Mapped[str] = mapped_column(String(200))
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    candidate: Mapped[YahooJobCandidate] = relationship(back_populates="provenance")
+
+
+class YahooJobReview(Base):
+    __tablename__ = "yahoo_job_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("yahoo_job_candidates.id", ondelete="CASCADE"), index=True)
+    action: Mapped[str] = mapped_column(String(30))
+    actor: Mapped[str] = mapped_column(String(120))
+    note: Mapped[str] = mapped_column(String(2000), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    candidate: Mapped[YahooJobCandidate] = relationship(back_populates="reviews")
+
+
 class ResearchSchedule(Base):
     __tablename__ = "research_schedules"
     __table_args__ = (UniqueConstraint("source_id", name="uq_research_schedule_source"),)

@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     jsearch_retry_base_seconds: float = 1.0
     jsearch_rate_limit_sleep_seconds: float = 2.0
     job_search_retention_days: int = 90
+    mail_encryption_key: str | None = None
+    yahoo_imap_host: str = "imap.mail.yahoo.com"
+    yahoo_imap_port: int = 993
+    mail_sync_max_messages: int = 100
+    mail_max_message_bytes: int = 2_000_000
+    mail_max_candidates_per_message: int = 50
+    mail_default_sync_interval_minutes: int = 360
+    mail_candidate_retention_days: int = 90
 
     cors_origins: str = "http://localhost:3100,http://127.0.0.1:3100"
 
