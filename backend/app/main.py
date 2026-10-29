@@ -15,6 +15,7 @@ from .admin_auth import require_admin
 from .health import service_status
 from .intelligence_api import router as intelligence_router
 from .job_search_api import router as job_search_router
+from .yahoo_mail_api import router as yahoo_mail_router
 from .knowledge import router as knowledge_router
 from .knowledge_contract_api import router as knowledge_contract_router
 from .knowledge_topic_api import admin_router as knowledge_topic_admin_router, public_router as knowledge_topic_public_router
@@ -59,6 +60,7 @@ app.include_router(phase5_router, prefix=settings.api_prefix)
 app.include_router(phase6_router, prefix=settings.api_prefix)
 app.include_router(taxonomy_router, prefix=settings.api_prefix)
 app.include_router(job_search_router, prefix=settings.api_prefix)
+app.include_router(yahoo_mail_router, prefix=settings.api_prefix)
 app.include_router(research_review_router, prefix=settings.api_prefix)
 app.include_router(intelligence_router, prefix=settings.api_prefix)
 

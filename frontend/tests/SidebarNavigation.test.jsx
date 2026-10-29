@@ -56,6 +56,7 @@ describe("grouped sidebar navigation", () => {
     expect(screen.getByRole("button", { name: "Administration" }).getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("button", { name: "Research Review" }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("button", { name: "Taxonomy Management" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Yahoo Job Alerts" })).toBeTruthy();
   });
 
   it("finds grouped pages through navigation search", () => {

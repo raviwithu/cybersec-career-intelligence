@@ -56,6 +56,7 @@ export const navigationGroups = [
     adminOnly: true,
     items: [
       { id: "research-ingestion", label: "Research Ingestion", icon: "↻" },
+      { id: "yahoo-job-alerts", label: "Yahoo Job Alerts", icon: "✉" },
       { id: "knowledge-review", label: "Knowledge Review", icon: "▣" },
       { id: "research-review", label: "Research Review", icon: "✓" },
       { id: "career-readiness-review", label: "Career Readiness Review", icon: "◇" },

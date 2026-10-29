@@ -144,6 +144,8 @@ def test_alembic_migration_creates_revised_tables():
             "domain_level_expectations", "competency_relationships", "research_sources",
             "expectation_sources", "analysis_versions", "research_submissions", "research_findings",
             "draft_expectations", "draft_evidence", "research_submission_audits",
+            "yahoo_mail_connections", "yahoo_alert_sources", "yahoo_mail_sync_runs", "yahoo_alert_emails",
+            "yahoo_job_candidates", "yahoo_job_provenance", "yahoo_job_reviews",
         } <= tables
     finally:
         temp_database.unlink(missing_ok=True)

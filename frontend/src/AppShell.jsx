@@ -11,6 +11,7 @@ import ResearchReviewPage from "./ResearchReviewPage";
 import CareerReadinessAdminPage from "./CareerReadinessAdminPage";
 import IntelligencePage from "./IntelligencePage";
 import ResearchIngestionPage from "./ResearchIngestionPage";
+import YahooJobAlertsPage from "./YahooJobAlertsPage";
 import KnowledgeTopicPage from "./KnowledgeTopicPage";
 import KnowledgeReviewPage from "./KnowledgeReviewPage";
 import SidebarNavigation, { findNavigationItem, getViewFromLocation } from "./SidebarNavigation";
@@ -83,6 +84,7 @@ export default function AppShell() {
             : view === "search" ? <SearchPage domains={data.domains} levels={data.levels} selectedIndustry={selectedIndustry} onCompetency={openCompetency} onDomain={openDomain} />
             : view === "research" ? <ResearchAdminPage />
               : view === "research-ingestion" ? <ResearchIngestionPage onOpenReview={() => navigate("research-review")} />
+                : view === "yahoo-job-alerts" ? <YahooJobAlertsPage />
                 : view === "knowledge-review" ? <KnowledgeReviewPage />
                 : view === "automated-research" ? <AutomatedResearchPage onOpenReview={() => navigate("research-review")} />
                   : view === "taxonomy-management" ? <TaxonomyManagementPage />
