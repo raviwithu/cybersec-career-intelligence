@@ -23,12 +23,22 @@ import {
 import { Badge, EmptyState, ErrorState, Loading, PageHeader, StatCard } from "./components";
 
 const ALLOWED_SENDER = "jobalerts-noreply@linkedin.com";
+const BULK_BATCH_SIZE = 100;
 const TABS = [["inbox", "Job Inbox"], ["connection", "Mail Connection"], ["sources", "Alert Sources"], ["history", "Sync History"]];
 
 // datetime-local inputs hold local wall-clock time; the API stores UTC.
 function toLocalInput(value) { if (!value) return ""; const date = new Date(value); return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); }
 function formatDate(value) { return value ? new Date(value).toLocaleString() : "Not yet"; }
 function tone(value) { return ["approved", "completed", "analyzed", "connected"].includes(value) ? "mint" : ["rejected", "failed", "error"].includes(value) ? "rose" : "amber"; }
+
+function bulkSummary(action, totals) {
+  if (action !== "approve") return `${totals.updated} job(s) ${action === "reject" ? "rejected" : "deferred"}.`;
+  const parts = [`${totals.approved} approved`];
+  if (totals.fetching_description) parts.push(`${totals.fetching_description} fetching full descriptions (approved automatically when retrieved, otherwise returned to pending with a note)`);
+  if (totals.skipped_duplicates) parts.push(`${totals.skipped_duplicates} duplicate(s) skipped`);
+  if (totals.skipped_already_approved) parts.push(`${totals.skipped_already_approved} already approved`);
+  return `${parts.join(" · ")}.`;
+}
 
 function AuthGate({ onUnlock }) {
   const [value, setValue] = useState("");
@@ -47,11 +57,33 @@ function CandidateDrawer({ candidate, adminKey, onChanged, onClose }) {
 
 function Inbox({ candidates, counts, filters, setFilters, selected, setSelected, onRefresh, onOpen, adminKey }) {
   const [busy, setBusy] = useState(false);
-  const [bulkError, setBulkError] = useState(null);
+  const [bulkMessage, setBulkMessage] = useState(null);
   const visibleIds = candidates.map((item) => item.id);
   const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.includes(id));
-  async function bulk(action) { if (!selected.length || !window.confirm(`${action} ${selected.length} selected job(s)?`)) return; setBusy(true); setBulkError(null); try { await bulkReviewYahooCandidates({ candidate_ids: selected, action, note: "Bulk administrator review" }, adminKey); setSelected([]); await onRefresh(); } catch (requestError) { setBulkError(requestError); } finally { setBusy(false); } }
-  return <><section className="stats-grid yahoo-stats"><StatCard label="Emails scanned" value={counts.emails} detail="Matching mailbox messages" accent="blue" /><StatCard label="Alerts identified" value={counts.alerts} detail="Exact LinkedIn sender" accent="violet" /><StatCard label="Jobs extracted" value={counts.jobs} detail="Individual listings" accent="mint" /><StatCard label="Pending approval" value={counts.pending} detail="Administrator review" accent="amber" /></section><section className="panel"><div className="panel-title-row"><div><p className="eyebrow">LINKEDIN JOB ALERTS</p><h2>Job Inbox</h2><p className="muted-copy">Email Source: LinkedIn Job Alerts · Allowed Sender: <code>{ALLOWED_SENDER}</code></p></div><button className="button button-secondary" onClick={onRefresh}>Refresh</button></div><div className="job-filters"><select aria-label="Candidate status" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="deferred">Deferred</option></select><select aria-label="Description completeness" value={filters.description} onChange={(event) => setFilters({ ...filters, description: event.target.value })}><option value="">All descriptions</option><option value="complete">Full description</option><option value="partial">Partial description</option></select><input aria-label="Search jobs" placeholder="Search title, employer, location" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} /><button className="button button-secondary" disabled={!selected.length || busy} onClick={() => bulk("approve")}>Approve {selected.length || "selected"}</button><button className="button button-secondary" disabled={!selected.length || busy} onClick={() => bulk("defer")}>Defer</button><button className="button button-danger" disabled={!selected.length || busy} onClick={() => bulk("reject")}>Reject</button></div>{bulkError && <ErrorState error={bulkError} />}{candidates.length ? <div className="job-table-wrap"><table className="job-table"><thead><tr><th><input type="checkbox" aria-label="Select all visible jobs" checked={allSelected} onChange={() => setSelected(allSelected ? selected.filter((id) => !visibleIds.includes(id)) : [...new Set([...selected, ...visibleIds])])} /></th><th>Job</th><th>Location</th><th>Source</th><th>Description</th><th>Discovered</th><th>Status</th></tr></thead><tbody>{candidates.map((candidate) => <tr key={candidate.id} onClick={() => onOpen(candidate.id)}><td onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Select ${candidate.title}`} checked={selected.includes(candidate.id)} onChange={() => setSelected(selected.includes(candidate.id) ? selected.filter((id) => id !== candidate.id) : [...selected, candidate.id])} /></td><td><strong>{candidate.title}</strong><small>{candidate.employer || "Employer not extracted"}</small></td><td>{candidate.location || "Not specified"}</td><td>{candidate.source_provider}</td><td><Badge tone={candidate.description_complete ? "mint" : "amber"}>{candidate.description_complete ? "Full" : "Partial"}</Badge></td><td>{formatDate(candidate.first_seen_at)}</td><td><Badge tone={tone(candidate.review_status)}>{candidate.review_status}</Badge>{candidate.duplicate_status === "duplicate" && <Badge tone="violet">Duplicate</Badge>}</td></tr>)}</tbody></table></div> : <EmptyState title="No job candidates" message="Run a historical or incremental synchronization to discover LinkedIn job alerts." />}</section></>;
+  async function bulk(action) {
+    if (!selected.length || !window.confirm(`${action} ${selected.length} selected job(s)?`)) return;
+    setBusy(true);
+    setBulkMessage(null);
+    const totals = { updated: 0, approved: 0, fetching_description: 0, skipped_duplicates: 0, skipped_already_approved: 0 };
+    let done = [];
+    try {
+      // The API accepts at most BULK_BATCH_SIZE ids per request.
+      for (let start = 0; start < selected.length; start += BULK_BATCH_SIZE) {
+        const batch = selected.slice(start, start + BULK_BATCH_SIZE);
+        const result = await bulkReviewYahooCandidates({ candidate_ids: batch, action, note: "Bulk administrator review" }, adminKey);
+        Object.keys(totals).forEach((key) => { totals[key] += result[key] || 0; });
+        done = [...done, ...batch];
+      }
+      setBulkMessage({ tone: "info", text: bulkSummary(action, totals) });
+    } catch (requestError) {
+      setBulkMessage({ tone: "error", text: `${done.length} of ${selected.length} job(s) processed before an error: ${requestError.message}` });
+    } finally {
+      setSelected(selected.filter((id) => !done.includes(id)));
+      setBusy(false);
+      await onRefresh();
+    }
+  }
+  return <><section className="stats-grid yahoo-stats"><StatCard label="Emails scanned" value={counts.emails} detail="Matching mailbox messages" accent="blue" /><StatCard label="Alerts identified" value={counts.alerts} detail="Exact LinkedIn sender" accent="violet" /><StatCard label="Jobs extracted" value={counts.jobs} detail="Individual listings" accent="mint" /><StatCard label="Pending approval" value={counts.pending} detail="Administrator review" accent="amber" /></section><section className="panel"><div className="panel-title-row"><div><p className="eyebrow">LINKEDIN JOB ALERTS</p><h2>Job Inbox</h2><p className="muted-copy">Email Source: LinkedIn Job Alerts · Allowed Sender: <code>{ALLOWED_SENDER}</code></p></div><button className="button button-secondary" onClick={onRefresh}>Refresh</button></div><div className="job-filters"><select aria-label="Candidate status" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="deferred">Deferred</option></select><select aria-label="Description completeness" value={filters.description} onChange={(event) => setFilters({ ...filters, description: event.target.value })}><option value="">All descriptions</option><option value="complete">Full description</option><option value="partial">Partial description</option></select><input aria-label="Search jobs" placeholder="Search title, employer, location" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} /><button className="button button-secondary" disabled={!selected.length || busy} onClick={() => bulk("approve")}>Approve {selected.length || "selected"}</button><button className="button button-secondary" disabled={!selected.length || busy} onClick={() => bulk("defer")}>Defer</button><button className="button button-danger" disabled={!selected.length || busy} onClick={() => bulk("reject")}>Reject</button></div>{bulkMessage && <p className={bulkMessage.tone === "error" ? "error-copy" : "muted-copy"} role="status">{bulkMessage.text}</p>}{candidates.length ? <div className="job-table-wrap"><table className="job-table"><thead><tr><th><input type="checkbox" aria-label="Select all visible jobs" checked={allSelected} onChange={() => setSelected(allSelected ? selected.filter((id) => !visibleIds.includes(id)) : [...new Set([...selected, ...visibleIds])])} /></th><th>Job</th><th>Location</th><th>Source</th><th>Description</th><th>Discovered</th><th>Status</th></tr></thead><tbody>{candidates.map((candidate) => <tr key={candidate.id} onClick={() => onOpen(candidate.id)}><td onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Select ${candidate.title}`} checked={selected.includes(candidate.id)} onChange={() => setSelected(selected.includes(candidate.id) ? selected.filter((id) => id !== candidate.id) : [...selected, candidate.id])} /></td><td><strong>{candidate.title}</strong><small>{candidate.employer || "Employer not extracted"}</small></td><td>{candidate.location || "Not specified"}</td><td>{candidate.source_provider}</td><td><Badge tone={candidate.description_complete ? "mint" : "amber"}>{candidate.ingestion_status === "fetching_description" ? "Fetching" : candidate.description_complete ? "Full" : "Partial"}</Badge></td><td>{formatDate(candidate.first_seen_at)}</td><td><Badge tone={tone(candidate.review_status)}>{candidate.review_status}</Badge>{candidate.duplicate_status === "duplicate" && <Badge tone="violet">Duplicate</Badge>}</td></tr>)}</tbody></table></div> : <EmptyState title="No job candidates" message="Run a historical or incremental synchronization to discover LinkedIn job alerts." />}</section></>;
 }
 
 function ConnectionTab({ connections, runs, adminKey, onRefresh }) {

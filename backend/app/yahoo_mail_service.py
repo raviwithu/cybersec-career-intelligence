@@ -307,21 +307,26 @@ def retry_description(db: Session, candidate: YahooJobCandidate, settings: Setti
         raise ValueError("Candidate has no job URL")
     description = ""
     method = ""
-    if settings.jsearch_api_key:
+    page_error: UrlImportError | None = None
+    # The public job page is free and usually complete; JSearch spends API quota, so it is only the fallback.
+    try:
+        imported = UrlImporter(settings).import_job(candidate.job_url)
+        description, method = imported.job_description, imported.extraction_method
+    except UrlImportError as exc:
+        page_error = exc
+    if len(description.strip()) < 240 and settings.jsearch_api_key:
         try:
             provider = JSearchProvider(settings)
             criteria = JobSearchCriteria(keywords=[candidate.title], location=candidate.location, experience_level="", date_posted="any", employment_type="", work_mode="", max_results=10, country="us", max_pages=1)
             page = provider.search(criteria, limit=10)
             match = next((item for item in page.items if canonical_job_url(item.url) == candidate.job_url), None)
-            if match is not None:
-                description = provider.retrieve_description(match)
-                method = "jsearch"
+            fallback = provider.retrieve_description(match) if match is not None else ""
+            if len(fallback.strip()) > len(description.strip()):
+                description, method = fallback, "jsearch"
         except (CollectionError, ValueError):
-            description = ""
-    if not description:
-        imported = UrlImporter(settings).import_job(candidate.job_url)
-        description = imported.job_description
-        method = imported.extraction_method
+            pass
+    if not description.strip():
+        raise page_error or ValueError("No job description could be retrieved")
     candidate.description_text = description[:settings.max_research_bytes]
     candidate.description_complete = len(candidate.description_text.strip()) >= 240
     candidate.description_status = "complete" if candidate.description_complete else "partial"
@@ -390,20 +395,76 @@ def review_candidate(db: Session, candidate: YahooJobCandidate, action: str, pay
 
 
 BULK_REVIEW_STATUSES = {"approve": "approve", "reject": "rejected", "defer": "deferred"}
+FETCHING_DESCRIPTION = "fetching_description"
 
 
-def bulk_review(db: Session, payload: BulkReview, actor: str) -> list[YahooJobCandidate]:
+def bulk_review(db: Session, payload: BulkReview, actor: str) -> dict[str, int]:
     candidates = list(db.scalars(select(YahooJobCandidate).where(YahooJobCandidate.id.in_(payload.candidate_ids))).all())
     if len(candidates) != len(set(payload.candidate_ids)):
         raise ValueError("One or more candidates were not found")
     action = BULK_REVIEW_STATUSES[payload.action]
-    if action == "approve" and not payload.allow_partial:
-        partial = [candidate.id for candidate in candidates if not candidate.description_complete]
-        if partial:
-            raise ValueError(f"Candidates {', '.join(map(str, sorted(partial)))} have partial descriptions; nothing was changed")
+    result = {"updated": 0, "approved": 0, "fetching_description": 0, "skipped_duplicates": 0, "skipped_already_approved": 0}
     for candidate in candidates:
+        if action == "approve":
+            if candidate.review_status == "approved":
+                result["skipped_already_approved"] += 1
+                continue
+            if candidate.duplicate_status == "duplicate":
+                result["skipped_duplicates"] += 1
+                continue
+            if not candidate.description_complete and not payload.allow_partial:
+                # Approval needs a full description: the scheduler fetches it, then approves or returns the job to pending.
+                candidate.ingestion_status = FETCHING_DESCRIPTION
+                candidate.metadata_payload = {**(candidate.metadata_payload or {}), "approval_requested_by": actor, "approval_note": payload.note}
+                db.add(YahooJobReview(candidate_id=candidate.id, action="approve_after_fetch", actor=actor, note=payload.note))
+                result["fetching_description"] += 1
+                result["updated"] += 1
+                continue
+            result["approved"] += 1
         review_candidate(db, candidate, action, CandidateReview(note=payload.note, allow_partial=payload.allow_partial), actor)
-    return candidates
+        result["updated"] += 1
+    db.commit()
+    return result
+
+
+def _description_fetch_failed(db: Session, candidate: YahooJobCandidate, reason: str) -> None:
+    candidate.ingestion_status = "not_approved"
+    candidate.description_status = "failed"
+    candidate.review_note = f"Not approved: the full description could not be retrieved ({reason[:300]}). Edit the description or approve with the partial-source override."
+    db.commit()
+
+
+def fetch_pending_descriptions(settings: Settings, *, limit: int = 20) -> int:
+    processed = 0
+    with SessionLocal() as db:
+        ids = list(db.scalars(select(YahooJobCandidate.id).where(YahooJobCandidate.ingestion_status == FETCHING_DESCRIPTION).order_by(YahooJobCandidate.id).limit(limit)).all())
+        for candidate_id in ids:
+            candidate = db.get(YahooJobCandidate, candidate_id)
+            if candidate is None or candidate.ingestion_status != FETCHING_DESCRIPTION:
+                continue
+            try:
+                retry_description(db, candidate, settings)
+            except UrlImportError as exc:
+                db.rollback()
+                if exc.code in {"rate_limited", "timeout"}:
+                    # Leave the rest queued; the next scheduler tick retries.
+                    break
+                _description_fetch_failed(db, db.get(YahooJobCandidate, candidate_id), str(exc))
+                processed += 1
+                continue
+            except Exception as exc:
+                db.rollback()
+                _description_fetch_failed(db, db.get(YahooJobCandidate, candidate_id), str(exc) or type(exc).__name__)
+                processed += 1
+                continue
+            candidate = db.get(YahooJobCandidate, candidate_id)
+            if candidate.description_complete:
+                metadata = candidate.metadata_payload or {}
+                review_candidate(db, candidate, "approve", CandidateReview(note=metadata.get("approval_note", "")), metadata.get("approval_requested_by") or "scheduler")
+            else:
+                _description_fetch_failed(db, candidate, "the retrieved description was too short")
+            processed += 1
+    return processed
 
 
 def process_pending_candidates(settings: Settings, *, limit: int = 5) -> int:
@@ -441,6 +502,7 @@ def run_due_yahoo_mail(settings: Settings) -> int:
                     count += 1
                 except Exception:
                     db.rollback()
+        count += fetch_pending_descriptions(settings)
         count += process_pending_candidates(settings)
     finally:
         lock.release()

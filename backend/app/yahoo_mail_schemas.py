@@ -85,6 +85,14 @@ class BulkReview(BaseModel):
     allow_partial: bool = False
 
 
+class BulkReviewResult(BaseModel):
+    updated: int
+    approved: int
+    fetching_description: int
+    skipped_duplicates: int
+    skipped_already_approved: int
+
+
 class MailConnectionResponse(BaseModel):
     id: int
     email_address: str

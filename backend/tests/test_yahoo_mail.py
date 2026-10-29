@@ -342,7 +342,7 @@ def test_folder_change_resets_checkpoint(client):
         assert (connection.folder, connection.last_uid, connection.uidvalidity) == ("Jobs", 0, None)
 
 
-def _candidates(prefix: str, completes: list[bool]) -> list[int]:
+def _candidates(prefix: str, completes: list[bool], duplicates: tuple[int, ...] = ()) -> list[int]:
     with SessionLocal() as db:
         connection = YahooMailConnection(email_address=f"{prefix}@yahoo.example", encrypted_app_password="encrypted", folder="Inbox")
         db.add(connection)
@@ -350,7 +350,7 @@ def _candidates(prefix: str, completes: list[bool]) -> list[int]:
         email = YahooAlertEmail(connection_id=connection.id, mailbox="Inbox", uidvalidity="1", uid=1, sender_address=ALLOWED_SENDER, subject="Jobs", content_hash="b" * 64)
         db.add(email)
         db.flush()
-        items = [YahooJobCandidate(alert_email_id=email.id, title=f"{prefix} {index}", job_url=f"https://www.linkedin.com/jobs/view/{prefix}{index}", description_text="x" * 300 if complete else "short", description_complete=complete, description_status="complete" if complete else "partial") for index, complete in enumerate(completes)]
+        items = [YahooJobCandidate(alert_email_id=email.id, title=f"{prefix} {index}", job_url=f"https://www.linkedin.com/jobs/view/{prefix}{index}", description_text="x" * 300 if complete else "short", description_complete=complete, description_status="complete" if complete else "partial", duplicate_status="duplicate" if index in duplicates else "unique") for index, complete in enumerate(completes)]
         db.add_all(items)
         db.commit()
         return [item.id for item in items]
@@ -361,14 +361,74 @@ def test_bulk_reject_and_defer_store_filterable_statuses(client):
     for action, status in (("reject", "rejected"), ("defer", "deferred")):
         response = client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": ids, "action": action})
         assert response.status_code == 200, response.text
-        assert {item["review_status"] for item in response.json()} == {status}
+        assert response.json()["updated"] == len(ids)
         listed = client.get(f"/api/v1/admin/mail/job-candidates?status={status}", headers=ADMIN_HEADERS).json()
         assert set(ids) <= {item["id"] for item in listed["items"]}
 
 
-def test_bulk_approve_with_partial_description_changes_nothing(client):
-    ids = _candidates("9002", [True, False, True])
+def test_bulk_approve_skips_duplicates_and_queues_partial_for_description_fetch(client):
+    ids = _candidates("9002", [True, False, False], duplicates=(2,))
     response = client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": ids, "action": "approve"})
-    assert response.status_code == 409
+    assert response.status_code == 200, response.text
+    assert response.json() == {"updated": 2, "approved": 1, "fetching_description": 1, "skipped_duplicates": 1, "skipped_already_approved": 0}
     with SessionLocal() as db:
-        assert {db.get(YahooJobCandidate, candidate_id).review_status for candidate_id in ids} == {"pending"}
+        complete, partial, duplicate = (db.get(YahooJobCandidate, candidate_id) for candidate_id in ids)
+        assert (complete.review_status, complete.ingestion_status) == ("approved", "queued")
+        assert (partial.review_status, partial.ingestion_status) == ("pending", "fetching_description")
+        assert (duplicate.review_status, duplicate.ingestion_status) == ("pending", "not_approved")
+
+
+def test_bulk_review_accepts_at_most_100_ids(client):
+    response = client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": list(range(1, 102)), "action": "approve"})
+    assert response.status_code == 422
+
+
+def test_scheduler_fetches_descriptions_then_approves_or_returns_to_pending(client, monkeypatch):
+    from app.config import get_settings
+    from app.url_importer import UrlImportError
+    from app.yahoo_mail_service import fetch_pending_descriptions
+
+    ids = _candidates("9003", [False, False, False])
+    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": ids, "action": "approve", "note": "bulk"})
+    pages = {f"https://www.linkedin.com/jobs/view/9003{0}": "Full description. " * 30, f"https://www.linkedin.com/jobs/view/9003{1}": "Too short", f"https://www.linkedin.com/jobs/view/9003{2}": None}
+
+    class FakeImporter:
+        def __init__(self, _settings): pass
+
+        def import_job(self, url):
+            if pages[url] is None:
+                raise UrlImportError("access_denied", "The job page denied access (HTTP 403).", 403)
+            return type("Imported", (), {"job_description": pages[url], "extraction_method": "html"})()
+
+    monkeypatch.setattr("app.yahoo_mail_service.UrlImporter", FakeImporter)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "jsearch_api_key", None)
+    assert fetch_pending_descriptions(settings) >= 3
+    with SessionLocal() as db:
+        fetched, short, denied = (db.get(YahooJobCandidate, candidate_id) for candidate_id in ids)
+        assert (fetched.review_status, fetched.ingestion_status, fetched.description_complete) == ("approved", "queued", True)
+        assert fetched.approved_by == "administrator"
+        for item in (short, denied):
+            assert (item.review_status, item.ingestion_status) == ("pending", "not_approved")
+            assert item.review_note.startswith("Not approved: the full description could not be retrieved")
+        assert "403" in denied.review_note
+
+
+def test_scheduler_stops_on_rate_limit_and_keeps_candidates_queued(client, monkeypatch):
+    from app.config import get_settings
+    from app.url_importer import UrlImportError
+    from app.yahoo_mail_service import fetch_pending_descriptions
+
+    ids = _candidates("9004", [False, False])
+    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": ids, "action": "approve"})
+
+    class RateLimited:
+        def __init__(self, _settings): pass
+        def import_job(self, _url): raise UrlImportError("rate_limited", "rate limited", 429)
+
+    monkeypatch.setattr("app.yahoo_mail_service.UrlImporter", RateLimited)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "jsearch_api_key", None)
+    fetch_pending_descriptions(settings)
+    with SessionLocal() as db:
+        assert {db.get(YahooJobCandidate, candidate_id).ingestion_status for candidate_id in ids} == {"fetching_description"}
