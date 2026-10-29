@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from .admin_auth import require_admin
 from .config import get_settings
 from .database import get_db
-from .models import YahooAlertSource, YahooJobCandidate, YahooJobReview, YahooMailConnection, YahooMailSyncRun
+from .models import YahooAlertSource, YahooJobCandidate, YahooMailConnection, YahooMailSyncRun
 from .yahoo_mail import ALLOWED_SENDER, YahooMailError
 from .yahoo_mail_schemas import (
     AlertSourceResponse,
@@ -27,9 +27,11 @@ from .yahoo_mail_schemas import (
     SyncRunResponse,
 )
 from .yahoo_mail_service import (
+    APPROVAL_BLOCKED,
     MailConfigurationError,
     bulk_review,
     candidate_response,
+    clear_approval_block,
     connection_response,
     create_or_update_connection,
     retry_description,
@@ -148,6 +150,28 @@ def update_alert_source(source_id: int, payload: AlertSourceUpdate, db: Session 
     return item
 
 
+def _candidate_counts(db: Session) -> dict[str, int]:
+    counts = dict.fromkeys(("pending", "approved", "rejected", "deferred"), 0)
+    for value, count in db.execute(select(YahooJobCandidate.review_status, func.count()).group_by(YahooJobCandidate.review_status)).all():
+        counts[value] = int(count)
+    for value, count in db.execute(select(YahooJobCandidate.ingestion_status, func.count()).group_by(YahooJobCandidate.ingestion_status)).all():
+        counts[f"ingestion_{value}"] = int(count)
+    duplicates, extraction_failed = db.execute(select(
+        func.coalesce(func.sum(case((YahooJobCandidate.duplicate_status == "duplicate", 1), else_=0)), 0),
+        func.coalesce(func.sum(case((YahooJobCandidate.description_status == "failed", 1), else_=0)), 0),
+    )).one()
+    counts["duplicates"] = int(duplicates)
+    counts["extraction_failed"] = int(extraction_failed)
+    counts["approval_blocked_no_description"] = counts.get(f"ingestion_{APPROVAL_BLOCKED}", 0)
+    return counts
+
+
+@router.get("/job-candidates/counts", response_model=dict[str, int], dependencies=[Depends(require_admin)])
+def candidate_counts(db: Session = Depends(get_db)):
+    # Lightweight endpoint for the inbox's background pipeline poll.
+    return _candidate_counts(db)
+
+
 @router.get("/job-candidates", response_model=CandidatePage, dependencies=[Depends(require_admin)])
 def list_candidates(
     status_filter: str | None = Query(default=None, alias="status"),
@@ -169,16 +193,7 @@ def list_candidates(
     elif description == "partial":
         query = query.where(YahooJobCandidate.description_complete.is_(False))
     items = list(db.scalars(query).unique().all())
-    counts = dict.fromkeys(("pending", "approved", "rejected", "deferred"), 0)
-    for value, count in db.execute(select(YahooJobCandidate.review_status, func.count()).group_by(YahooJobCandidate.review_status)).all():
-        counts[value] = int(count)
-    counts["duplicates"] = int(db.scalar(select(func.count()).select_from(YahooJobCandidate).where(YahooJobCandidate.duplicate_status == "duplicate")) or 0)
-    counts["extraction_failed"] = int(db.scalar(select(func.count()).select_from(YahooJobCandidate).where(YahooJobCandidate.description_status == "failed")) or 0)
-    for value, count in db.execute(select(YahooJobCandidate.ingestion_status, func.count()).group_by(YahooJobCandidate.ingestion_status)).all():
-        counts[f"ingestion_{value}"] = int(count)
-    # Bulk approvals whose description fetch failed and still await the administrator (not later approved, rejected, edited or re-queued).
-    counts["approval_blocked_no_description"] = int(db.scalar(select(func.count()).select_from(YahooJobCandidate).where(YahooJobCandidate.description_status == "failed", YahooJobCandidate.ingestion_status == "not_approved", YahooJobCandidate.review_status.in_(("pending", "deferred")), YahooJobCandidate.id.in_(select(YahooJobReview.candidate_id).where(YahooJobReview.action == "approve_after_fetch")))) or 0)
-    return CandidatePage(items=[candidate_response(item) for item in items], total=len(items), counts=counts)
+    return CandidatePage(items=[candidate_response(item) for item in items], total=len(items), counts=_candidate_counts(db))
 
 
 @router.get("/job-candidates/{candidate_id}", response_model=CandidateResponse, dependencies=[Depends(require_admin)])
@@ -197,6 +212,7 @@ def patch_candidate(candidate_id: int, payload: CandidateUpdate, db: Session = D
         item.description_complete = len(item.description_text.strip()) >= 240
         item.description_status = "complete" if item.description_complete else "partial"
         item.extraction_method = "administrator_corrected"
+        clear_approval_block(item)
     values.pop("note", None)
     for key, value in values.items():
         setattr(item, key, value)

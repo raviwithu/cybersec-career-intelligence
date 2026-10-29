@@ -173,6 +173,7 @@ export function fetchYahooSyncRuns(params = {}, adminKey) { return request(`/api
 export function fetchYahooAlertSources(params = {}, adminKey) { return request(`/api/v1/admin/mail/alert-sources${queryString(params)}`, { headers: adminHeaders(adminKey) }); }
 export function updateYahooAlertSource(id, payload, adminKey) { return request(`/api/v1/admin/mail/alert-sources/${id}`, { method: "PATCH", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
 export function fetchYahooCandidates(params = {}, adminKey) { return request(`/api/v1/admin/mail/job-candidates${queryString(params)}`, { headers: adminHeaders(adminKey) }); }
+export function fetchYahooCandidateCounts(adminKey) { return request("/api/v1/admin/mail/job-candidates/counts", { headers: adminHeaders(adminKey) }); }
 export function fetchYahooCandidate(id, adminKey) { return request(`/api/v1/admin/mail/job-candidates/${id}`, { headers: adminHeaders(adminKey) }); }
 export function updateYahooCandidate(id, payload, adminKey) { return request(`/api/v1/admin/mail/job-candidates/${id}`, { method: "PATCH", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
 export function reviewYahooCandidate(id, action, payload, adminKey) { return request(`/api/v1/admin/mail/job-candidates/${id}/${action}`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload || {}) }); }

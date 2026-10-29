@@ -6,6 +6,7 @@ import {
   disconnectYahooConnection,
   fetchYahooAlertSources,
   fetchYahooCandidate,
+  fetchYahooCandidateCounts,
   fetchYahooCandidates,
   fetchYahooConnections,
   fetchYahooSyncRuns,
@@ -69,8 +70,14 @@ function AuthGate({ onUnlock }) {
   return <section className="panel research-auth"><p className="eyebrow">ADMINISTRATOR ACCESS</p><h2>Unlock Yahoo Job Alerts</h2><p className="muted-copy">The Yahoo integration is administrator-only. Credentials stay in the backend and are never returned to this page.</p><input aria-label="Administrator API key" type="password" value={value} onChange={(event) => setValue(event.target.value)} placeholder="X-Admin-API-Key" /><button className="button" disabled={!value} onClick={() => { setAdminSessionKey(value); onUnlock(value); }}>Open Yahoo Job Alerts</button></section>;
 }
 
+const DRAWER_FIELDS = ["title", "employer", "location", "work_mode", "job_url", "description_text"];
+function candidateForm(candidate) { return Object.fromEntries(DRAWER_FIELDS.map((key) => [key, candidate[key]])); }
+
 function CandidateDrawer({ candidate, adminKey, onChanged, onClose }) {
-  const [form, setForm] = useState({ title: candidate.title, employer: candidate.employer, location: candidate.location, work_mode: candidate.work_mode, job_url: candidate.job_url, description_text: candidate.description_text });
+  const [form, setForm] = useState(() => candidateForm(candidate));
+  // Background polls replace `candidate`: take the server's new value for every field the administrator has not edited, so Save never resends stale text.
+  const serverForm = useRef(form);
+  useEffect(() => { const previous = serverForm.current; const next = candidateForm(candidate); serverForm.current = next; setForm((current) => Object.fromEntries(DRAWER_FIELDS.map((key) => [key, current[key] === previous[key] ? next[key] : current[key]]))); }, [candidate]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   async function save() { setBusy(true); setError(null); try { await updateYahooCandidate(candidate.id, form, adminKey); await onChanged(); } catch (requestError) { setError(requestError); } finally { setBusy(false); } }
@@ -156,10 +163,33 @@ export default function YahooJobAlertsPage() {
   const loadInFlight = useRef(false);
   const drawerId = useRef(null);
   drawerId.current = drawer?.id ?? null;
-  const candidateFilters = { status: filters.status, search: filters.search, description: filters.description };
-  async function load() { if (!adminKey) return; const seq = ++loadSeq.current; pollSeq.current += 1; loadInFlight.current = true; setLoading(true); setError(null); try { const [candidatePage, nextConnections, nextRuns, nextSources] = await Promise.all([fetchYahooCandidates(candidateFilters, adminKey), fetchYahooConnections(adminKey), fetchYahooSyncRuns({}, adminKey), fetchYahooAlertSources({}, adminKey)]); if (seq !== loadSeq.current) return; setCandidates(candidatePage.items); setCounts({ emails: nextConnections[0]?.messages_scanned || 0, alerts: nextConnections[0]?.alerts_detected || 0, jobs: nextConnections[0]?.jobs_extracted || 0, pending: candidatePage.counts.pending || 0 }); setPipeline(candidatePage.counts || {}); setConnections(nextConnections); setRuns(nextRuns); setSources(nextSources); } catch (requestError) { if (seq === loadSeq.current) setError(requestError); } finally { if (seq === loadSeq.current) { loadInFlight.current = false; setLoading(false); } } }
-  // Background refresh: only the candidate list (and an open drawer), without touching the error banner or loading state.
-  async function pollPipeline() { if (loadInFlight.current) return; const seq = ++pollSeq.current; try { const candidatePage = await fetchYahooCandidates(candidateFilters, adminKey); if (seq !== pollSeq.current) return; setCandidates(candidatePage.items); setCounts((current) => ({ ...current, pending: candidatePage.counts.pending || 0 })); setPipeline(candidatePage.counts || {}); if (drawerId.current) { const fresh = await fetchYahooCandidate(drawerId.current, adminKey); if (seq !== pollSeq.current) return; setDrawer((current) => (current && current.id === fresh.id ? fresh : current)); } } catch { /* A failed poll is retried on the next tick; manual Refresh surfaces errors. */ } }
+  const lastCounts = useRef("");
+  async function load() { if (!adminKey) return; const seq = ++loadSeq.current; pollSeq.current += 1; loadInFlight.current = true; setLoading(true); setError(null); try { const [candidatePage, nextConnections, nextRuns, nextSources] = await Promise.all([fetchYahooCandidates(filters, adminKey), fetchYahooConnections(adminKey), fetchYahooSyncRuns({}, adminKey), fetchYahooAlertSources({}, adminKey)]); if (seq !== loadSeq.current) return; setCandidates(candidatePage.items); setCounts({ emails: nextConnections[0]?.messages_scanned || 0, alerts: nextConnections[0]?.alerts_detected || 0, jobs: nextConnections[0]?.jobs_extracted || 0, pending: candidatePage.counts.pending || 0 }); setPipeline(candidatePage.counts || {}); lastCounts.current = JSON.stringify(candidatePage.counts || {}); setConnections(nextConnections); setRuns(nextRuns); setSources(nextSources); } catch (requestError) { if (seq === loadSeq.current) setError(requestError); } finally { if (seq === loadSeq.current) { loadInFlight.current = false; setLoading(false); } } }
+  // Background refresh: polls the cheap counts endpoint and reloads the candidate list (and an open drawer) only when a count changed,
+  // without touching the loading state. Returns false when polling should stop.
+  async function pollPipeline() {
+    if (loadInFlight.current) return true;
+    const seq = ++pollSeq.current;
+    try {
+      const nextCounts = await fetchYahooCandidateCounts(adminKey);
+      if (seq !== pollSeq.current) return true;
+      const serialized = JSON.stringify(nextCounts);
+      if (serialized === lastCounts.current) return true;
+      setCounts((current) => ({ ...current, pending: nextCounts.pending || 0 }));
+      setPipeline(nextCounts);
+      const candidatePage = await fetchYahooCandidates(filters, adminKey);
+      if (seq !== pollSeq.current) return true;
+      // Recorded only once the list has caught up, so a failed list fetch is retried on the next tick.
+      lastCounts.current = serialized;
+      setCandidates(candidatePage.items);
+      if (drawerId.current) { const fresh = await fetchYahooCandidate(drawerId.current, adminKey); if (seq !== pollSeq.current) return true; setDrawer((current) => (current && current.id === fresh.id ? fresh : current)); }
+      return true;
+    } catch (requestError) {
+      // A rejected admin key will not recover on its own: stop polling and show the error. Other failures are retried on the next tick.
+      if (requestError?.status === 401 || requestError?.status === 403) { setError(requestError); return false; }
+      return true;
+    }
+  }
   useEffect(() => { load(); }, [adminKey, filters.status, filters.search, filters.description]);
   const pipelineActive = activePipelineCount(pipeline) > 0;
   // Poll only while work is in flight and the inbox is visible; each tick is scheduled after the previous one finishes, so polls never overlap.
@@ -167,7 +197,7 @@ export default function YahooJobAlertsPage() {
     if (!adminKey || !pipelineActive || tab !== "inbox") return undefined;
     let cancelled = false;
     let timer;
-    const tick = async () => { if (document.visibilityState !== "hidden") await pollPipeline(); if (!cancelled) timer = setTimeout(tick, PIPELINE_POLL_MS); };
+    const tick = async () => { const keepPolling = document.visibilityState === "hidden" || await pollPipeline(); if (!cancelled && keepPolling) timer = setTimeout(tick, PIPELINE_POLL_MS); };
     timer = setTimeout(tick, PIPELINE_POLL_MS);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [adminKey, pipelineActive, tab, filters.status, filters.search, filters.description]);
