@@ -432,3 +432,43 @@ def test_scheduler_stops_on_rate_limit_and_keeps_candidates_queued(client, monke
     fetch_pending_descriptions(settings)
     with SessionLocal() as db:
         assert {db.get(YahooJobCandidate, candidate_id).ingestion_status for candidate_id in ids} == {"fetching_description"}
+
+
+def test_candidate_counts_include_ingestion_pipeline(client):
+    # The test database is shared across tests, so compare deltas rather than absolute counts.
+    def counts():
+        return client.get("/api/v1/admin/mail/job-candidates", headers=ADMIN_HEADERS).json()["counts"]
+
+    before = counts()
+    ids = _candidates("9005", [True, False, False])
+    after_insert = counts()
+    assert after_insert["pending"] - before["pending"] == 3
+    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": ids, "action": "approve"})
+    after = counts()
+    assert after["approved"] - before["approved"] == 1
+    assert after.get("ingestion_queued", 0) - before.get("ingestion_queued", 0) == 1
+    assert after.get("ingestion_fetching_description", 0) - before.get("ingestion_fetching_description", 0) == 2
+
+
+def test_approval_blocked_count_only_tracks_unresolved_fetch_failures(client):
+    blocked_id, retried_id = _candidates("9006", [False, False])
+    before = client.get("/api/v1/admin/mail/job-candidates", headers=ADMIN_HEADERS).json()["counts"]["approval_blocked_no_description"]
+    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": [blocked_id], "action": "approve"})
+    with SessionLocal() as db:
+        for candidate_id in (blocked_id, retried_id):
+            # Same end state as a failed scheduler fetch (blocked_id) or a failed drawer retry with no approval request (retried_id).
+            candidate = db.get(YahooJobCandidate, candidate_id)
+            candidate.ingestion_status = "not_approved"
+            candidate.description_status = "failed"
+        db.commit()
+    counts = lambda: client.get("/api/v1/admin/mail/job-candidates", headers=ADMIN_HEADERS).json()["counts"]["approval_blocked_no_description"]
+    assert counts() - before == 1
+    # Re-approving re-queues the fetch, so the job is in flight again rather than blocked.
+    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": [blocked_id], "action": "approve"})
+    assert counts() - before == 0
+    with SessionLocal() as db:
+        db.get(YahooJobCandidate, blocked_id).ingestion_status = "not_approved"
+        db.commit()
+    assert counts() - before == 1
+    client.post(f"/api/v1/admin/mail/job-candidates/{blocked_id}/approve", headers=ADMIN_HEADERS, json={"note": "", "allow_partial": True})
+    assert counts() - before == 0

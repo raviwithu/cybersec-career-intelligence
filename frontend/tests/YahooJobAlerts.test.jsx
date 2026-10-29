@@ -58,4 +58,65 @@ describe("Yahoo Job Alerts administrator page", () => {
     await waitFor(() => expect(batches).toEqual([100, 100, 50]));
     expect(await screen.findByText(/0 approved · 247 fetching full descriptions .* 3 duplicate\(s\) skipped\./)).toBeTruthy();
   });
+
+  it("shows the approval pipeline status bar and polls while work is in progress", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let listCalls = 0;
+    let otherCalls = 0;
+    const counts = { pending: 3, extraction_failed: 5, approval_blocked_no_description: 2, ingestion_fetching_description: 120, ingestion_queued: 40, ingestion_processing: 1, ingestion_analyzed: 85, ingestion_not_approved: 300 };
+    global.fetch = vi.fn((url) => {
+      if (url.includes("/job-candidates")) { listCalls += 1; return response({ items: [], total: 0, counts }); }
+      otherCalls += 1;
+      return response([]);
+    });
+    try {
+      render(<YahooJobAlertsPage />);
+      const bar = await screen.findByRole("region", { name: "Approval pipeline status" });
+      expect(bar.textContent).toContain("161 job(s) in progress");
+      expect(screen.getByRole("img", { name: "120 fetching descriptions, 40 queued for analysis, 1 analysing" })).toBeTruthy();
+      expect(bar.textContent).toContain("Approval blocked: no description2");
+      expect(bar.textContent).toContain("Analysed85");
+      const before = listCalls;
+      const otherBefore = otherCalls;
+      await vi.advanceTimersByTimeAsync(15000);
+      await waitFor(() => expect(listCalls).toBeGreaterThan(before));
+      // Polls refresh only the candidate list, not connections, sync runs or alert sources.
+      expect(otherCalls).toBe(otherBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a background poll discard a slow full refresh", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let listCalls = 0;
+    let releaseConnections = null;
+    const counts = { pending: 1, ingestion_fetching_description: 4 };
+    global.fetch = vi.fn((url) => {
+      if (url.includes("/job-candidates")) { listCalls += 1; return response({ items: [], total: 0, counts }); }
+      if (url.includes("/connections") && releaseConnections === undefined) return new Promise((resolve) => { releaseConnections = () => resolve({ ok: true, status: 200, json: () => Promise.resolve([{ id: 1, messages_scanned: 4321, alerts_detected: 0, jobs_extracted: 0 }]) }); });
+      return response([]);
+    });
+    try {
+      render(<YahooJobAlertsPage />);
+      await screen.findByRole("region", { name: "Approval pipeline status" });
+      releaseConnections = undefined;
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await waitFor(() => expect(typeof releaseConnections).toBe("function"));
+      const before = listCalls;
+      await vi.advanceTimersByTimeAsync(15000);
+      // The poll is skipped while the refresh is still loading.
+      expect(listCalls).toBe(before);
+      releaseConnections();
+      expect(await screen.findByText("4321")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hides the status bar when nothing has entered the pipeline", async () => {
+    render(<YahooJobAlertsPage />);
+    await screen.findByRole("heading", { name: "Job Inbox" });
+    expect(screen.queryByRole("region", { name: "Approval pipeline status" })).toBeNull();
+  });
 });
