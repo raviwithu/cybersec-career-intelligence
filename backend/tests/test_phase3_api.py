@@ -94,7 +94,7 @@ def test_expectation_filters_and_research_source_association(client):
     detail = client.get(f"/api/v1/expectations/{expectation['id']}")
     assert detail.status_code == 200
     assert detail.json()["supporting_sources"][0]["supporting_excerpt"] == "Supporting test excerpt."
-    sources = client.get("/api/v1/research-sources")
+    sources = client.get("/api/v1/research-sources", headers=ADMIN_HEADERS)
     assert sources.status_code == 200
     source_item = next(item for item in sources.json()["items"] if item["id"] == source.json()["id"])
     assert expectation["id"] in source_item["expectation_ids"]

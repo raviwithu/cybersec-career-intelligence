@@ -122,7 +122,7 @@ class OpenWebUIClient:
     def list_models(self) -> list[str]:
         return [record.model_id for record in self.list_model_records()]
 
-    def _completion(self, model_id: str, messages: list[dict[str, str]]) -> dict[str, Any]:
+    def _completion(self, model_id: str, messages: list[dict[str, str]], timeout: float | None = None) -> dict[str, Any]:
         self._ensure_configured()
         if not model_id or len(model_id) > 255:
             raise ProviderError(self.provider, "OpenWebUI model identifier is invalid")
@@ -131,6 +131,7 @@ class OpenWebUIClient:
                 f"{self.base_url}/api/chat/completions",
                 headers={**self._headers(), "Content-Type": "application/json"},
                 json={"model": model_id, "messages": messages, "stream": False},
+                timeout=timeout,
             )
             if response.status_code >= 400:
                 raise self._request_error(response, model_id)
@@ -161,9 +162,9 @@ class OpenWebUIClient:
         raise ProviderError("openwebui", "OpenWebUI response did not contain text content")
 
 
-    def complete(self, system: str, prompt: str, model: str | None = None) -> str:
+    def complete(self, system: str, prompt: str, model: str | None = None, timeout: float | None = None) -> str:
         model_id = model or self.model
-        return self._content(self._completion(model_id, [{"role": "system", "content": system}, {"role": "user", "content": prompt}])).strip()
+        return self._content(self._completion(model_id, [{"role": "system", "content": system}, {"role": "user", "content": prompt}], timeout=timeout)).strip()
 
     def extract(self, content: str, taxonomy: dict[str, list[dict[str, Any]]], model: str | None = None) -> ExtractionResult:
         model_id = model or self.model

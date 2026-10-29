@@ -35,7 +35,7 @@ def test_public_catalog_health_and_not_found_contracts(client):
         ("/api/v1/industries", "id"),
         ("/api/v1/research-sources", "items"),
     ]:
-        response = client.get(path)
+        response = client.get(path, headers={"X-Admin-API-Key": "test-admin-key"} if path == "/api/v1/research-sources" else None)
         assert response.status_code == 200
         body = response.json()
         assert key in body[0] if isinstance(body, list) else key in body

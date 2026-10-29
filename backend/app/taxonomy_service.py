@@ -18,6 +18,9 @@ from .models import (
     CompetencyCategoryAlias,
     DomainLevelExpectation,
     DraftExpectation,
+    KnowledgeTopicDomain,
+    KnowledgeTopicIndustry,
+    KnowledgeTopicLevel,
     Industry,
     IndustryAlias,
     ResearchFinding,
@@ -80,6 +83,7 @@ def dependency_counts(db: Session, taxonomy_type: str, item_id: int) -> dict[str
             "published_expectations": db.scalar(select(func.count(DomainLevelExpectation.id)).where(DomainLevelExpectation.domain_id == item_id)) or 0,
             "research_findings": db.scalar(select(func.count(ResearchFinding.id)).where(ResearchFinding.domain_id == item_id)) or 0,
             "research_domain_links": db.scalar(select(func.count(ResearchFindingDomain.finding_id)).where(ResearchFindingDomain.domain_id == item_id)) or 0,
+            "knowledge_topics": db.scalar(select(func.count(KnowledgeTopicDomain.topic_id)).where(KnowledgeTopicDomain.domain_id == item_id)) or 0,
             "draft_expectations": db.scalar(select(func.count(DraftExpectation.id)).where(DraftExpectation.domain_id == item_id)) or 0,
         }
     if taxonomy_type == "industry":
@@ -88,12 +92,14 @@ def dependency_counts(db: Session, taxonomy_type: str, item_id: int) -> dict[str
             "published_expectations": db.scalar(select(func.count(DomainLevelExpectation.id)).where(DomainLevelExpectation.industry_id == item_id)) or 0,
             "research_findings": db.scalar(select(func.count(ResearchFinding.id)).where(ResearchFinding.primary_industry_id == item_id)) or 0,
             "research_industry_links": db.scalar(select(func.count(ResearchFindingIndustry.finding_id)).where(ResearchFindingIndustry.industry_id == item_id)) or 0,
+            "knowledge_topics": db.scalar(select(func.count(KnowledgeTopicIndustry.topic_id)).where(KnowledgeTopicIndustry.industry_id == item_id)) or 0,
             "draft_expectations": db.scalar(select(func.count(DraftExpectation.id)).where(DraftExpectation.industry_id == item_id)) or 0,
         }
     if taxonomy_type == "career_level":
         return {
             "published_expectations": db.scalar(select(func.count(DomainLevelExpectation.id)).where(DomainLevelExpectation.career_level_id == item_id)) or 0,
             "research_findings": db.scalar(select(func.count(ResearchFinding.id)).where(ResearchFinding.career_level_id == item_id)) or 0,
+            "knowledge_topics": db.scalar(select(func.count(KnowledgeTopicLevel.id)).where(KnowledgeTopicLevel.career_level_id == item_id)) or 0,
             "draft_expectations": db.scalar(select(func.count(DraftExpectation.id)).where(DraftExpectation.career_level_id == item_id)) or 0,
         }
     return {
@@ -294,6 +300,37 @@ def _reassign_aliases(db: Session, taxonomy_type: str, source, target) -> None:
     db.execute(update(model).where(getattr(model, owner_key) == source.id).values(**{owner_key: target.id}))
 
 
+def _reassign_topic_links(db: Session, taxonomy_type: str, source_id: int, target_id: int) -> None:
+    if taxonomy_type == "domain":
+        links = list(db.scalars(select(KnowledgeTopicDomain).where(KnowledgeTopicDomain.domain_id == source_id)).all())
+        for link in links:
+            duplicate = db.get(KnowledgeTopicDomain, {"topic_id": link.topic_id, "domain_id": target_id})
+            if duplicate:
+                db.delete(link)
+            else:
+                link.domain_id = target_id
+    elif taxonomy_type == "industry":
+        links = list(db.scalars(select(KnowledgeTopicIndustry).where(KnowledgeTopicIndustry.industry_id == source_id)).all())
+        for link in links:
+            duplicate = db.get(KnowledgeTopicIndustry, {"topic_id": link.topic_id, "industry_id": target_id})
+            if duplicate:
+                db.delete(link)
+            else:
+                link.industry_id = target_id
+    elif taxonomy_type == "career_level":
+        links = list(db.scalars(select(KnowledgeTopicLevel).where(KnowledgeTopicLevel.career_level_id == source_id)).all())
+        for link in links:
+            duplicate = db.scalar(select(KnowledgeTopicLevel).where(
+                KnowledgeTopicLevel.topic_id == link.topic_id,
+                KnowledgeTopicLevel.career_level_id == target_id,
+                KnowledgeTopicLevel.industry_id == link.industry_id,
+            ))
+            if duplicate:
+                db.delete(link)
+            else:
+                link.career_level_id = target_id
+
+
 def merge_entries(db: Session, taxonomy_type: str, source_id: int, target_id: int, actor: str):
     source = get_entry(db, taxonomy_type, source_id)
     target = get_entry(db, taxonomy_type, target_id)
@@ -308,6 +345,7 @@ def merge_entries(db: Session, taxonomy_type: str, source_id: int, target_id: in
     previous_source = snapshot(source, taxonomy_type, db)
     previous_target = snapshot(target, taxonomy_type, db)
     _reassign_aliases(db, taxonomy_type, source, target)
+    _reassign_topic_links(db, taxonomy_type, source.id, target.id)
     if taxonomy_type == "domain":
         db.execute(update(DomainLevelExpectation).where(DomainLevelExpectation.domain_id == source.id).values(domain_id=target.id))
         db.execute(update(DraftExpectation).where(DraftExpectation.domain_id == source.id).values(domain_id=target.id))

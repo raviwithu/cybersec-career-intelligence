@@ -450,11 +450,24 @@ def historical(db: Session, *, competency_id: int | None, domain: str | None, ca
     if not result:
         return HistoricalResponse(available=False, expectations=[], warnings=["Historical revisions are not available for the selected evidence. Current expectations are not used as invented historical snapshots."])
     outputs = []
+    used_legacy_evidence = False
     for revision, expectation, competency, domain_item, level, industry_item in result:
-        current_rows, _ = _rows(db, domain=domain_item.slug, career_level=level.slug, industry=industry_item.slug if industry_item else None)
-        refs = [_evidence_reference(row) for row in current_rows if row.expectation.id == expectation.id][:10]
-        outputs.append(HistoricalExpectation(expectation_id=expectation.id, competency=_ref(competency), domain=_ref(domain_item), career_level=_ref(level), industry=_ref(industry_item) if industry_item else None, version=revision.version, recorded_at=revision.created_at, snapshot=revision.snapshot, evidence=refs))
-    return HistoricalResponse(available=True, expectations=outputs, warnings=["Historical records represent explicit published revisions only; evidence links shown are current associations and may have changed."])
+        snapshot = revision.snapshot if isinstance(revision.snapshot, dict) else {}
+        evidence_items = snapshot.get("evidence")
+        if evidence_items is None:
+            evidence_items = [
+                {"source_id": link.source_id, "supporting_excerpt": link.supporting_excerpt}
+                for link in db.scalars(select(ExpectationSource).where(ExpectationSource.expectation_id == expectation.id)).all()
+            ]
+            used_legacy_evidence = True
+        refs = []
+        for evidence_item in evidence_items:
+            source = db.get(ResearchSource, evidence_item.get("source_id"))
+            if source is not None:
+                refs.append(EvidenceReference(expectation_id=expectation.id, source_id=source.id, source_title=source.source_title, source_url=source.source_url, research_date=source.collected_at, excerpt=evidence_item.get("supporting_excerpt") or "", publication_version=revision.version))
+        outputs.append(HistoricalExpectation(expectation_id=expectation.id, competency=_ref(competency), domain=_ref(domain_item), career_level=_ref(level), industry=_ref(industry_item) if industry_item else None, version=revision.version, recorded_at=revision.created_at, snapshot=snapshot, evidence=refs))
+    warnings = ["Historical records represent explicit published revisions; legacy revisions use currently retained evidence links because they predate evidence snapshots."] if used_legacy_evidence else ["Historical records represent explicit published revisions only; evidence links are those captured in each revision snapshot."]
+    return HistoricalResponse(available=True, expectations=outputs, warnings=warnings)
 
 
 def _profile_key_hash(profile_key: str) -> str:

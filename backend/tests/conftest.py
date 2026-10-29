@@ -7,6 +7,7 @@ from sqlalchemy import event
 TEST_DATABASE = Path(__file__).parent / "test.sqlite3"
 os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DATABASE}"
 os.environ["REDIS_URL"] = "redis://127.0.0.1:6399/0"
+os.environ["ENVIRONMENT"] = "testing"
 os.environ["ADMIN_API_KEY"] = "test-admin-key"
 
 from app.database import Base, engine  # noqa: E402

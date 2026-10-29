@@ -64,7 +64,8 @@ class SourceLock:
                 self.redis_acquired = bool(self.client.set(self.key, self.token, nx=True, ex=self.settings.research_lock_ttl_seconds))
                 return self.redis_acquired
         except redis.RedisError:
-            pass
+            if not getattr(self.settings, "allow_local_lock_fallback", True) and getattr(self.settings, "environment", "testing") != "testing":
+                return False
         with _local_locks_guard:
             self.local_lock = _local_locks.setdefault(self.key, threading.Lock())
         return self.local_lock.acquire(blocking=False)

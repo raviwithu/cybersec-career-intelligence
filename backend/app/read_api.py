@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload, with_loader_criteria
 
+from .admin_auth import require_admin
 from .database import get_db
 from .industry_service import expectation_scope_clause, resolve_industry
 from .knowledge_schemas import ExpectationResponse
@@ -582,7 +583,7 @@ def search(
     return SearchPage(items=results[start:start + page_size], meta=page_meta(page, page_size, total))
 
 
-@router.get("/research-sources", response_model=ResearchSourcePage, tags=["research-sources"])
+@router.get("/research-sources", response_model=ResearchSourcePage, tags=["research-sources"], dependencies=[Depends(require_admin)])
 def list_research_sources(page: int = Query(default=1, ge=1), page_size: int = Query(default=25, ge=1, le=100), db: Session = Depends(get_db)) -> ResearchSourcePage:
     query = select(ResearchSource).options(selectinload(ResearchSource.expectations)).order_by(ResearchSource.collected_at.desc(), ResearchSource.id.desc())
     total = db.scalar(select(func.count()).select_from(ResearchSource)) or 0

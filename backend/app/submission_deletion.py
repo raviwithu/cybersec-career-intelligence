@@ -6,6 +6,10 @@ from sqlalchemy.orm import Session
 from .models import (
     DraftEvidence,
     DraftExpectation,
+    KnowledgeProposalSource,
+    KnowledgeTopic,
+    KnowledgeTopicEvidence,
+    KnowledgeTopicProposal,
     ExpectationRevision,
     ExpectationSource,
     PublicationBatch,
@@ -57,6 +61,14 @@ def _published_dependencies(db: Session, submission: ResearchSubmission) -> list
     )).all())
     if published_expectations:
         dependencies.append(f"published expectations {published_expectations}")
+
+    published_evidence = list(db.scalars(select(KnowledgeTopicEvidence.id).join(KnowledgeTopic, KnowledgeTopic.id == KnowledgeTopicEvidence.topic_id).where(KnowledgeTopicEvidence.source_id == submission.source_id, KnowledgeTopic.publication_status == "published")).all())
+    if published_evidence:
+        dependencies.append(f"published knowledge evidence {published_evidence}")
+
+    published_proposals = list(db.scalars(select(KnowledgeTopicProposal.id).join(KnowledgeProposalSource, KnowledgeProposalSource.proposal_id == KnowledgeTopicProposal.id).where(KnowledgeProposalSource.research_source_id == submission.source_id, KnowledgeTopicProposal.status == "published")).all())
+    if published_proposals:
+        dependencies.append(f"published knowledge proposals {published_proposals}")
     return dependencies
 
 

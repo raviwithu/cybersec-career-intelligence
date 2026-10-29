@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .database import SessionLocal, get_db, init_db
+from .admin_auth import require_admin
 from .health import service_status
 from .intelligence_api import router as intelligence_router
 from .job_search_api import router as job_search_router
@@ -78,6 +79,24 @@ async def request_logging_middleware(request: Request, call_next):
         response = JSONResponse(status_code=413, content={"detail": "Request body is too large", "request_id": request_id})
         response.headers["X-Request-ID"] = request_id
         return response
+
+    body = bytearray()
+    while True:
+        message = await request.receive()
+        if message["type"] == "http.disconnect":
+            break
+        body.extend(message.get("body", b""))
+        if len(body) > settings.max_request_bytes:
+            response = JSONResponse(status_code=413, content={"detail": "Request body is too large", "request_id": request_id})
+            response.headers["X-Request-ID"] = request_id
+            return response
+        if not message.get("more_body", False):
+            break
+
+    async def replay_body():
+        return {"type": "http.request", "body": bytes(body), "more_body": False}
+
+    request._receive = replay_body
     started = time.perf_counter()
     try:
         response = await call_next(request)
@@ -133,12 +152,12 @@ def health(db: Session = Depends(get_db)) -> ReadinessResponse:
     return service_status(db, settings)
 
 
-@app.get(f"{settings.api_prefix}/profiles", response_model=list[ProfileResponse])
+@app.get(f"{settings.api_prefix}/profiles", response_model=list[ProfileResponse], dependencies=[Depends(require_admin)])
 def list_profiles(db: Session = Depends(get_db)) -> list[CareerProfile]:
     return list(db.scalars(select(CareerProfile).order_by(CareerProfile.created_at.desc())).all())
 
 
-@app.post(f"{settings.api_prefix}/profiles", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED)
+@app.post(f"{settings.api_prefix}/profiles", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_admin)])
 def create_profile(payload: ProfileCreate, db: Session = Depends(get_db)) -> CareerProfile:
     profile = CareerProfile(**payload.model_dump())
     db.add(profile)

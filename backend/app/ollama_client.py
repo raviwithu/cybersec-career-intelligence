@@ -99,13 +99,15 @@ class OllamaClient:
             raise OllamaError("Ollama model connectivity test failed") from exc
         return round((time.perf_counter() - started) * 1000, 2)
 
-    def complete(self, system: str, prompt: str, model: str | None = None) -> str:
+    def complete(self, system: str, prompt: str, model: str | None = None, timeout: float | None = None) -> str:
         effective_model = model or self.model
         payload = {"model": effective_model, "system": system, "prompt": prompt, "stream": False, "options": {"temperature": 0}}
+        deadline = time.monotonic() + timeout if timeout is not None else None
         last_error: Exception | None = None
         for attempt in range(self.retries + 1):
             try:
-                response = self.client.post(f"{self.base_url}/api/generate", json=payload)
+                remaining = max(0.1, deadline - time.monotonic()) if deadline is not None else None
+                response = self.client.post(f"{self.base_url}/api/generate", json=payload, timeout=remaining)
                 response.raise_for_status()
                 body = response.json()
                 if not isinstance(body, dict) or not isinstance(body.get("response"), str):
@@ -113,8 +115,8 @@ class OllamaClient:
                 return body["response"].strip()
             except (httpx.HTTPError, ValueError, TypeError, OllamaError) as exc:
                 last_error = exc
-                if attempt < self.retries:
-                    time.sleep(min(2 ** attempt, 4))
+                if attempt < self.retries and (deadline is None or time.monotonic() < deadline):
+                    time.sleep(min(2 ** attempt, 4, max(0.0, deadline - time.monotonic()) if deadline is not None else 4))
         raise OllamaError("Ollama completion failed after configured retries") from last_error
 
     def extract(self, content: str, taxonomy: dict[str, list[dict[str, Any]]], model: str | None = None) -> ExtractionResult:

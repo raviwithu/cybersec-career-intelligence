@@ -19,6 +19,7 @@ from .url_importer import PinnedBackend, UrlImportError, read_bounded, resolve_p
 
 TRACKING_PARAMETERS = {"fbclid", "gclid", "dclid", "mc_cid", "mc_eid", "ref", "ref_"}
 TRANSIENT_STATUSES = {408, 425, 429, 500, 502, 503, 504}
+REDIRECT_CREDENTIAL_HEADERS = {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "x-rapidapi-key", "x-rapidapi-host"}
 
 
 @dataclass(frozen=True)
@@ -106,19 +107,23 @@ class SecureResearchFetcher:
         timeout = timeout_seconds if timeout_seconds is not None else self.settings.research_request_timeout_seconds
         return httpx.Client(transport=transport, timeout=httpx.Timeout(timeout), follow_redirects=False, trust_env=False)
 
-    def _robots_allowed(self, url: str, destination_ip: str) -> bool:
+    def _robots_allowed(self, url: str, destination_ip: str, deadline: float) -> bool:
         parsed = urlsplit(url)
         robots_url = urlunsplit((parsed.scheme, parsed.netloc, "/robots.txt", "", ""))
         try:
-            with self._client(destination_ip) as client:
+            remaining = max(0.1, deadline - time.monotonic())
+            with self._client(destination_ip, timeout_seconds=remaining) as client:
                 response = client.get(robots_url, headers={"User-Agent": "CyberSecCareerIntelligenceResearch/1.0"})
-            if response.status_code in {401, 403}:
-                return False
-            if response.status_code >= 400:
-                return True
+                if response.status_code in {401, 403}:
+                    return False
+                if response.status_code >= 400:
+                    return True
+                robots = read_bounded(response, self.settings.research_response_max_bytes, deadline=deadline)
             parser = robotparser.RobotFileParser(robots_url)
-            parser.parse(response.text.splitlines())
+            parser.parse(robots.decode("utf-8", errors="replace").splitlines())
             return parser.can_fetch("CyberSecCareerIntelligenceResearch", url)
+        except UrlImportError:
+            return False
         except (httpx.HTTPError, OSError, ValueError):
             return True
 
@@ -128,24 +133,32 @@ class SecureResearchFetcher:
         except (ValueError, UrlImportError) as exc:
             raise CollectionError("Source URL is invalid or blocked", status_code=400) from exc
         redirects = 0
+        deadline = time.monotonic() + (timeout_seconds if timeout_seconds is not None else self.settings.research_request_timeout_seconds)
+        original_host = urlsplit(current_url).hostname
+        request_headers = {"Accept": accept, "User-Agent": getattr(self.settings, "research_allowed_user_agent", "CyberSecCareerIntelligenceResearch/1.0")}
+        request_headers.update(headers or {})
         for _ in range(self.settings.url_import_max_redirects + 1):
+            if time.monotonic() >= deadline:
+                raise CollectionError("Source request exceeded its time budget", status_code=408, retryable=True)
             parsed = urlsplit(current_url)
             try:
                 addresses = self.resolver(parsed.hostname or "", parsed.port or (443 if parsed.scheme == "https" else 80))
             except (UrlImportError, OSError, ValueError) as exc:
                 raise CollectionError("Source hostname could not be resolved or is blocked", status_code=403) from exc
-            if respect_robots and not self._robots_allowed(current_url, addresses[0]):
+            if respect_robots and not self._robots_allowed(current_url, addresses[0], deadline):
                 raise CollectionError("The source robots policy does not permit this request", retryable=False)
             try:
-                with self._client(addresses[0], timeout_seconds=timeout_seconds) as client:
-                    request_headers = {"Accept": accept, "User-Agent": getattr(self.settings, "research_allowed_user_agent", "CyberSecCareerIntelligenceResearch/1.0")}
-                    request_headers.update(headers or {})
+                remaining = max(0.1, deadline - time.monotonic())
+                with self._client(addresses[0], timeout_seconds=remaining) as client:
                     with client.stream("GET", current_url, headers=request_headers) as response:
                         if response.status_code in {301, 302, 303, 307, 308}:
                             location = response.headers.get("location")
                             if not location or redirects >= self.settings.url_import_max_redirects:
                                 raise CollectionError("The source exceeded the safe redirect limit", status_code=400)
-                            current_url = normalize_url(urljoin(current_url, location))
+                            next_url = normalize_url(urljoin(current_url, location))
+                            if urlsplit(next_url).hostname != original_host:
+                                request_headers = {key: value for key, value in request_headers.items() if key.casefold() not in REDIRECT_CREDENTIAL_HEADERS}
+                            current_url = next_url
                             redirects += 1
                             continue
                         if response.status_code >= 400:
@@ -154,10 +167,12 @@ class SecureResearchFetcher:
                                 status_code=response.status_code,
                                 retryable=response.status_code in TRANSIENT_STATUSES,
                             )
-                        content = read_bounded(response, self.settings.research_response_max_bytes)
+                        content = read_bounded(response, self.settings.research_response_max_bytes, deadline=deadline)
                         return content, response.headers.get("content-type", "").split(";", 1)[0].casefold(), response.status_code
             except CollectionError:
                 raise
+            except UrlImportError as exc:
+                raise CollectionError(str(exc), status_code=exc.status_code, retryable=exc.code == "timeout") from exc
             except (httpx.TimeoutException, httpx.NetworkError, OSError) as exc:
                 raise CollectionError("Source request failed", retryable=True) from exc
         raise CollectionError("The source exceeded the safe redirect limit", status_code=400)

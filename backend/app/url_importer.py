@@ -4,6 +4,7 @@ import ipaddress
 import json
 import re
 import socket
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import urljoin, urlsplit
@@ -23,6 +24,12 @@ UNSAFE_ELEMENT_NAMES = {"aside", "footer", "form", "header", "iframe", "nav", "n
 UNSAFE_ATTRIBUTE_PATTERN = re.compile(r"(?<![a-z0-9])(?:ads?|advert\w*|breadcrumbs?|cookies?|footer|header|menu|nav|navbar|navigation|social|share)(?![a-z0-9])", re.I)
 DESCRIPTION_CLASS_PATTERN = re.compile(r"description", re.I)
 MIN_DESCRIPTION_CHARS = 200
+NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+
+
+def _is_blocked_address(address: str) -> bool:
+    parsed = ipaddress.ip_address(address)
+    return not parsed.is_global or (parsed.version == 6 and parsed in NAT64_PREFIX)
 
 
 class UrlImportError(Exception):
@@ -64,8 +71,11 @@ class UrlImporter:
         self.resolver = resolver or resolve_public_ips
 
     def import_job(self, url: str) -> ImportedJob:
+        deadline = time.monotonic() + self.settings.url_import_timeout_seconds
         current_url = validate_url(url, resolver=self.resolver)
         for redirect_count in range(self.settings.url_import_max_redirects + 1):
+            if time.monotonic() >= deadline:
+                raise UrlImportError("timeout", "The job page exceeded the total fetch time budget.", 408)
             parts = urlsplit(current_url)
             destination_ips = self.resolver(parts.hostname or "", parts.port or (443 if parts.scheme == "https" else 80))
             if not destination_ips:
@@ -93,7 +103,9 @@ class UrlImporter:
                         content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
                         if content_type not in CONTENT_TYPES:
                             raise UrlImportError("unsupported_content_type", "The URL did not return an HTML job page.", 415)
-                        content = read_bounded(response, self.settings.url_import_max_bytes)
+                        content = read_bounded(response, self.settings.url_import_max_bytes, deadline=deadline)
+                if time.monotonic() >= deadline:
+                    raise UrlImportError("timeout", "The job page exceeded the total fetch time budget.", 408)
                 imported = extract_job(current_url, content, self.settings.max_research_bytes)
                 return imported
             except UrlImportError:
@@ -123,8 +135,12 @@ def validate_url(value: str, resolver: Callable[[str, int], list[str]] | None = 
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.fragment or port is None and parsed.netloc.endswith(":"):
         raise UrlImportError("invalid_url", "Only valid HTTP and HTTPS job posting URLs are supported.", 400)
     addresses = (resolver or resolve_public_ips)(parsed.hostname, port or (443 if parsed.scheme == "https" else 80))
-    if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
-        raise UrlImportError("blocked_destination", "Private, local, link-local, reserved, and metadata destinations are blocked.", 403)
+    try:
+        blocked = not addresses or any(_is_blocked_address(address) for address in addresses)
+    except ValueError as exc:
+        raise UrlImportError("dns_failure", "The job page hostname returned an invalid address.", 400) from exc
+    if blocked:
+        raise UrlImportError("blocked_destination", "Private, local, link-local, reserved, NAT64, and metadata destinations are blocked.", 403)
     return parsed.geturl()
 
 
@@ -138,18 +154,24 @@ def resolve_public_ips(hostname: str, port: int) -> list[str]:
         except socket.gaierror as exc:
             raise UrlImportError("dns_failure", "The job page hostname could not be resolved.", 400) from exc
         addresses = list(dict.fromkeys(str(record[4][0]) for record in records))
-    if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
-        raise UrlImportError("blocked_destination", "Private, local, link-local, reserved, and metadata destinations are blocked.", 403)
+    try:
+        blocked = not addresses or any(_is_blocked_address(address) for address in addresses)
+    except ValueError as exc:
+        raise UrlImportError("dns_failure", "The job page hostname returned an invalid address.", 400) from exc
+    if blocked:
+        raise UrlImportError("blocked_destination", "Private, local, link-local, reserved, NAT64, and metadata destinations are blocked.", 403)
     return addresses
 
 
-def read_bounded(response: httpx.Response, max_bytes: int) -> bytes:
+def read_bounded(response: httpx.Response, max_bytes: int, *, deadline: float | None = None) -> bytes:
     content_length = response.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > max_bytes:
         raise UrlImportError("response_too_large", "The job page response exceeds the permitted size.", 413)
     chunks: list[bytes] = []
     total = 0
     for chunk in response.iter_bytes(64 * 1024):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise UrlImportError("timeout", "The job page exceeded the total fetch time budget.", 408)
         total += len(chunk)
         if total > max_bytes:
             raise UrlImportError("response_too_large", "The job page response exceeds the permitted size.", 413)

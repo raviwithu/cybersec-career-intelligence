@@ -1,6 +1,22 @@
 name: cybersec-career-intelligence
 
 services:
+  migrate:
+    build:
+      context: ./backend
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: cybersec
+      DB_USER: cybersec
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    command: ["true"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cybersec-network
+
   backend:
     build:
       context: ./backend
@@ -12,7 +28,8 @@ services:
       DB_NAME: cybersec
       DB_USER: cybersec
       DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:-${POSTGRES_PASSWORD}}@redis:6379/0
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-${POSTGRES_PASSWORD}}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:latest}
       OPENWEBUI_BASE_URL: ${OPENWEBUI_BASE_URL:-}
@@ -23,8 +40,12 @@ services:
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-90}
       OLLAMA_RETRIES: ${OLLAMA_RETRIES:-2}
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      SKIP_MIGRATIONS: "true"
       KNOWLEDGE_INTEGRATION_KEYS: ${KNOWLEDGE_INTEGRATION_KEYS:-}
       KNOWLEDGE_PROPOSAL_RATE_LIMIT_PER_MINUTE: ${KNOWLEDGE_PROPOSAL_RATE_LIMIT_PER_MINUTE:-30}
+      INTELLIGENCE_RATE_LIMIT_PER_MINUTE: ${INTELLIGENCE_RATE_LIMIT_PER_MINUTE:-30}
+      ASK_CONCURRENCY_LIMIT: ${ASK_CONCURRENCY_LIMIT:-8}
+      ASK_TIMEOUT_SECONDS: ${ASK_TIMEOUT_SECONDS:-45}
       KNOWLEDGE_EXCERPT_MAX_CHARS: ${KNOWLEDGE_EXCERPT_MAX_CHARS:-6000}
       MAX_RESEARCH_BYTES: ${MAX_RESEARCH_BYTES:-500000}
       URL_IMPORT_TIMEOUT_SECONDS: ${URL_IMPORT_TIMEOUT_SECONDS:-10}
@@ -62,6 +83,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -84,7 +107,8 @@ services:
       DB_NAME: cybersec
       DB_USER: cybersec
       DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:-${POSTGRES_PASSWORD}}@redis:6379/0
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-${POSTGRES_PASSWORD}}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:latest}
       OPENWEBUI_BASE_URL: ${OPENWEBUI_BASE_URL:-}
@@ -95,6 +119,7 @@ services:
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-90}
       OLLAMA_RETRIES: ${OLLAMA_RETRIES:-2}
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      SKIP_MIGRATIONS: "true"
       MAX_RESEARCH_BYTES: ${MAX_RESEARCH_BYTES:-500000}
       URL_IMPORT_TIMEOUT_SECONDS: ${URL_IMPORT_TIMEOUT_SECONDS:-10}
       URL_IMPORT_MAX_BYTES: ${URL_IMPORT_MAX_BYTES:-1000000}
@@ -131,6 +156,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -152,7 +179,7 @@ services:
         # "/" = same origin; nginx proxies /api/ to the backend
         VITE_API_BASE_URL: /
     ports:
-      - "0.0.0.0:3100:3000"
+      - "127.0.0.1:3100:3000"
     depends_on:
       backend:
         condition: service_healthy
@@ -183,8 +210,11 @@ services:
 
   redis:
     image: redis:7-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-${POSTGRES_PASSWORD}}
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-${POSTGRES_PASSWORD}}"]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping"]
       interval: 10s
       timeout: 3s
       retries: 5

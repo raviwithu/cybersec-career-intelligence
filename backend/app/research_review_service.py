@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from .models import (
@@ -22,6 +22,7 @@ from .models import (
     ResearchFinding,
     ResearchFindingDomain,
     ResearchFindingIndustry,
+    ResearchSource,
     ResearchSubmission,
     ReviewAudit,
     ReviewChange,
@@ -564,12 +565,14 @@ def compare_change(db: Session, change: ReviewChange) -> dict[str, Any]:
     }
 
 
-def _select_changes(db: Session, change_ids: list[int] | None = None) -> list[ReviewChange]:
+def _select_changes(db: Session, change_ids: list[int] | None = None, *, lock: bool = False) -> list[ReviewChange]:
     query = select(ReviewChange).order_by(ReviewChange.id)
     if change_ids:
         query = query.where(ReviewChange.id.in_(change_ids))
     else:
         query = query.where(ReviewChange.status.in_(APPROVED_STATUSES))
+    if lock:
+        query = query.with_for_update()
     return list(db.scalars(query).all())
 
 
@@ -659,6 +662,10 @@ def _publish_expectation(db: Session, change: ReviewChange, competency_id: int, 
         db.flush()
     else:
         current = _expectation_snapshot(expectation)
+        current["evidence"] = [
+            {"source_id": existing_source_id, "supporting_excerpt": excerpt}
+            for existing_source_id, excerpt in db.execute(select(ExpectationSource.source_id, ExpectationSource.supporting_excerpt).where(ExpectationSource.expectation_id == expectation.id)).all()
+        ]
         version = (db.scalar(select(func.max(ExpectationRevision.version)).where(ExpectationRevision.expectation_id == expectation.id)) or 0) + 1
         db.add(ExpectationRevision(expectation_id=expectation.id, change_id=change.id, version=version, snapshot=current, created_at=now()))
     text_fields = (
@@ -677,8 +684,14 @@ def _publish_expectation(db: Session, change: ReviewChange, competency_id: int, 
     return expectation
 
 
+def _lock_publication_transaction(db: Session) -> None:
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext('cybersec:research-publication'))"))
+
+
 def publish_changes(db: Session, change_ids: list[int] | None, expected_versions: dict[int, int], actor: str) -> tuple[PublicationBatch, list[int], list[int]]:
-    changes = _select_changes(db, change_ids)
+    _lock_publication_transaction(db)
+    changes = _select_changes(db, change_ids, lock=True)
     if not changes:
         raise HTTPException(status_code=409, detail="No approved changes are selected")
     for change in changes:

@@ -4,7 +4,7 @@ import hashlib
 import secrets
 
 import redis
-from fastapi import Header, HTTPException, status
+from fastapi import Header, HTTPException, Request, status
 
 from .config import get_settings
 
@@ -42,7 +42,27 @@ def enforce_proposal_rate_limit(actor: str) -> None:
             raise HTTPException(status_code=429, detail="Knowledge proposal rate limit exceeded; retry later")
     except HTTPException:
         raise
-    except redis.RedisError:
-        # Redis is an optional availability dependency for this write guard. The
-        # database and authentication checks remain authoritative if it is down.
-        return
+    except redis.RedisError as exc:
+        if settings.environment == "testing":
+            return
+        raise HTTPException(status_code=503, detail="Rate limiting is temporarily unavailable; retry later") from exc
+
+
+def enforce_public_intelligence_rate_limit(request: Request) -> None:
+    settings = get_settings()
+    identity = request.client.host if request.client else "unknown"
+    key = f"intelligence:rate:{hashlib.sha256(identity.encode()).hexdigest()[:32]}"
+    try:
+        client = redis.Redis.from_url(settings.redis_url, socket_connect_timeout=0.25, socket_timeout=0.25, decode_responses=True)
+        with client.pipeline() as pipeline:
+            pipeline.incr(key)
+            pipeline.expire(key, 60, nx=True)
+            count, _ = pipeline.execute()
+        if count > settings.intelligence_rate_limit_per_minute:
+            raise HTTPException(status_code=429, detail="Intelligence request rate limit exceeded; retry later")
+    except HTTPException:
+        raise
+    except redis.RedisError as exc:
+        if settings.environment == "testing":
+            return
+        raise HTTPException(status_code=503, detail="Rate limiting is temporarily unavailable; retry later") from exc

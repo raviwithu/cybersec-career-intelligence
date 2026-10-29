@@ -144,6 +144,19 @@ def test_import_api_tracks_real_counts_and_manual_review(client, monkeypatch):
     assert {item["status"] for item in results.json()} == {"analyzed", "manual_review_required"}
 
 
+def test_job_search_rename_updates_automation_source(client):
+    created = client.post("/api/v1/research/automated/job-searches", headers=ADMIN_HEADERS, json={"name": "Original search", "provider_type": "import", "keywords": ["security"]})
+    assert created.status_code == 201
+    search_id = created.json()["id"]
+    updated = client.patch(f"/api/v1/research/automated/job-searches/{search_id}", headers=ADMIN_HEADERS, json={"name": "Renamed search"})
+    assert updated.status_code == 200
+    with SessionLocal() as db:
+        search = db.get(JobSearch, search_id)
+        assert search.automated_source.name == "job-search:Renamed search"
+
+
+
+
 def test_job_search_run_does_not_overlap_and_reports_provider_unavailable(client):
     created = client.post("/api/v1/research/automated/job-searches", headers=ADMIN_HEADERS, json={
         "name": "Unconfigured LinkedIn search", "provider_type": "linkedin_authorized", "keywords": ["Cloud Security Engineer"],

@@ -12,8 +12,8 @@ def test_profiles_are_persisted_in_database(client):
         "skills": ["Python", "Threat Modeling"],
     }
 
-    created = client.post("/api/v1/profiles", json=payload)
-    listed = client.get("/api/v1/profiles")
+    created = client.post("/api/v1/profiles", headers={"X-Admin-API-Key": "test-admin-key"}, json=payload)
+    listed = client.get("/api/v1/profiles", headers={"X-Admin-API-Key": "test-admin-key"})
 
     assert created.status_code == 201
     assert created.json()["target_role"] == payload["target_role"]
