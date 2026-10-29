@@ -13,6 +13,7 @@ from .yahoo_mail_schemas import (
     AlertSourceResponse,
     AlertSourceUpdate,
     BulkReview,
+    BulkReviewResult,
     CandidatePage,
     CandidateResponse,
     CandidateReview,
@@ -209,10 +210,10 @@ def retry_candidate_description(candidate_id: int, db: Session = Depends(get_db)
         raise HTTPException(status_code=422, detail="A complete description could not be retrieved; manual entry remains available") from exc
 
 
-@router.post("/job-candidates/bulk-review", response_model=list[CandidateResponse], dependencies=[Depends(require_admin)])
+@router.post("/job-candidates/bulk-review", response_model=BulkReviewResult, dependencies=[Depends(require_admin)])
 def bulk_review_endpoint(payload: BulkReview, actor: str = Depends(require_admin), db: Session = Depends(get_db)):
     try:
-        return [candidate_response(item) for item in bulk_review(db, payload, actor)]
+        return bulk_review(db, payload, actor)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
