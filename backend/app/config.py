@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     admin_api_key: str | None = None
     knowledge_integration_keys: str = ""
     knowledge_proposal_rate_limit_per_minute: int = 30
+    intelligence_rate_limit_per_minute: int = 30
+    ask_concurrency_limit: int = 8
+    ask_timeout_seconds: float = 45.0
     knowledge_excerpt_max_chars: int = 6000
     max_request_bytes: int = 1_048_576
     max_research_bytes: int = 500_000
@@ -41,6 +44,7 @@ class Settings(BaseSettings):
     research_scheduler_enabled: bool = True
     research_scheduler_poll_seconds: int = 30
     research_lock_ttl_seconds: int = 900
+    allow_local_lock_fallback: bool = False
     research_allowed_user_agent: str = "CyberSecCareerIntelligenceResearch/1.0"
     research_default_respect_robots: bool = True
     linkedin_authorized_api_base_url: str | None = None

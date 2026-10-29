@@ -46,6 +46,18 @@ def _clean_value(value: Any) -> Any:
     return value
 
 
+def validate_proposed_content_urls(value: Any) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized_key = str(key).casefold()
+            if isinstance(child, str) and (normalized_key in {"reference", "url", "href", "link"} or normalized_key.endswith("_url")):
+                validate_http_url(child)
+            validate_proposed_content_urls(child)
+    elif isinstance(value, list):
+        for child in value:
+            validate_proposed_content_urls(child)
+
+
 class KnowledgeSourceReference(BaseModel):
     source_type: str = Field(min_length=1, max_length=60)
     document_identifier: str | None = Field(default=None, max_length=500)
@@ -104,6 +116,7 @@ class KnowledgeProposalCreate(BaseModel):
         if not isinstance(value, dict):
             raise ValueError("proposed_content must be an object")
         cleaned = _clean_value(value)
+        validate_proposed_content_urls(cleaned)
         if len(json.dumps(cleaned, ensure_ascii=False)) > 200_000:
             raise ValueError("proposed_content exceeds the permitted size")
         return cleaned
@@ -144,6 +157,7 @@ class KnowledgeProposalReview(BaseModel):
         if not isinstance(value, dict):
             raise ValueError("proposed_content must be an object")
         cleaned = _clean_value(value)
+        validate_proposed_content_urls(cleaned)
         if len(json.dumps(cleaned, ensure_ascii=False)) > 200_000:
             raise ValueError("proposed_content exceeds the permitted size")
         return cleaned

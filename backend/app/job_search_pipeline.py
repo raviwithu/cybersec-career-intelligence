@@ -297,9 +297,13 @@ def retry_job_search_results(db: Session, run_id: int, settings: Settings, *, pr
         run.status = "failed"
         run.error_message = str(exc)[:500]
     finally:
-        run.completed_at = now()
-        db.commit()
-        lock.release()
+        try:
+            run.completed_at = now()
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            lock.release()
     return run
 
 
@@ -313,6 +317,16 @@ def purge_expired_job_search_records(db: Session, settings: Settings) -> int:
 
 
 def run_due_job_searches(settings: Settings) -> int:
+    lock = SourceLock(settings, "cybersec:research:job-search-scheduler")
+    if not lock.acquire():
+        return 0
+    try:
+        return _run_due_job_searches(settings)
+    finally:
+        lock.release()
+
+
+def _run_due_job_searches(settings: Settings) -> int:
     from .database import SessionLocal
 
     count = 0

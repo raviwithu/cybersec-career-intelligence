@@ -196,7 +196,7 @@ def create_proposal(db: Session, payload: KnowledgeProposalCreate, actor: str, i
     section_type = _section_type(payload.section)
     if payload.action != "CREATE_TOPIC" and topic is None:
         raise HTTPException(status_code=404, detail="Knowledge topic was not found")
-    if payload.action != "ADD_TOPIC_RELATIONSHIP" and payload.action != "CREATE_TOPIC" and section_type is None:
+    if payload.action not in {"ADD_TOPIC_RELATIONSHIP", "CREATE_TOPIC", "UPDATE_TOPIC"} and section_type is None:
         raise HTTPException(status_code=422, detail="A valid section is required for this action")
     if payload.action == "CREATE_TOPIC":
         name = payload.topic_name or payload.proposed_content.get("topic", {}).get("name") or payload.proposed_content.get("name")

@@ -33,6 +33,79 @@ def approve_and_publish(client, proposal):
     return published.json()
 
 
+
+def test_fingerprint_fits_column_and_idempotency_is_stable(client):
+    from app.models import KnowledgeTopicProposal
+
+    topic = existing_topic(client)
+    payload = proposal_payload(topic["id"], {"items": [{"name": "Fingerprint sizing"}]})
+    first = client.post("/api/v1/knowledge/proposals", headers={**ADMIN, "Idempotency-Key": "fingerprint-size"}, json=payload)
+    second = client.post("/api/v1/knowledge/proposals", headers={**ADMIN, "Idempotency-Key": "fingerprint-size"}, json=payload)
+    assert first.status_code == second.status_code == 201
+    assert first.json()["id"] == second.json()["id"]
+    from app.database import SessionLocal
+    with SessionLocal() as db:
+        proposal = db.get(KnowledgeTopicProposal, first.json()["id"])
+        assert len(proposal.fingerprint) <= KnowledgeTopicProposal.__table__.c.fingerprint.type.length
+
+
+def test_javascript_reference_is_rejected(client):
+    topic = existing_topic(client)
+    payload = proposal_payload(topic["id"], {"items": [{"name": "Unsafe", "reference": "javascript:alert(1)"}]})
+    response = client.post("/api/v1/knowledge/proposals", headers=ADMIN, json=payload)
+    assert response.status_code == 422
+
+
+def test_contract_pipeline_is_invisible_to_legacy_queue(client):
+    topic = existing_topic(client)
+    created = client.post("/api/v1/knowledge/proposals", headers=ADMIN, json=proposal_payload(topic["id"], {"items": [{"name": "Pipeline isolation"}]})).json()
+    legacy = client.get("/api/v1/research/career-readiness/proposals", headers=ADMIN)
+    assert legacy.status_code == 200
+    assert all(item["id"] != created["id"] for item in legacy.json()["items"])
+    assert client.get(f"/api/v1/research/career-readiness/proposals/{created['id']}", headers=ADMIN).status_code == 404
+
+
+def test_update_topic_publishes_metadata_version_without_section(client):
+    topic = existing_topic(client)
+    payload = proposal_payload(topic["id"], {"description": "Updated metadata contract"}, action="UPDATE_TOPIC", section=None)
+    created = client.post("/api/v1/knowledge/proposals", headers=ADMIN, json=payload)
+    assert created.status_code == 201, created.text
+    approved = client.post(f"/api/v1/knowledge/admin/proposals/{created.json()['id']}/review", headers=ADMIN, json={"expected_version": created.json()["version"], "action": "approve"})
+    assert approved.status_code == 200, approved.text
+    published = client.post(f"/api/v1/knowledge/admin/proposals/{created.json()['id']}/publish", headers=ADMIN, json={"confirm": True, "expected_version": approved.json()["version"]})
+    assert published.status_code == 200, published.text
+    assert client.get(f"/api/v1/knowledge/topics/{topic['topic_key']}").json()["description"] == "Updated metadata contract"
+
+
+
+
+
+def test_merge_publication_targets_active_topic(client):
+    source = existing_topic(client)
+    create_payload = {
+        "source_type": "manual",
+        "topic_name": "Merge Contract Target",
+        "topic_key": "merge-contract-target",
+        "action": "CREATE_TOPIC",
+        "proposed_content": {"topic": {"name": "Merge Contract Target", "description": "Target topic."}},
+        "references": [{"source_type": "technical_article", "title": "Merge reference", "url": "https://example.com/merge"}],
+    }
+    target_proposal = client.post("/api/v1/knowledge/proposals", headers=ADMIN, json=create_payload).json()
+    target = approve_and_publish(client, target_proposal)
+    target_id = target["topic_id"]
+    source_before = client.get(f"/api/v1/knowledge/topics/{source['topic_key']}").json()
+    merge_payload = proposal_payload(source["id"], {"short_description": "Merged section content"}, section="overview")
+    proposal = client.post("/api/v1/knowledge/proposals", headers=ADMIN, json=merge_payload).json()
+    merged = client.post(f"/api/v1/knowledge/admin/proposals/{proposal['id']}/review", headers=ADMIN, json={"expected_version": proposal["version"], "action": "merge", "merge_target_topic_id": target_id})
+    assert merged.status_code == 200, merged.text
+    published = client.post(f"/api/v1/knowledge/admin/proposals/{proposal['id']}/publish", headers=ADMIN, json={"confirm": True, "expected_version": merged.json()["version"]})
+    assert published.status_code == 200, published.text
+    target_body = client.get("/api/v1/knowledge/topics/merge-contract-target").json()
+    assert next(item for item in target_body["sections"] if item["section_type"] == "overview")["content"]["short_description"] == "Merged section content"
+    source_body = client.get(f"/api/v1/knowledge/topics/{source['topic_key']}").json()
+    assert source_body["sections"] == source_before["sections"]
+    assert "merge_target_topic_id" not in next(item for item in target_body["sections"] if item["section_type"] == "overview")["content"]
+
 def test_contract_requires_authentication_and_supports_idempotency(client):
     topic = existing_topic(client)
     payload = proposal_payload(topic["id"], {"items": [{"name": "Code interception", "weakness_description": "An authorization code may be intercepted.", "impact": "Unauthorized access."}]})

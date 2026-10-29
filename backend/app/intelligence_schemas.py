@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class IntelligenceRef(BaseModel):
@@ -172,6 +172,13 @@ class AssessmentItem(BaseModel):
 
 class ProfileAssessmentRequest(BaseModel):
     assessments: list[AssessmentItem] = Field(default_factory=list, max_length=500)
+
+    @model_validator(mode="after")
+    def reject_duplicate_competencies(self):
+        ids = [item.competency_id for item in self.assessments]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Each competency may be assessed only once")
+        return self
 
 
 class ProfileResponse(BaseModel):

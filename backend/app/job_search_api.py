@@ -159,6 +159,7 @@ def update_search(search_id: int, payload: JobSearchUpdate, actor: str = Depends
         search.next_run_at = _now()
     if not search.enabled:
         search.next_run_at = None
+    search.automated_source.name = f"job-search:{search.name}"
     search.automated_source.keywords = search.keywords or []
     search.automated_source.configuration = {**(search.automated_source.configuration or {}), "provider_type": search.provider_type, "job_search_id": search.id}
     search.automated_source.enabled = search.enabled

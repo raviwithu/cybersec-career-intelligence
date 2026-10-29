@@ -119,6 +119,48 @@ def test_fetcher_rejects_permanent_access_denial_without_retry():
     assert attempts == ["/research"]
 
 
+def test_fetcher_strips_credentials_when_redirecting_to_another_host():
+    seen_headers = []
+
+    def handler(request):
+        seen_headers.append(dict(request.headers))
+        if request.url.host == "example.test":
+            return httpx.Response(302, headers={"location": "https://other.test/research"})
+        return httpx.Response(200, headers={"content-type": "text/plain"}, content=b"bounded research response")
+
+    fetcher = SecureResearchFetcher(
+        CollectorSettings(),
+        client_factory=lambda ip: httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False),
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+    content, _, status_code = fetcher.fetch(
+        "https://example.test/research",
+        accept="text/plain",
+        respect_robots=False,
+        headers={"Authorization": "Bearer secret", "Cookie": "session=secret", "X-API-Key": "secret"},
+    )
+    assert content == b"bounded research response"
+    assert status_code == 200
+    assert seen_headers[0]["authorization"] == "Bearer secret"
+    assert "authorization" not in seen_headers[1]
+    assert "cookie" not in seen_headers[1]
+    assert "x-api-key" not in seen_headers[1]
+
+
+def test_fetcher_converts_bounded_response_errors_to_collection_errors():
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "text/plain", "content-length": "100001"}, content=b"small body")
+
+    fetcher = SecureResearchFetcher(
+        CollectorSettings(),
+        client_factory=lambda ip: httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False),
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+    with pytest.raises(CollectionError) as error:
+        fetcher.fetch("https://example.test/research", accept="text/plain", respect_robots=False)
+    assert error.value.status_code == 413
+
+
 def test_automated_source_registry_schedule_run_auth_and_coverage(client, monkeypatch):
     assert client.get("/api/v1/research/automated/sources").status_code == 401
     created = client.post("/api/v1/research/automated/sources", headers=ADMIN_HEADERS, json={

@@ -5,8 +5,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.database import Base
-from app.intelligence_service import dashboard, evidence, gap_analysis, get_profile, new_profile, progression, save_assessments, trends
-from app.models import Competency, DomainLevelExpectation, ExpectationSource, Industry, ResearchSource, SecurityDomain, CareerLevel
+from app.intelligence_service import dashboard, evidence, gap_analysis, get_profile, historical, new_profile, progression, save_assessments, trends
+from app.models import CareerLevel, Competency, DomainLevelExpectation, ExpectationRevision, ExpectationSource, Industry, ResearchSource, SecurityDomain
 from app.seed import seed_reference_data
 
 
@@ -81,6 +81,24 @@ def test_trends_report_insufficient_sample_size(intelligence_db):
     assert result.trends[0].warning
     assert "not representative" in result.data_quality[1]
 
+
+
+
+def test_historical_evidence_comes_from_revision_snapshot(intelligence_db):
+    db, taxonomy = intelligence_db
+    expectation = db.scalar(select(DomainLevelExpectation).where(
+        DomainLevelExpectation.competency_id == taxonomy["secure_boot"].id,
+        DomainLevelExpectation.domain_id == taxonomy["boot"].id,
+        DomainLevelExpectation.career_level_id == taxonomy["architect"].id,
+    ))
+    historical_source = db.scalar(select(ResearchSource).where(ResearchSource.source_url == "https://research.example/3"))
+    db.add(ExpectationRevision(expectation_id=expectation.id, version=1, snapshot={"expectation_description": "Historical wording", "evidence": [{"source_id": historical_source.id, "supporting_excerpt": "Historical excerpt"}]}))
+    db.commit()
+    result = historical(db, competency_id=taxonomy["secure_boot"].id, domain="boot-security", career_level="architect", industry="automotive", limit=10)
+    assert result.available is True
+    assert result.expectations[0].evidence[0].source_id == historical_source.id
+    assert result.expectations[0].evidence[0].excerpt == "Historical excerpt"
+    assert result.expectations[0].evidence[0].publication_version == 1
 
 def test_evidence_explorer_returns_supporting_excerpt(intelligence_db):
     db, taxonomy = intelligence_db
