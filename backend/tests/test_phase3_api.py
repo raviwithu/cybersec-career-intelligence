@@ -11,7 +11,7 @@ def test_domain_hierarchy_and_missing_resource(client):
     response = client.get("/api/v1/domains")
     assert response.status_code == 200
     domains = response.json()
-    assert len(domains) == 13
+    assert len(domains) == 14
     security_automation = next(item for item in domains if item["slug"] == "security-automation")
     assert security_automation["parent_id"] is None
     assert "SOAR" in security_automation["description"]
@@ -21,6 +21,10 @@ def test_domain_hierarchy_and_missing_resource(client):
     devsecops = next(item for item in domains if item["slug"] == "devsecops")
     assert devsecops["parent_id"] is None
     assert "CI/CD" in devsecops["description"]
+    professional = next(item for item in domains if item["slug"] == "professional-leadership-competency")
+    assert professional["name"] == "Professional & Leadership Competency"
+    assert professional["parent_id"] is None
+    assert "stakeholders" in professional["description"]
     embedded = next(item for item in domains if item["slug"] == "embedded-systems-security")
     assert len(embedded["children"]) == 5
     assert all(child["parent_id"] == embedded["id"] for child in embedded["children"])
@@ -160,6 +164,7 @@ def test_seed_reference_data_is_idempotent_for_security_domains():
         "security-automation": ("Security Automation", "Use when workflow automation is the primary security capability"),
         "vulnerability-research": ("Vulnerability Research", "Use when the work produces new vulnerability findings"),
         "devsecops": ("DevSecOps", "Use when the work embeds security controls into engineering and delivery pipelines"),
+        "professional-leadership-competency": ("Professional & Leadership Competency", "Use when the expectation is primarily about professional or leadership behavior"),
     }
     with SessionLocal() as db:
         seed_reference_data(db)
@@ -194,6 +199,15 @@ def test_seed_reference_data_is_idempotent_for_security_domains():
             "Pipeline Security": False,
             "Shift-Left Security": False,
             "Software Supply Chain Security": True,
+        }
+        professional = db.scalar(select(SecurityDomain).where(SecurityDomain.slug == "professional-leadership-competency"))
+        aliases = {item.alias: item.requires_context for item in db.scalars(select(SecurityDomainAlias).where(SecurityDomainAlias.domain_id == professional.id))}
+        assert aliases == {
+            "Security Leadership": False,
+            "Cybersecurity Leadership": False,
+            "Professional Skills": False,
+            "Leadership Competency": False,
+            "Soft Skills": True,
         }
 
 
