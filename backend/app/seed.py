@@ -53,6 +53,7 @@ DOMAIN_SEED = [
     ("security-automation", "Security Automation", "Automating security workflows and controls through SOAR, workflow orchestration, security-as-code, policy-as-code, automated vulnerability management, control validation, and repeatable detection or response actions. Use when workflow automation is the primary security capability, rather than AI being the protected asset or the enabling technology.", None, 11),
     ("vulnerability-research", "Vulnerability Research", "Discovering, analyzing, and demonstrating previously unknown security vulnerabilities in software, firmware, and hardware: source and binary code auditing, reverse engineering, fuzzing and harness development, variant analysis, root-cause and patch-diff analysis, exploitability assessment and exploit or proof-of-concept development, and coordinated vulnerability disclosure including CVE reporting. Use when the work produces new vulnerability findings, rather than operating vulnerability management for known issues or testing a specific application.", None, 12),
     ("devsecops", "DevSecOps", "Integrating security into software development and delivery: secure SDLC practices and design-time threat modeling, CI/CD pipeline and build-system hardening, SAST, DAST, SCA, and secret-scanning gates, software supply chain security (SBOMs, dependency and artifact provenance, signing, SLSA), infrastructure-as-code and container image scanning, and developer security enablement. References include NIST SSDF (SP 800-218), OWASP SAMM, and SLSA. Use when the work embeds security controls into engineering and delivery pipelines, rather than automating security operations workflows or testing a specific application.", None, 13),
+    ("professional-leadership-competency", "Professional & Leadership Competency", "Non-technical professional and leadership capabilities that cybersecurity practitioners need across every technical domain: communicating security risk to executives, boards, and non-technical stakeholders, technical writing and reporting, influencing and stakeholder management, cross-functional collaboration, mentoring and coaching, team and people leadership, security program and strategy leadership, budgeting and business alignment, decision-making under uncertainty, and professional ethics. References include the NICE Workforce Framework (NIST SP 800-181) and SFIA. Use when the expectation is primarily about professional or leadership behavior rather than a specific technical security domain.", None, 14),
 ]
 
 DOMAIN_ALIAS_SEED = [
@@ -73,6 +74,11 @@ DOMAIN_ALIAS_SEED = [
     ("devsecops", "Pipeline Security", False, None),
     ("devsecops", "Shift-Left Security", False, None),
     ("devsecops", "Software Supply Chain Security", True, "Use this alias only when the source concerns securing the organization's own build and dependency pipeline, not third-party vendor risk management."),
+    ("professional-leadership-competency", "Security Leadership", False, None),
+    ("professional-leadership-competency", "Cybersecurity Leadership", False, None),
+    ("professional-leadership-competency", "Professional Skills", False, None),
+    ("professional-leadership-competency", "Leadership Competency", False, None),
+    ("professional-leadership-competency", "Soft Skills", True, "Use this alias only when the source describes interpersonal, communication, or leadership skills for security roles, not general job requirements."),
 ]
 
 CAREER_LEVEL_ALIAS_SEED = [
