@@ -1,6 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
 
-:root { color: #edf4fb; background: #08111f; font-family: Manrope, sans-serif; font-synthesis: none; --bg: #08111f; --panel: #0d1b2c; --panel-2: #102238; --line: #203951; --muted: #8294aa; --soft: #aebdd0; --mint: #74e0b7; --blue: #7cb7ff; --violet: #b89cff; --amber: #f3c878; --rose: #f38ca3; --sidebar-width: 252px; }
+:root { color: #edf4fb; background: #08111f; font-family: Manrope, sans-serif; font-synthesis: none; --bg: #08111f; --text: #edf4fb; --panel: #0d1b2c; --panel-2: #102238; --line: #203951; --muted: #8294aa; --soft: #aebdd0; --mint: #74e0b7; --blue: #7cb7ff; --violet: #b89cff; --amber: #f3c878; --rose: #f38ca3; --sidebar-width: 252px; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; background: radial-gradient(circle at 68% -15%, #163c4d 0, transparent 32%), var(--bg); }
 button, input, select { font: inherit; }
@@ -445,3 +445,19 @@ kbd { padding: 3px 6px; border: 1px solid #2c455e; border-radius: 4px; color: #6
 code { color: #9ff2cc; font: .9em 'DM Mono', monospace; }
 @media (max-width: 900px) { .yahoo-connection-layout { grid-template-columns: 1fr; } }
 @media (max-width: 600px) { .job-detail-grid, .connection-form, .source-rule-card { grid-template-columns: 1fr; } .drawer-wide { grid-column: auto; } .job-drawer { padding: 18px; } }
+.pipeline-status { margin-bottom: 18px; padding: 16px 18px; }
+.pipeline-status-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; }
+.pipeline-status-head .eyebrow { margin: 0; }
+.pipeline-status-head span { color: var(--muted); font-size: .74rem; }
+.pipeline-bar { display: flex; gap: 2px; height: 10px; margin: 12px 0; overflow: hidden; border-radius: 999px; background: var(--line); }
+.pipeline-segment { min-width: 4px; transition: flex-grow .4s ease; }
+.pipeline-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0; padding: 0; list-style: none; color: var(--soft); font-size: .74rem; }
+.pipeline-legend li { display: flex; align-items: center; gap: 7px; }
+.pipeline-legend strong { color: var(--text); }
+.pipeline-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; }
+.pipeline-tone-blue { background: var(--blue); }
+.pipeline-tone-amber { background: var(--amber); }
+.pipeline-tone-violet { background: var(--violet); }
+.pipeline-tone-mint { background: var(--mint); }
+.pipeline-tone-muted { background: var(--muted); }
+.pipeline-tone-rose { background: var(--rose); }

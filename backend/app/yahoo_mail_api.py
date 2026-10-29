@@ -172,6 +172,8 @@ def list_candidates(
     counts = {value: int(db.scalar(select(func.count()).select_from(YahooJobCandidate).where(YahooJobCandidate.review_status == value)) or 0) for value in ("pending", "approved", "rejected", "deferred")}
     counts["duplicates"] = int(db.scalar(select(func.count()).select_from(YahooJobCandidate).where(YahooJobCandidate.duplicate_status == "duplicate")) or 0)
     counts["extraction_failed"] = int(db.scalar(select(func.count()).select_from(YahooJobCandidate).where(YahooJobCandidate.description_status == "failed")) or 0)
+    for value, count in db.execute(select(YahooJobCandidate.ingestion_status, func.count()).group_by(YahooJobCandidate.ingestion_status)).all():
+        counts[f"ingestion_{value}"] = int(count)
     return CandidatePage(items=[candidate_response(item) for item in items], total=len(items), counts=counts)
 
 

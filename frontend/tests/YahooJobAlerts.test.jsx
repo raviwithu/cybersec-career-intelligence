@@ -58,4 +58,32 @@ describe("Yahoo Job Alerts administrator page", () => {
     await waitFor(() => expect(batches).toEqual([100, 100, 50]));
     expect(await screen.findByText(/0 approved · 247 fetching full descriptions .* 3 duplicate\(s\) skipped\./)).toBeTruthy();
   });
+
+  it("shows the approval pipeline status bar and polls while work is in progress", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let listCalls = 0;
+    const counts = { pending: 3, extraction_failed: 2, ingestion_fetching_description: 120, ingestion_queued: 40, ingestion_processing: 1, ingestion_analyzed: 85, ingestion_not_approved: 300 };
+    global.fetch = vi.fn((url) => {
+      if (url.includes("/job-candidates")) { listCalls += 1; return response({ items: [], total: 0, counts }); }
+      return response([]);
+    });
+    try {
+      render(<YahooJobAlertsPage />);
+      const bar = await screen.findByRole("region", { name: "Approval pipeline status" });
+      expect(bar.textContent).toContain("161 job(s) in progress");
+      expect(screen.getByRole("img", { name: "120 fetching descriptions, 40 queued for analysis, 1 analysing, 85 analysed" })).toBeTruthy();
+      expect(bar.textContent).toContain("Description not found2");
+      const before = listCalls;
+      await vi.advanceTimersByTimeAsync(15000);
+      await waitFor(() => expect(listCalls).toBeGreaterThan(before));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hides the status bar when nothing has entered the pipeline", async () => {
+    render(<YahooJobAlertsPage />);
+    await screen.findByRole("heading", { name: "Job Inbox" });
+    expect(screen.queryByRole("region", { name: "Approval pipeline status" })).toBeNull();
+  });
 });

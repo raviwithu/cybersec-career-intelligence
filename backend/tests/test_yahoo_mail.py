@@ -432,3 +432,11 @@ def test_scheduler_stops_on_rate_limit_and_keeps_candidates_queued(client, monke
     fetch_pending_descriptions(settings)
     with SessionLocal() as db:
         assert {db.get(YahooJobCandidate, candidate_id).ingestion_status for candidate_id in ids} == {"fetching_description"}
+
+
+def test_candidate_counts_include_ingestion_pipeline(client):
+    ids = _candidates("9005", [True, False])
+    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": ids, "action": "approve"})
+    counts = client.get("/api/v1/admin/mail/job-candidates", headers=ADMIN_HEADERS).json()["counts"]
+    assert counts["ingestion_queued"] >= 1
+    assert counts["ingestion_fetching_description"] >= 1
