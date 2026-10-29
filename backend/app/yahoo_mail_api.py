@@ -183,6 +183,8 @@ def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
 def patch_candidate(candidate_id: int, payload: CandidateUpdate, db: Session = Depends(get_db)):
     item = _candidate(db, candidate_id)
     values = payload.model_dump(exclude_none=True)
+    if "description_text" in values and values["description_text"] == item.description_text:
+        values.pop("description_text")
     if "description_text" in values:
         item.description_text = values.pop("description_text")
         item.description_complete = len(item.description_text.strip()) >= 240
