@@ -302,7 +302,8 @@ def _sync_locked(db: Session, connection: YahooMailConnection, settings: Setting
     return run
 
 
-def retry_description(db: Session, candidate: YahooJobCandidate, settings: Settings) -> YahooJobCandidate:
+def _retrieve_description(candidate: YahooJobCandidate, settings: Settings) -> tuple[str, str]:
+    # Network only: nothing is written, so a slow fetch never holds or overwrites the row.
     if not candidate.job_url:
         raise ValueError("Candidate has no job URL")
     description = ""
@@ -327,20 +328,31 @@ def retry_description(db: Session, candidate: YahooJobCandidate, settings: Setti
             pass
     if not description.strip():
         raise page_error or ValueError("No job description could be retrieved")
+    return description, method
+
+
+def _apply_description(candidate: YahooJobCandidate, description: str, method: str, settings: Settings) -> None:
     candidate.description_text = description[:settings.max_research_bytes]
     candidate.description_complete = len(candidate.description_text.strip()) >= 240
     candidate.description_status = "complete" if candidate.description_complete else "partial"
     candidate.metadata_payload = {**(candidate.metadata_payload or {}), "description_retrieval": method}
-    clear_approval_block(candidate)
+
+
+def retry_description(db: Session, candidate: YahooJobCandidate, settings: Settings) -> YahooJobCandidate:
+    description, method = _retrieve_description(candidate, settings)
+    _apply_description(candidate, description, method, settings)
+    if candidate.description_complete:
+        clear_approval_block(candidate)
     db.commit()
     db.refresh(candidate)
     return candidate
 
 
 def clear_approval_block(candidate: YahooJobCandidate) -> None:
-    # A complete description resolves a blocked bulk approval; the job then waits for an ordinary review.
-    if candidate.ingestion_status == APPROVAL_BLOCKED and candidate.description_complete:
+    # A retrieved or administrator-supplied description resolves a blocked bulk approval; the job then waits for an ordinary review.
+    if candidate.ingestion_status == APPROVAL_BLOCKED:
         candidate.ingestion_status = "not_approved"
+        candidate.review_note = None
 
 
 def _registry_source(db: Session, actor: str) -> AutomatedResearchSource:
@@ -403,7 +415,7 @@ def review_candidate(db: Session, candidate: YahooJobCandidate, action: str, pay
 
 BULK_REVIEW_STATUSES = {"approve": "approve", "reject": "rejected", "defer": "deferred"}
 FETCHING_DESCRIPTION = "fetching_description"
-# A bulk approval whose description fetch failed; approving, rejecting, deferring or fixing the description clears it.
+# A bulk approval whose description fetch failed; approving, rejecting, deferring, editing the description or a successful retry clears it.
 APPROVAL_BLOCKED = "approval_blocked"
 
 
@@ -422,7 +434,7 @@ def bulk_review(db: Session, payload: BulkReview, actor: str) -> dict[str, int]:
                 result["skipped_duplicates"] += 1
                 continue
             if not candidate.description_complete and not payload.allow_partial:
-                # Approval needs a full description: the scheduler fetches it, then approves or returns the job to pending.
+                # Approval needs a full description: the scheduler fetches it, then approves the job or marks the approval blocked.
                 candidate.ingestion_status = FETCHING_DESCRIPTION
                 candidate.metadata_payload = {**(candidate.metadata_payload or {}), "approval_requested_by": actor, "approval_note": payload.note}
                 db.add(YahooJobReview(candidate_id=candidate.id, action="approve_after_fetch", actor=actor, note=payload.note))
@@ -436,10 +448,12 @@ def bulk_review(db: Session, payload: BulkReview, actor: str) -> dict[str, int]:
     return result
 
 
+def _lock_candidate(db: Session, candidate_id: int) -> YahooJobCandidate | None:
+    # Row lock until the next commit, so an administrator review cannot land between the status check and the scheduler's write.
+    return db.scalar(select(YahooJobCandidate).where(YahooJobCandidate.id == candidate_id).with_for_update().execution_options(populate_existing=True))
+
+
 def _description_fetch_failed(db: Session, candidate: YahooJobCandidate, reason: str) -> None:
-    if candidate.ingestion_status != FETCHING_DESCRIPTION:
-        # The administrator reviewed the job while the fetch ran; their decision stands.
-        return
     candidate.ingestion_status = APPROVAL_BLOCKED
     candidate.description_status = "failed"
     candidate.review_note = f"Not approved: the full description could not be retrieved ({reason[:300]}). Edit the description or approve with the partial-source override."
@@ -454,32 +468,32 @@ def fetch_pending_descriptions(settings: Settings, *, limit: int = 20) -> int:
             candidate = db.get(YahooJobCandidate, candidate_id)
             if candidate is None or candidate.ingestion_status != FETCHING_DESCRIPTION:
                 continue
+            description, method, failure = "", "", None
             try:
-                retry_description(db, candidate, settings)
+                description, method = _retrieve_description(candidate, settings)
             except UrlImportError as exc:
-                db.rollback()
                 if exc.code in {"rate_limited", "timeout"}:
                     # Leave the rest queued; the next scheduler tick retries.
                     break
-                _description_fetch_failed(db, db.get(YahooJobCandidate, candidate_id), str(exc))
-                processed += 1
-                continue
+                failure = str(exc)
             except Exception as exc:
-                db.rollback()
-                _description_fetch_failed(db, db.get(YahooJobCandidate, candidate_id), str(exc) or type(exc).__name__)
-                processed += 1
+                failure = str(exc) or type(exc).__name__
+            db.rollback()
+            candidate = _lock_candidate(db, candidate_id)
+            processed += 1
+            if candidate is None or candidate.ingestion_status != FETCHING_DESCRIPTION:
+                # Reviewed or edited by the administrator during the fetch: their decision and description stand.
+                db.commit()
                 continue
-            candidate = db.get(YahooJobCandidate, candidate_id)
-            if candidate.ingestion_status != FETCHING_DESCRIPTION:
-                # Rejected, deferred or approved by the administrator during the fetch: keep the new description, not the queued approval.
-                processed += 1
+            if failure is not None:
+                _description_fetch_failed(db, candidate, failure)
                 continue
+            _apply_description(candidate, description, method, settings)
             if candidate.description_complete:
                 metadata = candidate.metadata_payload or {}
                 review_candidate(db, candidate, "approve", CandidateReview(note=metadata.get("approval_note", "")), metadata.get("approval_requested_by") or "scheduler")
             else:
                 _description_fetch_failed(db, candidate, "the retrieved description was too short")
-            processed += 1
     return processed
 
 
