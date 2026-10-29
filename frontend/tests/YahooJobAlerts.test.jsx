@@ -62,9 +62,11 @@ describe("Yahoo Job Alerts administrator page", () => {
   it("shows the approval pipeline status bar and polls while work is in progress", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let listCalls = 0;
+    let countCalls = 0;
     let otherCalls = 0;
-    const counts = { pending: 3, extraction_failed: 5, approval_blocked_no_description: 2, ingestion_fetching_description: 120, ingestion_queued: 40, ingestion_processing: 1, ingestion_analyzed: 85, ingestion_not_approved: 300 };
+    let counts = { pending: 3, extraction_failed: 5, approval_blocked_no_description: 2, ingestion_fetching_description: 120, ingestion_queued: 40, ingestion_processing: 1, ingestion_analyzed: 85, ingestion_not_approved: 300 };
     global.fetch = vi.fn((url) => {
+      if (url.includes("/job-candidates/counts")) { countCalls += 1; return response(counts); }
       if (url.includes("/job-candidates")) { listCalls += 1; return response({ items: [], total: 0, counts }); }
       otherCalls += 1;
       return response([]);
@@ -76,12 +78,66 @@ describe("Yahoo Job Alerts administrator page", () => {
       expect(screen.getByRole("img", { name: "120 fetching descriptions, 40 queued for analysis, 1 analysing" })).toBeTruthy();
       expect(bar.textContent).toContain("Approval blocked: no description2");
       expect(bar.textContent).toContain("Analysed85");
-      const before = listCalls;
+      const listBefore = listCalls;
       const otherBefore = otherCalls;
       await vi.advanceTimersByTimeAsync(15000);
-      await waitFor(() => expect(listCalls).toBeGreaterThan(before));
-      // Polls refresh only the candidate list, not connections, sync runs or alert sources.
+      await waitFor(() => expect(countCalls).toBe(1));
+      // Unchanged counts: the candidate list is not refetched, and connections, sync runs and alert sources never are.
+      expect(listCalls).toBe(listBefore);
       expect(otherCalls).toBe(otherBefore);
+      counts = { ...counts, ingestion_fetching_description: 100, ingestion_queued: 60 };
+      await vi.advanceTimersByTimeAsync(15000);
+      await waitFor(() => expect(listCalls).toBe(listBefore + 1));
+      expect(await screen.findByText(/161 job\(s\) in progress/)).toBeTruthy();
+      expect(screen.getByRole("img", { name: "100 fetching descriptions, 60 queued for analysis, 1 analysing" })).toBeTruthy();
+      expect(otherCalls).toBe(otherBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops polling and shows the error when the admin key is rejected", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let countCalls = 0;
+    global.fetch = vi.fn((url) => {
+      if (url.includes("/job-candidates/counts")) { countCalls += 1; return Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({ detail: "Administrator key rejected" }) }); }
+      if (url.includes("/job-candidates")) return response({ items: [], total: 0, counts: { pending: 0, ingestion_queued: 2 } });
+      return response([]);
+    });
+    try {
+      render(<YahooJobAlertsPage />);
+      await screen.findByRole("region", { name: "Approval pipeline status" });
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(await screen.findByText(/Administrator key rejected/)).toBeTruthy();
+      await vi.advanceTimersByTimeAsync(45000);
+      expect(countCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes untouched drawer fields from a poll but keeps the administrator's edits", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const job = { id: 1, title: "Detection Engineer", employer: "Example", location: "Remote", work_mode: "remote", job_url: "https://www.linkedin.com/jobs/view/1", source_provider: "LinkedIn Job Alerts", description_text: "Partial snippet", description_complete: false, description_status: "partial", review_status: "pending", duplicate_status: "unique", ingestion_status: "fetching_description", provenance: [], metadata: {} };
+    let current = job;
+    let counts = { pending: 1, ingestion_fetching_description: 1 };
+    global.fetch = vi.fn((url) => {
+      if (url.includes("/job-candidates/counts")) return response(counts);
+      if (url.includes("/job-candidates/1")) return response(current);
+      if (url.includes("/job-candidates")) return response({ items: [current], total: 1, counts });
+      return response([]);
+    });
+    try {
+      render(<YahooJobAlertsPage />);
+      fireEvent.click(await screen.findByText("Detection Engineer"));
+      const drawer = await screen.findByRole("dialog", { name: "Job candidate details" });
+      const title = drawer.querySelector("input");
+      fireEvent.change(title, { target: { value: "Senior Detection Engineer" } });
+      current = { ...job, description_text: "Full description. ".repeat(30), description_complete: true, description_status: "complete", review_status: "approved", ingestion_status: "queued" };
+      counts = { pending: 0, approved: 1, ingestion_queued: 1 };
+      await vi.advanceTimersByTimeAsync(15000);
+      await waitFor(() => expect(drawer.querySelector("textarea").value).toBe(current.description_text));
+      expect(title.value).toBe("Senior Detection Engineer");
     } finally {
       vi.useRealTimers();
     }

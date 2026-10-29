@@ -409,7 +409,7 @@ def test_scheduler_fetches_descriptions_then_approves_or_returns_to_pending(clie
         assert (fetched.review_status, fetched.ingestion_status, fetched.description_complete) == ("approved", "queued", True)
         assert fetched.approved_by == "administrator"
         for item in (short, denied):
-            assert (item.review_status, item.ingestion_status) == ("pending", "not_approved")
+            assert (item.review_status, item.ingestion_status) == ("pending", "approval_blocked")
             assert item.review_note.startswith("Not approved: the full description could not be retrieved")
         assert "403" in denied.review_note
 
@@ -450,25 +450,67 @@ def test_candidate_counts_include_ingestion_pipeline(client):
     assert after.get("ingestion_fetching_description", 0) - before.get("ingestion_fetching_description", 0) == 2
 
 
-def test_approval_blocked_count_only_tracks_unresolved_fetch_failures(client):
-    blocked_id, retried_id = _candidates("9006", [False, False])
-    before = client.get("/api/v1/admin/mail/job-candidates", headers=ADMIN_HEADERS).json()["counts"]["approval_blocked_no_description"]
-    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": [blocked_id], "action": "approve"})
-    with SessionLocal() as db:
-        for candidate_id in (blocked_id, retried_id):
-            # Same end state as a failed scheduler fetch (blocked_id) or a failed drawer retry with no approval request (retried_id).
-            candidate = db.get(YahooJobCandidate, candidate_id)
-            candidate.ingestion_status = "not_approved"
-            candidate.description_status = "failed"
-        db.commit()
-    counts = lambda: client.get("/api/v1/admin/mail/job-candidates", headers=ADMIN_HEADERS).json()["counts"]["approval_blocked_no_description"]
+def test_approval_blocked_count_only_tracks_unresolved_fetch_failures(client, monkeypatch):
+    from app.config import get_settings
+    from app.url_importer import UrlImportError
+    from app.yahoo_mail_service import fetch_pending_descriptions
+
+    deferred_id, rejected_id, edited_id, retried_id, approved_id = ids = _candidates("9006", [False] * 5)
+    counts = lambda: client.get("/api/v1/admin/mail/job-candidates/counts", headers=ADMIN_HEADERS).json()["approval_blocked_no_description"]
+
+    class Denied:
+        def __init__(self, _settings): pass
+        def import_job(self, _url): raise UrlImportError("access_denied", "denied", 403)
+
+    monkeypatch.setattr("app.yahoo_mail_service.UrlImporter", Denied)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "jsearch_api_key", None)
+    # Drain fetches queued by earlier tests in the shared database so only this test's jobs change the count.
+    fetch_pending_descriptions(settings, limit=1000)
+    before = counts()
+    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": ids, "action": "approve"})
+    fetch_pending_descriptions(settings)
+    assert counts() - before == 5
+    # A failed drawer retry on a job nobody asked to approve is not a blocked approval.
+    other_id = _candidates("9007", [False])[0]
+    assert client.post(f"/api/v1/admin/mail/job-candidates/{other_id}/retry-description", headers=ADMIN_HEADERS).status_code == 422
+    assert counts() - before == 5
+    # Each way the administrator resolves a blocked job removes it from the count.
+    client.post(f"/api/v1/admin/mail/job-candidates/{deferred_id}/defer", headers=ADMIN_HEADERS, json={})
+    client.post(f"/api/v1/admin/mail/job-candidates/{rejected_id}/reject", headers=ADMIN_HEADERS, json={})
+    client.patch(f"/api/v1/admin/mail/job-candidates/{edited_id}", headers=ADMIN_HEADERS, json={"description_text": "Corrected description. " * 20})
+    client.post(f"/api/v1/admin/mail/job-candidates/{approved_id}/approve", headers=ADMIN_HEADERS, json={"note": "", "allow_partial": True})
     assert counts() - before == 1
-    # Re-approving re-queues the fetch, so the job is in flight again rather than blocked.
-    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": [blocked_id], "action": "approve"})
+    monkeypatch.setattr("app.yahoo_mail_service.UrlImporter", lambda _settings: type("Importer", (), {"import_job": lambda self, _url: type("Imported", (), {"job_description": "Full description. " * 30, "extraction_method": "html"})()})())
+    assert client.post(f"/api/v1/admin/mail/job-candidates/{retried_id}/retry-description", headers=ADMIN_HEADERS).status_code == 200
     assert counts() - before == 0
     with SessionLocal() as db:
-        db.get(YahooJobCandidate, blocked_id).ingestion_status = "not_approved"
-        db.commit()
-    assert counts() - before == 1
-    client.post(f"/api/v1/admin/mail/job-candidates/{blocked_id}/approve", headers=ADMIN_HEADERS, json={"note": "", "allow_partial": True})
-    assert counts() - before == 0
+        assert db.get(YahooJobCandidate, edited_id).ingestion_status == "not_approved"
+        assert db.get(YahooJobCandidate, retried_id).review_status == "pending"
+
+
+def test_scheduler_does_not_override_a_review_made_during_the_fetch(client, monkeypatch):
+    from app.config import get_settings
+    from app.yahoo_mail_service import fetch_pending_descriptions
+
+    rejected_id, deferred_id = ids = _candidates("9008", [False, False])
+    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": ids, "action": "approve"})
+    pages = {f"https://www.linkedin.com/jobs/view/9008{0}": "Full description. " * 30, f"https://www.linkedin.com/jobs/view/9008{1}": "Too short"}
+
+    class ReviewedMidFetch:
+        def __init__(self, _settings): pass
+
+        def import_job(self, url):
+            # The administrator acts in the drawer while the scheduler is fetching the page.
+            candidate_id, action = (rejected_id, "reject") if url.endswith("0") else (deferred_id, "defer")
+            client.post(f"/api/v1/admin/mail/job-candidates/{candidate_id}/{action}", headers=ADMIN_HEADERS, json={})
+            return type("Imported", (), {"job_description": pages[url], "extraction_method": "html"})()
+
+    monkeypatch.setattr("app.yahoo_mail_service.UrlImporter", ReviewedMidFetch)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "jsearch_api_key", None)
+    fetch_pending_descriptions(settings)
+    with SessionLocal() as db:
+        rejected, deferred = (db.get(YahooJobCandidate, candidate_id) for candidate_id in ids)
+        assert (rejected.review_status, rejected.ingestion_status, rejected.description_complete) == ("rejected", "not_approved", True)
+        assert (deferred.review_status, deferred.ingestion_status) == ("deferred", "not_approved")

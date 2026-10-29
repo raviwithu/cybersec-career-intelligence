@@ -331,9 +331,16 @@ def retry_description(db: Session, candidate: YahooJobCandidate, settings: Setti
     candidate.description_complete = len(candidate.description_text.strip()) >= 240
     candidate.description_status = "complete" if candidate.description_complete else "partial"
     candidate.metadata_payload = {**(candidate.metadata_payload or {}), "description_retrieval": method}
+    clear_approval_block(candidate)
     db.commit()
     db.refresh(candidate)
     return candidate
+
+
+def clear_approval_block(candidate: YahooJobCandidate) -> None:
+    # A complete description resolves a blocked bulk approval; the job then waits for an ordinary review.
+    if candidate.ingestion_status == APPROVAL_BLOCKED and candidate.description_complete:
+        candidate.ingestion_status = "not_approved"
 
 
 def _registry_source(db: Session, actor: str) -> AutomatedResearchSource:
@@ -396,6 +403,8 @@ def review_candidate(db: Session, candidate: YahooJobCandidate, action: str, pay
 
 BULK_REVIEW_STATUSES = {"approve": "approve", "reject": "rejected", "defer": "deferred"}
 FETCHING_DESCRIPTION = "fetching_description"
+# A bulk approval whose description fetch failed; approving, rejecting, deferring or fixing the description clears it.
+APPROVAL_BLOCKED = "approval_blocked"
 
 
 def bulk_review(db: Session, payload: BulkReview, actor: str) -> dict[str, int]:
@@ -428,7 +437,10 @@ def bulk_review(db: Session, payload: BulkReview, actor: str) -> dict[str, int]:
 
 
 def _description_fetch_failed(db: Session, candidate: YahooJobCandidate, reason: str) -> None:
-    candidate.ingestion_status = "not_approved"
+    if candidate.ingestion_status != FETCHING_DESCRIPTION:
+        # The administrator reviewed the job while the fetch ran; their decision stands.
+        return
+    candidate.ingestion_status = APPROVAL_BLOCKED
     candidate.description_status = "failed"
     candidate.review_note = f"Not approved: the full description could not be retrieved ({reason[:300]}). Edit the description or approve with the partial-source override."
     db.commit()
@@ -458,6 +470,10 @@ def fetch_pending_descriptions(settings: Settings, *, limit: int = 20) -> int:
                 processed += 1
                 continue
             candidate = db.get(YahooJobCandidate, candidate_id)
+            if candidate.ingestion_status != FETCHING_DESCRIPTION:
+                # Rejected, deferred or approved by the administrator during the fetch: keep the new description, not the queued approval.
+                processed += 1
+                continue
             if candidate.description_complete:
                 metadata = candidate.metadata_payload or {}
                 review_candidate(db, candidate, "approve", CandidateReview(note=metadata.get("approval_note", "")), metadata.get("approval_requested_by") or "scheduler")
