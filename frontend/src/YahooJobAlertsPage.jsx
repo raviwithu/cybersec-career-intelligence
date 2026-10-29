@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   bulkReviewYahooCandidates,
@@ -55,11 +55,13 @@ function bulkSummary(action, totals) {
 function PipelineStatus({ counts }) {
   const steps = PIPELINE_STEPS.map(([key, label, tone]) => ({ key, label, tone, value: counts[key] || 0 }));
   const total = steps.reduce((sum, step) => sum + step.value, 0);
-  const notFound = counts.extraction_failed || 0;
+  const notFound = counts.approval_blocked_no_description || 0;
   if (!total && !notFound) return null;
   const active = activePipelineCount(counts);
-  const summary = steps.filter((step) => step.value).map((step) => `${step.value} ${step.label.toLowerCase()}`).join(", ");
-  return <section className="panel pipeline-status" aria-label="Approval pipeline status"><div className="pipeline-status-head"><p className="eyebrow">APPROVAL PIPELINE</p><span role="status">{active ? `${active} job(s) in progress · updates every ${PIPELINE_POLL_MS / 1000}s` : "Idle · nothing in progress"}</span></div>{total > 0 && <div className="pipeline-bar" role="img" aria-label={summary}>{steps.filter((step) => step.value).map((step) => <span key={step.key} className={`pipeline-segment pipeline-tone-${step.tone}`} style={{ flexGrow: step.value }} title={`${step.label}: ${step.value}`} />)}</div>}<ul className="pipeline-legend">{steps.map((step) => <li key={step.key}><i className={`pipeline-dot pipeline-tone-${step.tone}`} />{step.label}<strong>{step.value}</strong></li>)}{notFound > 0 && <li title="Returned to pending with a note; edit the description or approve with the partial-source override"><i className="pipeline-dot pipeline-tone-rose" />Description not found<strong>{notFound}</strong></li>}</ul></section>;
+  // The bar shows only work in flight; analysed and other terminal totals grow forever and would swamp it.
+  const activeSteps = steps.filter((step) => step.value && ACTIVE_PIPELINE_KEYS.includes(step.key));
+  const summary = activeSteps.map((step) => `${step.value} ${step.label.toLowerCase()}`).join(", ");
+  return <section className="panel pipeline-status" aria-label="Approval pipeline status"><div className="pipeline-status-head"><p className="eyebrow">APPROVAL PIPELINE</p><span role="status">{active ? `${active} job(s) in progress · updates every ${PIPELINE_POLL_MS / 1000}s` : "Idle · nothing in progress"}</span></div>{active > 0 && <div className="pipeline-bar" role="img" aria-label={summary}>{activeSteps.map((step) => <span key={step.key} className={`pipeline-segment pipeline-tone-${step.tone}`} style={{ flexGrow: step.value }} title={`${step.label}: ${step.value}`} />)}</div>}<ul className="pipeline-legend">{steps.map((step) => <li key={step.key}><i className={`pipeline-dot pipeline-tone-${step.tone}`} />{step.label}<strong>{step.value}</strong></li>)}{notFound > 0 && <li title="Bulk-approved, but the full description could not be fetched. The job keeps its previous status with a note; edit the description or approve with the partial-source override."><i className="pipeline-dot pipeline-tone-rose" />Approval blocked: no description<strong>{notFound}</strong></li>}</ul></section>;
 }
 
 function AuthGate({ onUnlock }) {
@@ -148,11 +150,27 @@ export default function YahooJobAlertsPage() {
   const [drawer, setDrawer] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  async function load() { if (!adminKey) return; setLoading(true); setError(null); try { const [candidatePage, nextConnections, nextRuns, nextSources] = await Promise.all([fetchYahooCandidates({ status: filters.status, search: filters.search, description: filters.description }, adminKey), fetchYahooConnections(adminKey), fetchYahooSyncRuns({}, adminKey), fetchYahooAlertSources({}, adminKey)]); setCandidates(candidatePage.items); setCounts({ emails: nextConnections[0]?.messages_scanned || 0, alerts: nextConnections[0]?.alerts_detected || 0, jobs: nextConnections[0]?.jobs_extracted || 0, pending: candidatePage.counts.pending || 0 }); setPipeline(candidatePage.counts || {}); setConnections(nextConnections); setRuns(nextRuns); setSources(nextSources); } catch (requestError) { setError(requestError); } finally { setLoading(false); } }
+  // A full load supersedes any poll in flight, but a poll never discards a load: polls are skipped while a load is running.
+  const loadSeq = useRef(0);
+  const pollSeq = useRef(0);
+  const loadInFlight = useRef(false);
+  const drawerId = useRef(null);
+  drawerId.current = drawer?.id ?? null;
+  const candidateFilters = { status: filters.status, search: filters.search, description: filters.description };
+  async function load() { if (!adminKey) return; const seq = ++loadSeq.current; pollSeq.current += 1; loadInFlight.current = true; setLoading(true); setError(null); try { const [candidatePage, nextConnections, nextRuns, nextSources] = await Promise.all([fetchYahooCandidates(candidateFilters, adminKey), fetchYahooConnections(adminKey), fetchYahooSyncRuns({}, adminKey), fetchYahooAlertSources({}, adminKey)]); if (seq !== loadSeq.current) return; setCandidates(candidatePage.items); setCounts({ emails: nextConnections[0]?.messages_scanned || 0, alerts: nextConnections[0]?.alerts_detected || 0, jobs: nextConnections[0]?.jobs_extracted || 0, pending: candidatePage.counts.pending || 0 }); setPipeline(candidatePage.counts || {}); setConnections(nextConnections); setRuns(nextRuns); setSources(nextSources); } catch (requestError) { if (seq === loadSeq.current) setError(requestError); } finally { if (seq === loadSeq.current) { loadInFlight.current = false; setLoading(false); } } }
+  // Background refresh: only the candidate list (and an open drawer), without touching the error banner or loading state.
+  async function pollPipeline() { if (loadInFlight.current) return; const seq = ++pollSeq.current; try { const candidatePage = await fetchYahooCandidates(candidateFilters, adminKey); if (seq !== pollSeq.current) return; setCandidates(candidatePage.items); setCounts((current) => ({ ...current, pending: candidatePage.counts.pending || 0 })); setPipeline(candidatePage.counts || {}); if (drawerId.current) { const fresh = await fetchYahooCandidate(drawerId.current, adminKey); if (seq !== pollSeq.current) return; setDrawer((current) => (current && current.id === fresh.id ? fresh : current)); } } catch { /* A failed poll is retried on the next tick; manual Refresh surfaces errors. */ } }
   useEffect(() => { load(); }, [adminKey, filters.status, filters.search, filters.description]);
   const pipelineActive = activePipelineCount(pipeline) > 0;
-  // Poll only while descriptions are being fetched or jobs analysed, so the status bar tracks background work.
-  useEffect(() => { if (!adminKey || !pipelineActive) return undefined; const timer = setInterval(load, PIPELINE_POLL_MS); return () => clearInterval(timer); }, [adminKey, pipelineActive, filters.status, filters.search, filters.description]);
+  // Poll only while work is in flight and the inbox is visible; each tick is scheduled after the previous one finishes, so polls never overlap.
+  useEffect(() => {
+    if (!adminKey || !pipelineActive || tab !== "inbox") return undefined;
+    let cancelled = false;
+    let timer;
+    const tick = async () => { if (document.visibilityState !== "hidden") await pollPipeline(); if (!cancelled) timer = setTimeout(tick, PIPELINE_POLL_MS); };
+    timer = setTimeout(tick, PIPELINE_POLL_MS);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [adminKey, pipelineActive, tab, filters.status, filters.search, filters.description]);
   async function openCandidate(id) { try { setDrawer(await fetchYahooCandidate(id, adminKey)); } catch (requestError) { setError(requestError); } }
   async function refreshDrawer() { await load(); if (drawer) setDrawer(await fetchYahooCandidate(drawer.id, adminKey)); }
   if (!adminKey) return <><PageHeader eyebrow="RESEARCH ADMIN / INGESTION" title="Yahoo Job Alerts" description="Discover LinkedIn job alerts through a secure Yahoo Mail connection, review individual jobs, and queue approved descriptions into research ingestion." /><AuthGate onUnlock={(key) => { setAdminKey(key); setEnteredKey(key); }} /></>;

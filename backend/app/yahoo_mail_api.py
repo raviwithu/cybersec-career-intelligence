@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 from .admin_auth import require_admin
 from .config import get_settings
 from .database import get_db
-from .models import YahooAlertSource, YahooJobCandidate, YahooMailConnection, YahooMailSyncRun
+from .models import YahooAlertSource, YahooJobCandidate, YahooJobReview, YahooMailConnection, YahooMailSyncRun
 from .yahoo_mail import ALLOWED_SENDER, YahooMailError
 from .yahoo_mail_schemas import (
     AlertSourceResponse,
@@ -169,11 +169,15 @@ def list_candidates(
     elif description == "partial":
         query = query.where(YahooJobCandidate.description_complete.is_(False))
     items = list(db.scalars(query).unique().all())
-    counts = {value: int(db.scalar(select(func.count()).select_from(YahooJobCandidate).where(YahooJobCandidate.review_status == value)) or 0) for value in ("pending", "approved", "rejected", "deferred")}
+    counts = dict.fromkeys(("pending", "approved", "rejected", "deferred"), 0)
+    for value, count in db.execute(select(YahooJobCandidate.review_status, func.count()).group_by(YahooJobCandidate.review_status)).all():
+        counts[value] = int(count)
     counts["duplicates"] = int(db.scalar(select(func.count()).select_from(YahooJobCandidate).where(YahooJobCandidate.duplicate_status == "duplicate")) or 0)
     counts["extraction_failed"] = int(db.scalar(select(func.count()).select_from(YahooJobCandidate).where(YahooJobCandidate.description_status == "failed")) or 0)
     for value, count in db.execute(select(YahooJobCandidate.ingestion_status, func.count()).group_by(YahooJobCandidate.ingestion_status)).all():
         counts[f"ingestion_{value}"] = int(count)
+    # Bulk approvals whose description fetch failed and still await the administrator (not later approved, rejected, edited or re-queued).
+    counts["approval_blocked_no_description"] = int(db.scalar(select(func.count()).select_from(YahooJobCandidate).where(YahooJobCandidate.description_status == "failed", YahooJobCandidate.ingestion_status == "not_approved", YahooJobCandidate.review_status.in_(("pending", "deferred")), YahooJobCandidate.id.in_(select(YahooJobReview.candidate_id).where(YahooJobReview.action == "approve_after_fetch")))) or 0)
     return CandidatePage(items=[candidate_response(item) for item in items], total=len(items), counts=counts)
 
 
