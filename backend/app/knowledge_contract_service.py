@@ -21,6 +21,7 @@ from .models import (
     KnowledgeTopic,
     KnowledgeTopicDomain,
     KnowledgeTopicIndustry,
+    KnowledgeTopicLevel,
     KnowledgeTopicProposal,
     KnowledgeTopicRelationship,
     KnowledgeTopicSection,
@@ -52,6 +53,8 @@ def _topic_query():
         selectinload(KnowledgeTopic.sections).selectinload(KnowledgeTopicSection.versions),
         selectinload(KnowledgeTopic.relationships_from).selectinload(KnowledgeTopicRelationship.target_topic),
         selectinload(KnowledgeTopic.relationships_to).selectinload(KnowledgeTopicRelationship.source_topic),
+        selectinload(KnowledgeTopic.level_expectations).selectinload(KnowledgeTopicLevel.career_level),
+        selectinload(KnowledgeTopic.level_expectations).selectinload(KnowledgeTopicLevel.industry),
     )
 
 
@@ -134,8 +137,20 @@ def public_topic(db: Session, topic: KnowledgeTopic) -> dict[str, Any]:
             {"id": item.target_topic.id, "topic_key": _topic_key(item.target_topic), "name": item.target_topic.name, "relationship_type": item.relationship_type}
             for item in topic.relationships_from if item.target_topic and item.target_topic.is_active and item.target_topic.publication_status == "published"
         ],
+        "level_expectations": _level_expectations(topic),
         "last_updated": topic.published_at or topic.updated_at,
     }
+
+
+def _level_expectations(topic: KnowledgeTopic) -> list[dict[str, Any]]:
+    rows = [item for item in topic.level_expectations if item.career_level.is_active and (item.industry is None or item.industry.is_active)]
+    rows.sort(key=lambda item: (item.career_level.display_order, item.industry is not None, item.industry.name if item.industry else "", item.display_order))
+    return [{
+        "career_level": {"id": item.career_level.id, "name": item.career_level.name, "slug": item.career_level.slug, "career_track": item.career_level.career_track},
+        "industry": {"id": item.industry.id, "name": item.industry.name, "slug": item.industry.slug} if item.industry else None,
+        "expectation": item.expectation or "",
+        "practical_capability": item.practical_capability or "",
+    } for item in rows]
 
 
 def admin_topic(db: Session, topic: KnowledgeTopic) -> dict[str, Any]:

@@ -18,6 +18,7 @@ from .job_search_api import router as job_search_router
 from .yahoo_mail_api import router as yahoo_mail_router
 from .knowledge import router as knowledge_router
 from .knowledge_contract_api import router as knowledge_contract_router
+from .knowledge_map_api import router as knowledge_map_router
 from .knowledge_topic_api import admin_router as knowledge_topic_admin_router, public_router as knowledge_topic_public_router
 from .phase5_api import router as phase5_router
 from .phase6_api import router as phase6_router
@@ -53,6 +54,7 @@ app = FastAPI(
 )
 app.include_router(knowledge_router, prefix=settings.api_prefix)
 app.include_router(knowledge_contract_router, prefix=settings.api_prefix)
+app.include_router(knowledge_map_router, prefix=settings.api_prefix)
 app.include_router(knowledge_topic_public_router, prefix=settings.api_prefix)
 app.include_router(knowledge_topic_admin_router, prefix=settings.api_prefix)
 app.include_router(read_router, prefix=settings.api_prefix)
