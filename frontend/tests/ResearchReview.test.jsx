@@ -17,6 +17,7 @@ beforeEach(() => {
     if (path.endsWith("/review/submissions/12")) return response(detail);
     if (path.endsWith("/review/publication-preview")) return response({ new_competencies: 1, updated_expectations: 0, merged_findings: 0, rejected_findings: 0, affected_domains: [{ id: 3, name: "Embedded Systems Security", change_count: 1 }], affected_career_levels: [{ id: 5, name: "Architect" }], changes: [{ ...change, status: "accepted", version: 2 }], ready: true, blockers: [] });
     if (path.endsWith("/review/changes/41/accept")) return response({ status: "accepted", change: { ...change, status: "accepted", version: 2 } });
+    if (path.endsWith("/review/submissions/12/accept-all")) return response({ status: "published", batch_id: 5, published_change_ids: [41], published_expectation_ids: [88], published_competency_ids: [90] });
     if (path.endsWith("/review/publish")) return response({ status: "published", batch_id: 4, published_change_ids: [41], published_expectation_ids: [88], published_competency_ids: [90] });
     return response({});
   });
@@ -85,6 +86,36 @@ describe("Research Review", () => {
     fireEvent.click(screen.getByRole("button", { name: "Complete fields to accept" }));
     expect(screen.getByText("Review structured knowledge")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Save & merge into domain" }).disabled).toBe(true);
+  });
+
+  it("accepts and merges every classified finding of a source at once", async () => {
+    const unclassified = { ...finding, id: 78, classification_gaps: ["domain"], review_change: { ...change, id: 42, finding_id: 78 } };
+    const published = { ...finding, id: 79, review_change: { ...change, id: 43, finding_id: 79, status: "published" } };
+    const baseFetch = global.fetch;
+    global.fetch = vi.fn((url, options = {}) => new URL(url).pathname.endsWith("/review/submissions/12") ? response({ ...detail, findings: [finding, unclassified, published] }) : baseFetch(url, options));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ResearchReviewPage />);
+    fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open review workspace" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Firmware role brief/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Firmware role brief/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Accept & merge all (1)" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Accept & merge all (1)" }));
+    expect(confirm.mock.calls[0][0]).toContain("1 finding(s) needing classification will be left for review");
+    await waitFor(() => expect(global.fetch.mock.calls.some(([url, options]) => url.endsWith("/review/submissions/12/accept-all") && options.method === "POST")).toBe(true));
+    const [, options] = global.fetch.mock.calls.find(([url]) => url.endsWith("/review/submissions/12/accept-all"));
+    expect(JSON.parse(options.body)).toEqual({ expected_versions: { 41: 1 } });
+  });
+
+  it("disables accept all when no finding of the source is ready", async () => {
+    const baseFetch = global.fetch;
+    global.fetch = vi.fn((url, options = {}) => new URL(url).pathname.endsWith("/review/submissions/12") ? response({ ...detail, findings: [{ ...finding, review_change: { ...change, status: "published" } }] }) : baseFetch(url, options));
+    render(<ResearchReviewPage />);
+    fireEvent.change(screen.getByLabelText("Administrator API key"), { target: { value: "test-admin-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open review workspace" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Firmware role brief/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Firmware role brief/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Accept & merge all (0)" }).disabled).toBe(true));
   });
 
   it("still supports publishing an approved batch", async () => {

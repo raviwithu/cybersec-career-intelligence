@@ -22,6 +22,7 @@ from .models import (
     SecurityDomain,
 )
 from .research_review_schemas import (
+    AcceptAllRequest,
     HistoryResponse,
     PublicationPreviewResponse,
     PublicationRequest,
@@ -37,6 +38,7 @@ from .research_review_schemas import (
 )
 from .research_review_service import (
     accept_change,
+    accept_submission_changes,
     change_response,
     compare_change,
     domain_impact,
@@ -241,6 +243,21 @@ def submission_impact(submission_id: int, db: Session = Depends(get_db)) -> list
     changes = ensure_submission_changes(db, submission_id)
     db.commit()
     return domain_impact(db, changes)
+
+
+@router.post("/submissions/{submission_id}/accept-all", response_model=PublicationResponse, dependencies=[Depends(require_admin)])
+def accept_all_submission_changes(submission_id: int, payload: AcceptAllRequest, actor: str = Depends(require_admin), db: Session = Depends(get_db)) -> PublicationResponse:
+    _get_submission(db, submission_id)
+    try:
+        batch, expectation_ids, competency_ids = accept_submission_changes(db, submission_id, payload.expected_versions, actor, payload.reviewer_note)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Accepting the source failed and was rolled back") from exc
+    published_change_ids = list(db.scalars(select(ReviewChange.id).where(ReviewChange.publication_batch_id == batch.id).order_by(ReviewChange.id)).all())
+    return PublicationResponse(status="published", batch_id=batch.id, published_change_ids=published_change_ids, published_expectation_ids=sorted(set(expectation_ids)), published_competency_ids=sorted(set(competency_ids)))
 
 
 @router.get("/changes/{change_id}/comparison", response_model=ReviewComparisonResponse, dependencies=[Depends(require_admin)])

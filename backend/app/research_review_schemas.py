@@ -47,6 +47,12 @@ class ReviewMergeRequest(BaseModel):
     reviewer_note: str | None = Field(default=None, max_length=2000)
 
 
+class AcceptAllRequest(BaseModel):
+    # The source's ready changes and the versions the administrator saw; changes left out stay for individual review.
+    expected_versions: dict[int, int] = Field(min_length=1, max_length=500)
+    reviewer_note: str | None = Field(default=None, max_length=2000)
+
+
 class PublicationRequest(BaseModel):
     confirm: bool = False
     change_ids: list[int] | None = Field(default=None, max_length=500)

@@ -206,3 +206,38 @@ def test_failed_submission_can_be_retried_with_same_content(client, monkeypatch)
     assert retried.status_code == 201, retried.text
     assert retried.json()["status"] != "failed"
     assert client.post("/api/v1/research/submissions", headers=ADMIN_HEADERS, json=payload).status_code == 409
+
+
+def test_accept_all_publishes_every_ready_change_of_a_source_in_one_batch(client, monkeypatch):
+    submission_id = submit_review_source(client, monkeypatch, content="accept all review source")
+    findings = client.get(f"/api/v1/research/review/submissions/{submission_id}", headers=ADMIN_HEADERS).json()["findings"]
+    ready = [item["review_change"] for item in findings if not item["classification_gaps"]]
+    gapped = [item["review_change"] for item in findings if item["classification_gaps"]]
+    assert len(ready) == 3 and len(gapped) == 1
+    accepted = client.post(f"/api/v1/research/review/submissions/{submission_id}/accept-all", headers=ADMIN_HEADERS, json={"expected_versions": {str(change["id"]): change["version"] for change in ready}})
+    assert accepted.status_code == 200, accepted.text
+    assert sorted(accepted.json()["published_change_ids"]) == sorted(change["id"] for change in ready)
+    statuses = {item["review_change"]["id"]: item["review_change"]["status"] for item in client.get(f"/api/v1/research/review/submissions/{submission_id}", headers=ADMIN_HEADERS).json()["findings"]}
+    assert {statuses[change["id"]] for change in ready} == {"published"}
+    # The finding that still needs classification is left for individual review.
+    assert statuses[gapped[0]["id"]] == "pending"
+
+
+def test_accept_all_publishes_nothing_when_one_change_is_stale(client, monkeypatch):
+    submission_id = submit_review_source(client, monkeypatch, content="accept all stale review source")
+    changes = [item["review_change"] for item in client.get(f"/api/v1/research/review/submissions/{submission_id}", headers=ADMIN_HEADERS).json()["findings"]]
+    expected = {str(change["id"]): change["version"] for change in changes}
+    expected[str(changes[-1]["id"])] += 1
+    stale = client.post(f"/api/v1/research/review/submissions/{submission_id}/accept-all", headers=ADMIN_HEADERS, json={"expected_versions": expected})
+    assert stale.status_code == 409
+    statuses = {item["review_change"]["status"] for item in client.get(f"/api/v1/research/review/submissions/{submission_id}", headers=ADMIN_HEADERS).json()["findings"]}
+    assert statuses == {"pending"}
+
+
+def test_accept_all_rejects_changes_from_another_source(client, monkeypatch):
+    first_id = submit_review_source(client, monkeypatch, content="accept all first review source")
+    second_id = submit_review_source(client, monkeypatch, content="accept all second review source")
+    other = client.get(f"/api/v1/research/review/submissions/{second_id}", headers=ADMIN_HEADERS).json()["findings"][0]["review_change"]
+    response = client.post(f"/api/v1/research/review/submissions/{first_id}/accept-all", headers=ADMIN_HEADERS, json={"expected_versions": {str(other["id"]): other["version"]}})
+    assert response.status_code == 404
+    assert client.post(f"/api/v1/research/review/submissions/{first_id}/accept-all", headers=ADMIN_HEADERS, json={"expected_versions": {}}).status_code == 422
