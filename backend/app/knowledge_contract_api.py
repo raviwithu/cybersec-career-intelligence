@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -9,8 +10,9 @@ from sqlalchemy.orm import Session
 from .admin_auth import require_admin
 from .database import get_db
 from .knowledge_auth import enforce_proposal_rate_limit, require_proposal_submitter
-from .knowledge_contract_schemas import KnowledgeCoverageResponse, KnowledgeProposalCreate, KnowledgeProposalPage, KnowledgeProposalPublish, KnowledgeProposalResponse, KnowledgeProposalReview, KnowledgePublicTopicResponse
-from .knowledge_contract_service import admin_topic, coverage, get_proposal, list_proposals, list_public_topics, proposal_response, public_topic, publish_proposal, resolve_topic, create_proposal, review_proposal
+from .knowledge_contract_schemas import KnowledgeCoverageResponse, KnowledgeMapPreviewResponse, KnowledgeProposalCreate, KnowledgeProposalPage, KnowledgeProposalPublish, KnowledgeProposalResponse, KnowledgeProposalReview, KnowledgePublicTopicResponse
+from .knowledge_contract_service import admin_topic, coverage, get_proposal, is_map_proposal, list_proposals, map_preview, topic_history, list_public_topics, proposal_response, public_topic, publish_proposal, resolve_topic, create_proposal, review_proposal
+from .knowledge_topic_schemas import TopicHistoryResponse
 from .models import KnowledgeTopic, KnowledgeTopicProposal
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge-contract"])
@@ -93,6 +95,7 @@ def get_review_queue(
     topic_id: int | None = Query(default=None, ge=1),
     action: str | None = None,
     review_status: str | None = Query(default=None, alias="status"),
+    group: Literal["map"] | None = Query(default=None, description="map: knowledge map changes only, including CREATE_TOPIC with placements"),
     submitted_after: datetime | None = None,
     submitted_before: datetime | None = None,
     limit: int = Query(default=100, ge=1, le=500),
@@ -101,6 +104,8 @@ def get_review_queue(
 ) -> KnowledgeProposalPage:
     filters = {"source_type": source_type, "topic_id": topic_id, "action": action, "status": review_status, "submitted_after": _utc(submitted_after), "submitted_before": _utc(submitted_before)}
     all_items = list_proposals(db, filters)
+    if group == "map":
+        all_items = [item for item in all_items if is_map_proposal(item)]
     if domain_id:
         all_items = [item for item in all_items if domain_id in (item.proposed_content or {}).get("domain_ids", []) or domain_id in ((item.proposed_content or {}).get("topic") or {}).get("domain_ids", [])]
     counts = dict(db.execute(select(KnowledgeTopicProposal.status, func.count(KnowledgeTopicProposal.id)).where(KnowledgeTopicProposal.contract == "section_v1").group_by(KnowledgeTopicProposal.status)).all())
@@ -117,6 +122,19 @@ def review_knowledge_proposal(proposal_id: int, payload: KnowledgeProposalReview
 @router.post("/admin/proposals/{proposal_id}/publish", response_model=KnowledgeProposalResponse, dependencies=[Depends(require_admin)])
 def publish_knowledge_proposal(proposal_id: int, payload: KnowledgeProposalPublish, actor: str = Depends(require_admin), db: Session = Depends(get_db)) -> KnowledgeProposalResponse:
     return KnowledgeProposalResponse.model_validate(proposal_response(publish_proposal(db, proposal_id, payload.expected_version, actor, payload.change_reason)))
+
+
+@router.get("/admin/proposals/{proposal_id}/map-preview", response_model=KnowledgeMapPreviewResponse, dependencies=[Depends(require_admin)])
+def get_map_preview(proposal_id: int, db: Session = Depends(get_db)) -> KnowledgeMapPreviewResponse:
+    return KnowledgeMapPreviewResponse.model_validate(map_preview(db, proposal_id))
+
+
+@router.get("/admin/topics/{topic_id}/history", response_model=TopicHistoryResponse, dependencies=[Depends(require_admin)])
+def get_topic_history(topic_id: int, db: Session = Depends(get_db)) -> TopicHistoryResponse:
+    if resolve_topic(db, topic_id, None, require_active=False) is None:
+        raise HTTPException(status_code=404, detail="Knowledge topic was not found")
+    items = topic_history(db, topic_id)
+    return TopicHistoryResponse(items=items, total=len(items))
 
 
 @router.get("/admin/topics/{topic_id}/coverage", response_model=KnowledgeCoverageResponse, dependencies=[Depends(require_admin)])

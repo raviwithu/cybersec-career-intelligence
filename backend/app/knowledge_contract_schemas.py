@@ -28,6 +28,9 @@ RELATIONSHIP_TYPES = ("prerequisite", "related", "specialization", "dependency",
 ProposalAction = Literal[
     "CREATE_TOPIC", "UPDATE_TOPIC", "ADD_SECTION", "UPDATE_SECTION", "ADD_ATTACK_SURFACE", "ADD_MITIGATION",
     "ADD_DIAGRAM", "ADD_REFERENCE", "ADD_VULNERABILITY_EXAMPLE", "ADD_TOPIC_RELATIONSHIP", "UPDATE_CAREER_LEVEL_GUIDANCE",
+    # Knowledge map actions (KM-4); payloads are validated in knowledge_map_proposals.py.
+    "PLACE_TOPIC", "UNPLACE_TOPIC", "MOVE_TOPIC", "REORDER_TOPICS", "SET_PARENT_TOPIC", "REMOVE_TOPIC_RELATIONSHIP",
+    "DEACTIVATE_TOPIC", "UPDATE_CAREER_LEVELS", "RESTORE_VERSION",
 ]
 ProposalSourceType = Literal["manual", "jsearch", "ai", "rag", "connector"]
 ReviewAction = Literal["approve", "modify", "merge", "reject", "defer"]
@@ -140,6 +143,9 @@ class KnowledgeProposalCreate(BaseModel):
                 "ADD_REFERENCE": "references", "ADD_VULNERABILITY_EXAMPLE": "real_world_examples", "UPDATE_CAREER_LEVEL_GUIDANCE": "career_level_guidance",
             }
             self.section = section_map.get(self.action, self.section)
+        map_change = self.action in {"PLACE_TOPIC", "UNPLACE_TOPIC", "MOVE_TOPIC", "REORDER_TOPICS", "SET_PARENT_TOPIC", "REMOVE_TOPIC_RELATIONSHIP", "DEACTIVATE_TOPIC", "UPDATE_CAREER_LEVELS", "RESTORE_VERSION"}
+        if (map_change or (self.action == "CREATE_TOPIC" and self.proposed_content.get("placements"))) and not self.change_reason.strip():
+            raise ValueError("change_reason is required for knowledge map changes")
         if self.action == "ADD_TOPIC_RELATIONSHIP":
             target_id = self.proposed_content.get("target_topic_id")
             if not isinstance(target_id, int) or isinstance(target_id, bool) or target_id < 1:
@@ -238,6 +244,11 @@ class KnowledgePublicTopicResponse(BaseModel):
     # Per career level: expectation is the knowledge, practical_capability the practical skills. Active levels only.
     level_expectations: list[KnowledgeTopicLevelResponse] = Field(default_factory=list)
     last_updated: datetime | None
+    # Admin responses only (Knowledge Map Management): lifecycle, hierarchy and aliases for duplicate checks.
+    is_active: bool | None = None
+    publication_status: str | None = None
+    parent_topic_id: int | None = None
+    aliases: list[str] | None = None
 
 
 class KnowledgeProposalResponse(BaseModel):
@@ -260,6 +271,7 @@ class KnowledgeProposalResponse(BaseModel):
     reviewed_by: str | None
     reviewed_at: datetime | None
     published_at: datetime | None
+    submitted_by: str | None = None
     references: list[dict[str, Any]] = Field(default_factory=list)
     review_decisions: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -278,3 +290,20 @@ class KnowledgeReviewFilters(BaseModel):
     status: str | None = None
     submitted_after: datetime | None = None
     submitted_before: datetime | None = None
+
+
+class KnowledgeMapPreviewBranch(BaseModel):
+    domain_id: int
+    domain_name: str
+    map_branch: str
+    label: str
+    before: list[dict[str, Any]]
+    after: list[dict[str, Any]]
+
+
+class KnowledgeMapPreviewResponse(BaseModel):
+    proposal_id: int
+    action: str
+    status: str
+    branches: list[KnowledgeMapPreviewBranch] = Field(default_factory=list)
+    message: str | None = None

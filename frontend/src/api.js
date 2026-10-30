@@ -18,6 +18,7 @@ export class ApiError extends Error {
 function errorMessage(detail) {
   // FastAPI validation errors arrive as a list of { loc, msg } objects.
   if (Array.isArray(detail)) return detail.map((item) => `${(item.loc || []).filter((part) => part !== "body").join(".")}: ${item.msg}`).join("; ");
+  if (detail && typeof detail === "object" && typeof detail.message === "string") return detail.message;
   return typeof detail === "string" ? detail : null;
 }
 
@@ -76,6 +77,9 @@ export function fetchKnowledgeReviewQueue(params = {}, adminKey) { return reques
 export function fetchKnowledgeProposal(id, adminKey) { return request(`/api/v1/knowledge/proposals/${id}`, { headers: adminHeaders(adminKey) }); }
 export function createKnowledgeProposal(payload, adminKey, idempotencyKey) { return request("/api/v1/knowledge/proposals", { method: "POST", headers: { ...adminHeaders(adminKey), ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}) }, body: JSON.stringify(payload) }); }
 export function reviewKnowledgeProposal(id, payload, adminKey) { return request(`/api/v1/knowledge/admin/proposals/${id}/review`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function fetchKnowledgeAdminTopics(adminKey) { return request("/api/v1/knowledge/admin/topics", { headers: adminHeaders(adminKey) }); }
+export function fetchKnowledgeMapPreview(id, adminKey) { return request(`/api/v1/knowledge/admin/proposals/${id}/map-preview`, { headers: adminHeaders(adminKey) }); }
+export function fetchKnowledgeContractHistory(topicId, adminKey) { return request(`/api/v1/knowledge/admin/topics/${topicId}/history`, { headers: adminHeaders(adminKey) }); }
 export function publishKnowledgeProposal(id, payload, adminKey) { return request(`/api/v1/knowledge/admin/proposals/${id}/publish`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
 
 export function fetchResearchSources(params = {}) { return request(`/api/v1/research-sources${queryString(params)}`); }

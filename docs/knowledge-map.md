@@ -262,6 +262,84 @@ The competency relationship validator in `knowledge_schemas.py` (and its `ck_rel
 
 Career-level content comes from `knowledge_topic_levels` (`level_expectations` in the topic response); level lists come from the active `career_levels` rows grouped by `career_track`, never a hardcoded list. The legacy `career_level_guidance` section is shown only when a topic has no level rows. The Knowledge Base section editor now builds that section's default keys from `/api/v1/levels`, so Guide and Supervisor are included; saved content is loaded as it was stored.
 
+## Admin and review workflow
+
+Map changes never write live tables directly (D3). Every change is a knowledge-contract proposal: created with `POST /api/v1/knowledge/proposals`, reviewed with the existing review endpoint (approve, modify, reject, defer), and written to live tables only by an explicit publish (`POST /api/v1/knowledge/admin/proposals/{id}/publish`). Approval never changes live data.
+
+**Knowledge Map Management** (`KnowledgeMapAdminPage.jsx`, Administration › Knowledge Map Management, view `knowledge-map-admin`, admin key required):
+
+- Browses the map with the KM-2 components in an admin mode. Topics and branches with open map proposals (draft, review, deferred, approved) carry an amber "Pending" badge with text. Pending state comes from the proposal queue, never from live data, and the public map never receives the admin mode, so it never shows these badges.
+- Selecting a node opens forms that create proposals:
+  - **Topic:** place, move, remove placement, set parent, add relationship, remove relationship, career levels (one level and optional industry at a time), deactivate (optionally "duplicate of" another topic), restore version, and "Edit sections".
+  - **Branch:** reorder with ↑/↓ buttons, or place a topic there.
+  - **Domain:** place a topic there.
+- "Edit sections" opens `KnowledgeSectionEditor`, which now has structured editors for `code_examples` (form fields per example) and `architecture` (per-diagram JSON with live validation and a rendered preview).
+- Placing on a domain that has child domains shows a warning (D1). Domains are edited only in Taxonomy Management, which the page links to.
+- New topic: as you type, the form lists possible duplicates: exact matches by normalised name, slug, key or alias, plus similar names. It refuses exact matches, and the backend enforces the same rule. A new topic can carry one placement.
+- Every form requires a change reason.
+
+**Knowledge Review › Mind Map Changes** (`KnowledgeReviewPage.jsx`): a tab next to "All proposals". It lists the map actions, plus `CREATE_TOPIC` proposals that include placements (`GET /knowledge/admin/proposals?group=map`).
+
+- **Header:** each proposal shows action, source type, status, submitter, change reason and the existing evidence view.
+- **Before and after:** a line diff of the captured live state (−) against the proposed change (+), and the affected branches before and after publish from the map-preview endpoint.
+- **Controls:** the existing Approve, Modify, Defer and Reject controls, then a separate Publish step for approved proposals.
+- **Merge:** the existing merge action is refused for map actions, because moving a placement onto another topic is not meaningful. To retire a duplicate, deactivate it with "duplicate of".
+
+### Action payloads
+
+All actions use the existing proposal envelope (`schema_version`, `source_type`, `topic_id` or `topic_key`, `action`, `proposed_content`, `change_reason`, `references`). `change_reason` is required for every map action. Payloads are strict: unknown keys are rejected.
+
+| Action | `proposed_content` | Publish effect |
+|---|---|---|
+| `PLACE_TOPIC` | `{"domain_id": 2, "map_branch": "security", "display_order": 3}` (`display_order` optional) | Creates the domain link if missing, sets the branch; without an order the topic goes last in the branch |
+| `UNPLACE_TOPIC` | `{"domain_id": 2}` | `map_branch = NULL`; the domain link stays |
+| `MOVE_TOPIC` | `{"from": {"domain_id": 2}, "to": {"domain_id": 5, "map_branch": "foundations", "display_order": null}}` | Unplace and place in one transaction (also moves between branches of one domain) |
+| `REORDER_TOPICS` | `{"domain_id": 2, "map_branch": "security", "ordered_topic_ids": [7, 1, 9]}` | Rewrites `display_order` 0..n for that branch; the list must match the published topics in the branch exactly |
+| `SET_PARENT_TOPIC` | `{"parent_topic_id": 12}` or `{"parent_topic_id": null}` | Updates `parent_topic_id`; self-parenting and cycles are rejected at create, modify and publish |
+| `REMOVE_TOPIC_RELATIONSHIP` | `{"target_topic_id": 7, "relationship_type": "tested_by"}` | Deletes that relationship row (it must exist) |
+| `DEACTIVATE_TOPIC` | `{"reason": "Duplicate of JSON Web Tokens (topic 7)."}` | `is_active = false`; the topic leaves the map and the Knowledge Base |
+| `UPDATE_CAREER_LEVELS` | `{"levels": [{"career_level_id": 1, "industry_id": null, "expectation": "…", "practical_capability": "…"}]}` | Upserts the listed `knowledge_topic_levels` rows; other rows are untouched |
+| `RESTORE_VERSION` | `{"target": "section", "section_type": "overview", "version": 2}` or `{"target": "topic", "version": 5}` | Republishes the stored snapshot as a new version (see Rollback) |
+| `CREATE_TOPIC` | existing payload plus optional `"placements": [{"domain_id": 2, "map_branch": "foundations"}]` | Creates the topic and its placements in one transaction |
+
+Rules:
+
+- **Validation:** checked at create, again when a reviewer modifies a proposal, and again at publish, because the map may have changed. Domains must be active with active ancestors. The topic must exist and be active (except for `RESTORE_VERSION`), and branches must be valid.
+- **Duplicates:** `CREATE_TOPIC` is rejected with 409 when an existing topic matches the normalised name, slug, `topic_key` or an alias (a match on the new topic's aliases counts too). The response is `{"detail": {"message", "existing_topic_id", "existing_topic_key"}}` and suggests `PLACE_TOPIC` or a section update instead. The check runs again at publish.
+- **Captured state:** `original_content` records the live state the change touches. Examples are `{"placement": …}`, `{"from": …, "to": …}`, `{"members": [...]}`, `{"parent_topic_id": …}` and `{"levels": [...]}`. Review shows it as the "before".
+- **Backward compatibility:** `UPDATE_CAREER_LEVEL_GUIDANCE` still writes the legacy `career_level_guidance` section, as before. Every other existing action behaves as before.
+
+### Preview
+
+`GET /api/v1/knowledge/admin/proposals/{id}/map-preview` (admin) returns `{proposal_id, action, status, branches: [{domain_id, domain_name, map_branch, label, before: [{topic_id, name}], after: [...]}], message}`.
+
+- **How it works:** it applies the proposal to live data inside the request's transaction using the same code as publish, reads the affected branches, and always rolls back. Nothing is written.
+- **Message:** `message` explains when there is nothing to show. That covers proposals that change no branch (parent, relationships, levels, section restore), proposals that are no longer unpublished, and proposals that no longer apply to the current map.
+
+## Publication and versioning
+
+- **One transaction:** publish runs in a single transaction. It locks the topic and the affected placement rows (`with_for_update`; SQLite ignores it), applies the change, bumps `knowledge_topics.version` and writes the records listed below, then commits once. Any failure, including a forced failure between the unplace and place halves of a move (covered by a test), rolls back everything and leaves the proposal approved.
+- **Records written:**
+  - for topic-level changes: a `knowledge_topic_versions` snapshot (the shared topic snapshot plus `placements`), a `knowledge_publication_records` row (`section_id` null) and a `knowledge_topic_audits` row (`map_<action>`, before = captured state, after = change and new snapshot);
+  - for section changes and section restores: a section version and a publication record, as before;
+  - in both cases, the existing review decision row.
+- **Stale proposals:** a proposal is refused with 409 when:
+  - `expected_version` does not match;
+  - the section changed since `base_section_version`;
+  - for map actions, the captured state no longer matches live data (for example, the placement was changed by another publish).
+
+  Nothing is overwritten silently.
+- **Batches:** the existing service has no batch publish, so map proposals publish one at a time. Each publish is atomic on its own.
+- **History:** `GET /api/v1/knowledge/admin/topics/{id}/history` (admin) returns the shared topic history: audit rows, including every map change, and topic versions, from the same function as the legacy career-readiness endpoint. Section versions are added to it, all newest first, each with actor, reason and timestamp.
+
+## Rollback
+
+Rollback is a proposal (D6). `RESTORE_VERSION` goes through review and publish like any other change and never deletes history.
+
+- **Section:** `{"target": "section", "section_type", "version"}` republishes that stored section version's content as a new section version (for example, restoring version 1 after version 2 creates version 3 with version 1's content). The usual `base_section_version` check applies.
+- **Topic:** `{"target": "topic", "version"}` restores the stored snapshot's name, description, category, display order, aliases, parent (cycle-checked), active state, placements and career-level rows. Placements are put back exactly: missing ones are placed, and extra ones are unplaced while keeping their domain links. Snapshots recorded before KM-4 have no `placements` key; restoring one leaves placements unchanged. Restore is the one action allowed on an inactive topic, so restoring a version from when it was active brings it back.
+- In Knowledge Map Management, "Restore version" lists topic and section versions from the history endpoint.
+
 ## Code
 
 | File | Purpose |
@@ -283,3 +361,9 @@ Career-level content comes from `knowledge_topic_levels` (`level_expectations` i
 | `frontend/src/KnowledgeDiagram.jsx`, `KnowledgeDiagramCanvas.jsx`, `knowledgeDiagramLayout.js` | Diagram renderer, lazy canvas and pure layout |
 | `frontend/src/KnowledgeCodeBlock.jsx` | Syntax highlighting (`prism-react-renderer`), lazy loaded |
 | `frontend/tests/KnowledgeTopicDetail.test.jsx` | Topic panel, renderer, diagram layout and editor tests |
+| `backend/app/knowledge_map_proposals.py` | Map action payloads, validation, captured state, apply, preview helpers, duplicate detection |
+| `backend/tests/test_knowledge_map_proposals.py` | Map proposal lifecycle, atomicity, cycles, duplicates, restore, preview and end-to-end tests |
+| `frontend/src/KnowledgeMapAdminPage.jsx` | Knowledge Map Management |
+| `frontend/src/knowledgeMapActions.js` | Map action labels and the review line diff |
+| `frontend/src/KnowledgeSectionForms.jsx` | Structured `code_examples` and `architecture` editors |
+| `frontend/tests/KnowledgeMapAdmin.test.jsx` | Management payloads, Pending badges, Mind Map Changes review and publish |

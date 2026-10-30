@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from .knowledge_content_schemas import public_section_content, validate_section_content
 from .knowledge_contract_schemas import CORE_SECTION_TYPES, RELATIONSHIP_TYPES, SECTION_TYPES, KnowledgeProposalCreate, KnowledgeProposalReview, KnowledgeSourceReference
+from .knowledge_map_proposals import MAP_ACTIONS, affected_branches, apply_create_placements, branch_label, describe_branches, apply_map_change, current_state, map_snapshot, require_no_duplicate, stored_section_version, validate_create_placements, validate_map_change, validate_map_payload
+from .knowledge_topic_service import history as legacy_history
 from .models import (
     KnowledgePublicationRecord,
     KnowledgeProposalSource,
@@ -27,6 +29,8 @@ from .models import (
     KnowledgeTopicRelationship,
     KnowledgeTopicSection,
     KnowledgeTopicSectionVersion,
+    KnowledgeTopicAudit,
+    KnowledgeTopicVersion,
     SecurityDomain,
     Industry,
     CompetencyCategory,
@@ -187,6 +191,7 @@ def admin_topic(db: Session, topic: KnowledgeTopic) -> dict[str, Any]:
     value = public_topic(db, topic)
     value["sections"] = [_section_response(item, include_history=True) for item in sorted(topic.sections, key=lambda row: SECTION_TYPES.index(row.section_type) if row.section_type in SECTION_TYPES else 99)]
     value["coverage"] = coverage(db, topic, include_pending=True)
+    value.update(is_active=topic.is_active, publication_status=topic.publication_status, parent_topic_id=topic.parent_topic_id, aliases=list(topic.aliases or []))
     return value
 
 
@@ -231,6 +236,15 @@ def _client_idempotency_key(actor: str, key: str) -> str:
     return f"knowledge-proposal:{hashlib.sha256(f'{actor}:{key}'.encode()).hexdigest()}"
 
 
+def _map_proposal_state(db: Session, action: str, topic: KnowledgeTopic, content: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None, int]:
+    """Validates a map change against live data and captures what it would change (section, original state, base version)."""
+    validate_map_change(db, action, topic, content)
+    original = current_state(db, action, topic, content)
+    if action == "RESTORE_VERSION" and content["target"] == "section":
+        return content["section_type"], original, original["published_version"]
+    return None, original, topic.version
+
+
 def create_proposal(db: Session, payload: KnowledgeProposalCreate, actor: str, idempotency_key: str | None = None) -> KnowledgeTopicProposal:
     fingerprint = _fingerprint(payload, actor)
     scoped_idempotency_key = _client_idempotency_key(actor, idempotency_key) if idempotency_key else None
@@ -243,17 +257,19 @@ def create_proposal(db: Session, payload: KnowledgeProposalCreate, actor: str, i
         return existing
     if existing:
         fingerprint = hashlib.sha256(f"{fingerprint}:{uuid.uuid4()}".encode()).hexdigest()
-    topic = resolve_topic(db, payload.topic_id, payload.topic_key)
+    topic = resolve_topic(db, payload.topic_id, payload.topic_key, require_active=payload.action != "RESTORE_VERSION")
     section_type = _section_type(payload.section)
     if payload.action != "CREATE_TOPIC" and topic is None:
         raise HTTPException(status_code=404, detail="Knowledge topic was not found")
-    if payload.action not in {"ADD_TOPIC_RELATIONSHIP", "CREATE_TOPIC", "UPDATE_TOPIC"} and section_type is None:
+    if payload.action not in {"ADD_TOPIC_RELATIONSHIP", "CREATE_TOPIC", "UPDATE_TOPIC", *MAP_ACTIONS} and section_type is None:
         raise HTTPException(status_code=422, detail="A valid section is required for this action")
     if payload.action == "CREATE_TOPIC":
         name = payload.topic_name or payload.proposed_content.get("topic", {}).get("name") or payload.proposed_content.get("name")
         if not name:
             raise HTTPException(status_code=422, detail="topic_name or proposed_content.topic.name is required for CREATE_TOPIC")
         topic_key = payload.topic_key or slugify(name)
+        require_no_duplicate(db, name, topic_key, payload.proposed_content)
+        validate_create_placements(db, validate_map_payload("CREATE_TOPIC", payload.proposed_content))
         if db.scalar(select(KnowledgeTopic).where((KnowledgeTopic.topic_key == topic_key) | (KnowledgeTopic.slug == topic_key))):
             raise HTTPException(status_code=409, detail="A knowledge topic with this stable key already exists")
         original = None
@@ -262,12 +278,16 @@ def create_proposal(db: Session, payload: KnowledgeProposalCreate, actor: str, i
         original = None
         base_version = topic.version
         section_type = None
+    elif payload.action in MAP_ACTIONS:
+        section_type, original, base_version = _map_proposal_state(db, payload.action, topic, validate_map_payload(payload.action, payload.proposed_content))
     else:
         current_section = _section(topic, section_type)
         original = deepcopy(current_section.published_content) if current_section else None
         base_version = current_section.published_version if current_section else 0
     if payload.action in {"ADD_SECTION", "UPDATE_SECTION", "ADD_ATTACK_SURFACE", "ADD_MITIGATION", "ADD_DIAGRAM", "ADD_REFERENCE", "ADD_VULNERABILITY_EXAMPLE", "UPDATE_CAREER_LEVEL_GUIDANCE"}:
         proposed_content = _validated_content(section_type, payload.action, deepcopy(payload.proposed_content))
+    elif payload.action in MAP_ACTIONS or payload.action == "CREATE_TOPIC":
+        proposed_content = validate_map_payload(payload.action, deepcopy(payload.proposed_content))
     else:
         proposed_content = deepcopy(payload.proposed_content)
     if payload.action == "CREATE_TOPIC":
@@ -371,6 +391,7 @@ def proposal_response(proposal: KnowledgeTopicProposal, *, include_private: bool
         "created_at": proposal.created_at,
         "updated_at": proposal.updated_at,
         "reviewed_by": proposal.reviewed_by if include_private else None,
+        "submitted_by": proposal.submitted_by if include_private else None,
         "reviewed_at": proposal.reviewed_at,
         "published_at": proposal.published_at,
         "references": [_reference_response(item, include_private=include_private) for item in proposal.sources],
@@ -406,7 +427,16 @@ def review_proposal(db: Session, proposal_id: int, payload: KnowledgeProposalRev
     if payload.action == "modify":
         if proposal.action == "CREATE_TOPIC":
             _validate_topic_metadata(db, payload.proposed_content or {})
-        content = _validated_content(proposal.section_type, proposal.action, payload.proposed_content) if proposal.section_type else payload.proposed_content
+            content = validate_map_payload("CREATE_TOPIC", payload.proposed_content)
+            validate_create_placements(db, content)
+        elif proposal.action in MAP_ACTIONS:
+            # A modified map change is re-checked and its "before" state recaptured, since it may now touch other rows.
+            content = validate_map_payload(proposal.action, payload.proposed_content)
+            topic = resolve_topic(db, proposal.topic_id, None, require_active=False)
+            proposal.section_type, proposal.original_content, proposal.base_section_version = _map_proposal_state(db, proposal.action, topic, content)
+            proposal.original_snapshot = proposal.original_content
+        else:
+            content = _validated_content(proposal.section_type, proposal.action, payload.proposed_content) if proposal.section_type else payload.proposed_content
         if proposal.action == "ADD_TOPIC_RELATIONSHIP":
             _validate_relationship(proposal.topic_id, content)
         proposal.proposed_content = content
@@ -415,6 +445,8 @@ def review_proposal(db: Session, proposal_id: int, payload: KnowledgeProposalRev
     elif payload.action == "approve":
         proposal.status = "approved"
     elif payload.action == "merge":
+        if proposal.action in MAP_ACTIONS:
+            raise HTTPException(status_code=409, detail="Knowledge map changes cannot be merged into another topic; reject this proposal and create one for the other topic")
         target = resolve_topic(db, payload.merge_target_topic_id, None, require_active=False)
         if target is None or not target.is_active or target.publication_status != "published":
             raise HTTPException(status_code=409, detail="Merge target must be an active published topic")
@@ -479,32 +511,63 @@ def _create_topic(db: Session, proposal: KnowledgeTopicProposal, actor: str) -> 
     return topic
 
 
-def publish_proposal(db: Session, proposal_id: int, expected_version: int, actor: str, change_reason: str) -> KnowledgeTopicProposal:
-    proposal = get_proposal(db, proposal_id)
-    if proposal.version != expected_version:
-        raise HTTPException(status_code=409, detail="Proposal changed; reload it before publishing")
-    if proposal.status != "approved":
-        raise HTTPException(status_code=409, detail="Only approved proposals can be published")
-    _ensure_sources_publishable(proposal)
+def _check_map_proposal_current(db: Session, proposal: KnowledgeTopicProposal, topic: KnowledgeTopic) -> None:
+    """Re-validates a map change at publish and refuses it if the rows it would change moved since it was created."""
+    content = proposal.proposed_content or {}
+    validate_map_change(db, proposal.action, topic, content)
+    if current_state(db, proposal.action, topic, content) != proposal.original_content:
+        raise HTTPException(status_code=409, detail="The knowledge map changed since this proposal was created; reload and create a new proposal")
+
+
+def _restored_section_content(db: Session, topic: KnowledgeTopic, proposal: KnowledgeTopicProposal) -> dict[str, Any]:
+    stored = stored_section_version(db, topic.id, proposal.section_type, proposal.proposed_content["version"])
+    if stored is None:
+        raise HTTPException(status_code=404, detail="That section version was not found")
+    return deepcopy(stored.content)
+
+
+def _record_topic_version(db: Session, proposal: KnowledgeTopicProposal, topic: KnowledgeTopic, actor: str, reason: str) -> None:
+    # Topic-level changes get a topic version snapshot (including placements), a publication record and an audit row.
+    db.flush()
+    db.expire(topic, ["domains", "level_expectations", "industries", "competencies"])
+    after = map_snapshot(db, topic)
+    db.add(KnowledgeTopicVersion(topic_id=topic.id, version=topic.version, snapshot=after, reason=reason, actor=actor, published_at=now()))
+    db.add(KnowledgePublicationRecord(proposal_id=proposal.id, topic_id=topic.id, section_id=None, published_version=topic.version, previous_version=topic.version - 1, actor=actor, transaction_id=str(uuid.uuid4()), published_at=now()))
+    db.add(KnowledgeTopicAudit(topic_id=topic.id, proposal_id=proposal.id, action=f"map_{proposal.action.lower()}"[:40], actor=actor, before_snapshot=proposal.original_content, after_snapshot={"change": proposal.proposed_content, "topic": after}, reason=reason))
+
+
+def _apply_publication(db: Session, proposal: KnowledgeTopicProposal, actor: str, change_reason: str) -> None:
+    """Writes one approved proposal to the live tables and its version, publication and audit records. Never commits."""
+    map_change = proposal.action in MAP_ACTIONS
     topic = resolve_topic(db, proposal.topic_id, None, require_active=False) if proposal.topic_id else None
     if proposal.action == "CREATE_TOPIC":
+        metadata = (proposal.proposed_content or {}).get("topic") or {}
+        require_no_duplicate(db, metadata.get("name") or "", metadata.get("topic_key") or "", proposal.proposed_content or {})
+        validate_create_placements(db, proposal.proposed_content or {})
         topic = _create_topic(db, proposal, actor)
         proposal.topic_id = topic.id
+        apply_create_placements(db, topic, proposal.proposed_content or {})
     if topic is None:
         raise HTTPException(status_code=404, detail="Knowledge topic was not found")
-    if not topic.is_active and proposal.action != "CREATE_TOPIC":
+    if not topic.is_active and proposal.action not in {"CREATE_TOPIC", "RESTORE_VERSION"}:
         raise HTTPException(status_code=409, detail="The source knowledge topic is inactive")
+    if map_change:
+        _check_map_proposal_current(db, proposal, topic)
     if proposal.merge_target_topic_id:
         target = resolve_topic(db, proposal.merge_target_topic_id, None, require_active=False)
         if target is None or not target.is_active or target.publication_status != "published":
             raise HTTPException(status_code=409, detail="Merge target must be an active published topic")
         topic = target
+    reason = change_reason or proposal.change_reason
     if proposal.section_type:
         section = db.scalar(select(KnowledgeTopicSection).where(KnowledgeTopicSection.topic_id == topic.id, KnowledgeTopicSection.section_type == proposal.section_type).with_for_update())
         current_version = section.published_version if section else 0
         if current_version != proposal.base_section_version:
             raise HTTPException(status_code=409, detail="Section changed; reload and create a new proposal")
-        content = _content_for_action(topic, proposal.section_type, proposal.action, proposal.proposed_content or proposal.proposed_snapshot)
+        if proposal.action == "RESTORE_VERSION":
+            content = _restored_section_content(db, topic, proposal)
+        else:
+            content = _content_for_action(topic, proposal.section_type, proposal.action, proposal.proposed_content or proposal.proposed_snapshot)
         if proposal.section_type in {"code_examples", "architecture"}:
             content = _validated_content(proposal.section_type, "UPDATE_SECTION", content)
         if section is None:
@@ -518,7 +581,7 @@ def publish_proposal(db: Session, proposal_id: int, expected_version: int, actor
             section.published_version = version
             section.status = "published"
             section.updated_at = now()
-        db.add(KnowledgeTopicSectionVersion(section_id=section.id, version=version, content=content, status="published", proposal_id=proposal.id, reason=change_reason or proposal.change_reason, actor=actor, created_at=now(), published_at=now()))
+        db.add(KnowledgeTopicSectionVersion(section_id=section.id, version=version, content=content, status="published", proposal_id=proposal.id, reason=reason, actor=actor, created_at=now(), published_at=now()))
         db.add(KnowledgePublicationRecord(proposal_id=proposal.id, topic_id=topic.id, section_id=section.id, published_version=version, previous_version=current_version, actor=actor, transaction_id=str(uuid.uuid4()), published_at=now()))
     elif proposal.action == "ADD_TOPIC_RELATIONSHIP":
         _validate_relationship(topic.id, proposal.proposed_content)
@@ -533,20 +596,40 @@ def publish_proposal(db: Session, proposal_id: int, expected_version: int, actor
                 setattr(topic, key, metadata[key])
         if "slug" in metadata:
             topic.slug = slugify(metadata["slug"])
-    topic.publication_status = "published"
-    topic.is_active = True
+    elif map_change:
+        apply_map_change(db, proposal.action, topic, proposal.proposed_content)
+    if proposal.action != "DEACTIVATE_TOPIC":
+        topic.publication_status = "published"
+    if proposal.action not in {"DEACTIVATE_TOPIC", "RESTORE_VERSION"}:
+        topic.is_active = True
     topic.version += 1
     topic.published_at = now()
     topic.updated_at = now()
+    if (map_change and not proposal.section_type) or (proposal.action == "CREATE_TOPIC" and (proposal.proposed_content or {}).get("placements")):
+        _record_topic_version(db, proposal, topic, actor, reason)
     proposal.status = "published"
     proposal.published_at = now()
     proposal.updated_at = now()
     db.add(KnowledgeReviewDecision(proposal_id=proposal.id, action="publish", actor=actor, note=change_reason, before_content=proposal.original_content, after_content=proposal.proposed_content, created_at=now()))
+
+
+def publish_proposal(db: Session, proposal_id: int, expected_version: int, actor: str, change_reason: str) -> KnowledgeTopicProposal:
+    proposal = get_proposal(db, proposal_id)
+    if proposal.version != expected_version:
+        raise HTTPException(status_code=409, detail="Proposal changed; reload it before publishing")
+    if proposal.status != "approved":
+        raise HTTPException(status_code=409, detail="Only approved proposals can be published")
+    _ensure_sources_publishable(proposal)
+    # One transaction: any failure part way through (validation, staleness, a database error) leaves live data untouched.
     try:
+        _apply_publication(db, proposal, actor, change_reason)
         db.commit()
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="Section changed concurrently; reload and create a new proposal") from exc
+    except Exception:
+        db.rollback()
+        raise
     return get_proposal(db, proposal.id)
 
 
@@ -568,3 +651,54 @@ def list_proposals(db: Session, filters: dict[str, Any]) -> list[KnowledgeTopicP
     if filters.get("submitted_before"):
         query = query.where(KnowledgeTopicProposal.created_at <= filters["submitted_before"])
     return list(db.scalars(query).unique().all())
+
+
+def is_map_proposal(proposal: KnowledgeTopicProposal) -> bool:
+    return proposal.action in MAP_ACTIONS or (proposal.action == "CREATE_TOPIC" and bool((proposal.proposed_content or {}).get("placements")))
+
+
+def map_preview(db: Session, proposal_id: int) -> dict[str, Any]:
+    """Affected branches before and after a proposal, computed by applying it to live data and rolling back."""
+    proposal = get_proposal(db, proposal_id)
+    result: dict[str, Any] = {"proposal_id": proposal.id, "action": proposal.action, "status": proposal.status, "branches": [], "message": None}
+    if not is_map_proposal(proposal):
+        result["message"] = "This proposal does not change the map hierarchy."
+        return result
+    if proposal.status not in {"draft", "review", "deferred", "approved"}:
+        result["message"] = f"The proposal is {proposal.status}; previews apply only to unpublished proposals."
+        return result
+    content = proposal.proposed_content or {}
+    topic = resolve_topic(db, proposal.topic_id, None, require_active=False) if proposal.topic_id else None
+    pairs = affected_branches(db, proposal.action, topic, content)
+    before = describe_branches(db, pairs)
+    try:
+        if proposal.action == "CREATE_TOPIC":
+            metadata = content.get("topic") or {}
+            topic = KnowledgeTopic(name=metadata.get("name") or "New topic", slug=slugify(metadata.get("topic_key") or metadata.get("name") or "new-topic") + "-preview", topic_key=None, description="", publication_status="draft", is_active=True, version=1, display_order=0, created_at=now(), updated_at=now())
+            db.add(topic)
+            db.flush()
+            validate_create_placements(db, content)
+            apply_create_placements(db, topic, content)
+        else:
+            _check_map_proposal_current(db, proposal, topic)
+            apply_map_change(db, proposal.action, topic, content)
+        after = describe_branches(db, pairs, include_topic_id=None if proposal.action == "DEACTIVATE_TOPIC" else topic.id)
+    except HTTPException as exc:
+        db.rollback()
+        result["message"] = exc.detail if isinstance(exc.detail, str) else exc.detail.get("message", "The proposal cannot be applied to the current map.")
+        return result
+    finally:
+        db.rollback()
+    result["branches"] = [{**branch_label(db, *pair), "before": before[pair], "after": after[pair]} for pair in pairs]
+    return result
+
+
+def topic_history(db: Session, topic_id: int) -> list[dict[str, Any]]:
+    """Topic versions and audit rows (including placement changes) from the shared history, plus section versions."""
+    items = legacy_history(db, topic_id)
+    rows = db.execute(select(KnowledgeTopicSection.section_type, KnowledgeTopicSectionVersion).join(KnowledgeTopicSectionVersion, KnowledgeTopicSectionVersion.section_id == KnowledgeTopicSection.id).where(KnowledgeTopicSection.topic_id == topic_id)).all()
+    items += [{"kind": "section_version", "id": row.id, "section_type": section_type, "version": row.version, "status": row.status, "content": row.content, "actor": row.actor, "reason": row.reason, "proposal_id": row.proposal_id, "created_at": row.published_at or row.created_at} for section_type, row in rows]
+    def when(item: dict[str, Any]) -> datetime:
+        value = item.get("created_at")
+        return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else (value or datetime.min.replace(tzinfo=timezone.utc))
+    return sorted(items, key=when, reverse=True)

@@ -59,6 +59,7 @@ export const navigationGroups = [
       { id: "research-ingestion", label: "Research Ingestion", icon: "↻" },
       { id: "yahoo-job-alerts", label: "Yahoo Job Alerts", icon: "✉" },
       { id: "knowledge-review", label: "Knowledge Review", icon: "▣" },
+      { id: "knowledge-map-admin", label: "Knowledge Map Management", icon: "⌬" },
       { id: "research-review", label: "Research Review", icon: "✓" },
       { id: "career-readiness-review", label: "Career Readiness Review", icon: "◇" },
       { id: "knowledge-topics", label: "Knowledge Topic Management", icon: "☷" },
