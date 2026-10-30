@@ -30,7 +30,21 @@ const gapLabels = { domain: "security domain", career_level: "career level", cat
 
 function ChangeSummary({ change }) {
   if (!change) return null;
-  return <div className="review-change-summary"><div><Badge tone={statusTone(change.status)}>{change.status}</Badge><Badge tone="violet">{change.change_type.replaceAll("_", " ")}</Badge></div><strong>{change.proposed?.competency_name || "Unclassified competency"}</strong><span>Review version {change.version} · {change.evidence_count ?? change.proposed?.evidence?.length ?? 0} evidence item{(change.evidence_count ?? change.proposed?.evidence?.length ?? 0) === 1 ? "" : "s"}</span></div>;
+  return <div className="review-change-summary"><div><Badge tone={statusTone(change.status)}>{change.status}</Badge><Badge tone="violet">{change.change_type.replaceAll("_", " ")}</Badge></div><strong>{change.proposed?.competency_name || "Unclassified competency"}</strong><span>Review version {change.version} · {change.evidence_count ?? change.proposed?.evidence?.length ?? 0} evidence item{(change.evidence_count ?? change.proposed?.evidence?.length ?? 0) === 1 ? "" : "s"}</span><DuplicateCheck proposed={change.proposed} /></div>;
+}
+
+// Duplicate analysis recorded at ingestion: an automatic match, a twin awaiting review, or close existing skills.
+export function DuplicateCheck({ proposed = {} }) {
+  const match = proposed.skill_match;
+  const possible = proposed.possible_competency_matches || [];
+  if (!match && !proposed.same_new_skill_as_change_id && !possible.length) return null;
+  return <div className="duplicate-check" role="note">
+    <span className="field-label">Duplicate check</span>
+    {match?.method === "similar_published_skill" && <p>Linked to the existing skill <strong>{match.matched}</strong> (similar wording, {Math.round(match.score * 100)}%), so this updates it instead of adding a new skill.</p>}
+    {match?.method === "similar_pending_skill" && <p>Uses the name of a skill already awaiting review, <strong>{match.matched}</strong> ({Math.round(match.score * 100)}% similar).</p>}
+    {proposed.same_new_skill_as_change_id && <p>Same new skill as review change #{proposed.same_new_skill_as_change_id}; publishing both creates one skill.</p>}
+    {possible.length > 0 && <p>Possibly the same as {possible.map((item, index) => <span key={item.competency_id}>{index ? ", " : ""}<strong>{item.name}</strong> ({Math.round(item.score * 100)}%)</span>)}. To merge, edit the competency name to the existing skill's name.</p>}
+  </div>;
 }
 
 function PublicationHistory({ items = [] }) {
