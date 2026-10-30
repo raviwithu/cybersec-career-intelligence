@@ -461,3 +461,82 @@ code { color: #9ff2cc; font: .9em 'DM Mono', monospace; }
 .pipeline-tone-mint { background: var(--mint); }
 .pipeline-tone-muted { background: var(--muted); }
 .pipeline-tone-rose { background: var(--rose); }
+
+/* Security Knowledge Map. Colours are variables: dark values match the app; light values are ready for a light theme. */
+.knowledge-map-page { --km-surface: #0b1b2c; --km-node-bg: #102238; --km-node-text: #edf4fb; --km-node-muted: #aebdd0; --km-edge: #3a5a78; --km-grid: #1b324a; --km-focus: #74e0b7; --km-selected: #ffffff; --km-foundations: #7cb7ff; --km-security: #74e0b7; --km-vulnerabilities: #f38ca3; --km-palette-0: #7cb7ff; --km-palette-1: #b89cff; --km-palette-2: #f3c878; --km-palette-3: #74e0b7; --km-palette-4: #f3a47c; --km-palette-5: #8fd3e8; display: grid; gap: 14px; }
+:root[data-theme="light"] .knowledge-map-page { --km-surface: #f6f8fb; --km-node-bg: #ffffff; --km-node-text: #10202f; --km-node-muted: #42566a; --km-edge: #8aa0b5; --km-grid: #dde5ee; --km-focus: #0f6b4b; --km-selected: #10202f; --km-foundations: #1d5fbf; --km-security: #1a7f4b; --km-vulnerabilities: #b42335; --km-palette-0: #1d5fbf; --km-palette-1: #6a3fc4; --km-palette-2: #8a5a00; --km-palette-3: #1a7f4b; --km-palette-4: #a8461a; --km-palette-5: #0f6a85; }
+.knowledge-map-page .page-header { margin-bottom: 4px; }
+.km-toolbar { display: grid; gap: 14px; padding: 16px 18px; }
+.km-search { position: relative; max-width: 560px; }
+.km-search label { margin: 0; }
+.km-search input { width: 100%; margin-top: 6px; padding: 10px 12px; border: 1px solid #29455f; border-radius: 6px; color: #eaf4fc; background: var(--km-surface); font-size: .78rem; }
+.km-search > small { display: block; margin-top: 5px; color: #71899f; font-size: .66rem; }
+.km-search-results { margin-top: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--km-surface); }
+.km-search-results ul { margin: 0; padding: 0; list-style: none; }
+.km-search-results li button { width: 100%; display: grid; gap: 3px; padding: 9px 8px; border: 0; border-radius: 5px; color: var(--km-node-text); background: transparent; text-align: left; }
+.km-search-results li button:hover { background: #122f3a; }
+.km-search-results strong { font-size: .76rem; }
+.km-search-results small { color: var(--km-node-muted); font: 10px 'DM Mono', monospace; }
+.km-path-choice { display: grid; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.km-path-choice .text-link { margin-top: 4px; }
+.km-toolbar-groups { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+.km-control-group, .km-view-toggle { display: flex; flex-wrap: wrap; gap: 5px; }
+.km-control-group button, .km-view-toggle button { min-height: 32px; padding: 6px 10px; border: 1px solid #31506d; border-radius: 6px; color: #bdd0e0; background: #132a40; font-size: .68rem; font-weight: 700; }
+.km-control-group button:disabled { opacity: .45; cursor: not-allowed; }
+.km-view-toggle button.active { border-color: var(--km-focus); color: #07151f; background: var(--km-focus); }
+.km-breadcrumb ol { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: .74rem; }
+.km-breadcrumb li + li::before { content: "›"; margin-right: 6px; color: var(--muted); }
+.km-breadcrumb .text-link { margin: 0; font-size: .74rem; }
+.km-breadcrumb [aria-current] { color: var(--km-focus); font-weight: 700; }
+.km-status { min-height: 1em; margin: 0; color: var(--soft); font-size: .7rem; }
+.km-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); gap: 14px; align-items: start; }
+.km-canvas { min-height: 560px; padding: 0; overflow: hidden; background: var(--km-surface); }
+.km-graph { width: 100%; height: 640px; }
+.km-graph .react-flow__edge-path { stroke: var(--km-edge); stroke-width: 1.4; }
+.km-graph .react-flow__attribution { background: transparent; }
+.km-graph .react-flow__attribution a { color: var(--muted); }
+.km-handle { opacity: 0; pointer-events: none; }
+.km-node { position: relative; display: flex; align-items: center; min-height: 38px; border: 1px solid var(--km-edge); border-left: 4px solid var(--km-node-accent, var(--km-edge)); border-radius: 7px; color: var(--km-node-text); background: var(--km-node-bg); font-size: .74rem; }
+.km-node.selected { border-color: var(--km-selected); box-shadow: 0 0 0 2px var(--km-focus); }
+.km-node-root { --km-node-accent: var(--km-focus); font-weight: 800; }
+.km-palette-0 { --km-node-accent: var(--km-palette-0); } .km-palette-1 { --km-node-accent: var(--km-palette-1); } .km-palette-2 { --km-node-accent: var(--km-palette-2); } .km-palette-3 { --km-node-accent: var(--km-palette-3); } .km-palette-4 { --km-node-accent: var(--km-palette-4); } .km-palette-5 { --km-node-accent: var(--km-palette-5); }
+.km-node.km-branch-foundations { --km-node-accent: var(--km-foundations); } .km-node.km-branch-security { --km-node-accent: var(--km-security); } .km-node.km-branch-vulnerabilities { --km-node-accent: var(--km-vulnerabilities); }
+.km-node-branch .km-node-icon { color: var(--km-node-accent); }
+.km-node-topic { border-left-width: 2px; }
+.km-node-more, .km-node-empty, .km-node-loading, .km-node-error { border-style: dashed; color: var(--km-node-muted); background: transparent; }
+.km-node-error { border-color: var(--km-vulnerabilities); color: var(--km-vulnerabilities); }
+.km-node-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 9px 10px; border: 0; color: inherit; background: transparent; text-align: left; font-weight: 700; }
+.km-node-main:disabled { cursor: default; }
+.km-node-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.km-node-main:focus-visible, .km-tree-item:focus-visible { outline: 2px solid var(--km-focus); outline-offset: 2px; }
+.km-node-toggle { width: 28px; height: 28px; margin-right: 5px; padding: 0; border: 1px solid var(--km-edge); border-radius: 5px; color: var(--km-node-text); background: transparent; font-weight: 800; }
+.km-node-icon { flex: 0 0 auto; width: 1.1em; text-align: center; }
+.km-tree { margin: 0; padding: 12px; list-style: none; }
+.km-tree ul { margin: 0; padding: 0; list-style: none; }
+.km-tree-item { border-radius: 7px; outline: none; }
+.km-tree-row { display: flex; align-items: center; gap: 7px; margin: 3px 0 3px calc(var(--km-depth, 0) * 20px); padding: 6px 10px 6px 4px; cursor: pointer; }
+.km-tree-row.km-node { min-height: 34px; border-width: 0 0 0 3px; background: transparent; }
+.km-tree-row.km-node:hover { background: var(--km-node-bg); }
+.km-tree-row.km-node.selected { background: var(--km-node-bg); box-shadow: inset 0 0 0 2px var(--km-focus); }
+.km-tree-row.km-node-empty, .km-tree-row.km-node-loading { cursor: default; }
+.km-tree-toggle { width: 18px; color: var(--km-node-muted); text-align: center; }
+.km-tree-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.km-tree-row small { color: var(--km-node-muted); font: 10px 'DM Mono', monospace; white-space: nowrap; }
+.km-details { position: sticky; top: 14px; display: grid; gap: 8px; padding: 20px; }
+.km-details h2 { margin: 0; font-size: 1.15rem; }
+.km-details-copy { margin: 0; color: var(--soft); font-size: .76rem; line-height: 1.6; }
+.km-details-badge { justify-self: start; }
+.km-details-section { margin-top: 6px; }
+.km-placement-list { margin: 6px 0 0; padding-left: 16px; }
+.km-placement-list .text-link { margin-top: 4px; font-size: .72rem; }
+.km-placement-list .text-link.current { color: var(--km-focus); }
+.km-details-note { margin: 8px 0 0; padding: 10px; border: 1px dashed var(--line); border-radius: 6px; color: var(--soft); font-size: .7rem; }
+.km-details-close { display: none; }
+@media (prefers-reduced-motion: reduce) { .km-graph .react-flow__viewport, .km-details { transition: none !important; } }
+@media (max-width: 800px) {
+  .km-workspace { grid-template-columns: 1fr; }
+  .km-graph { height: 480px; }
+  .km-details { position: fixed; inset: auto 0 0 0; z-index: 40; max-height: 70vh; overflow-y: auto; border-radius: 12px 12px 0 0; box-shadow: 0 -18px 50px rgba(0,0,0,.45); transform: translateY(105%); transition: transform .2s ease; }
+  .km-details.open { transform: translateY(0); }
+  .km-details-close { position: absolute; top: 10px; right: 12px; display: block; width: 32px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: transparent; font-size: 1.1rem; }
+}

@@ -18,6 +18,7 @@ export const navigationGroups = [
     items: [
       { id: "domains", label: "Domain Explorer", icon: "◈" },
       { id: "knowledge-base", label: "Knowledge Base", icon: "▤" },
+      { id: "knowledge-map", label: "Security Knowledge Map", icon: "⌬" },
       { id: "industry-intelligence", label: "Industry Explorer", icon: "◇" },
       { id: "competencies", label: "Competency Explorer", icon: "◎" },
       { id: "matrix", label: "Career Matrix", icon: "▦" },
@@ -116,7 +117,8 @@ export function findNavigationItem(view) {
 
 export function getViewFromLocation() {
   if (typeof window === "undefined") return "dashboard";
-  const view = window.location.hash.replace(/^#/, "");
+  // A view may carry its own parameters after "?", for example #knowledge-map?topic=oauth-2.
+  const view = window.location.hash.replace(/^#/, "").split("?")[0];
   return view && (findNavigationItem(view) || view === "knowledge-topic" || view === "research-ingestion" || view === "publication-history" || view === "research-coverage") ? view : "dashboard";
 }
 

@@ -50,7 +50,7 @@ describe("Taxonomy Management", () => {
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Security Automation" } });
     fireEvent.click(screen.getByRole("button", { name: "Create entry" }));
     await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/taxonomy/domain"), expect.objectContaining({ method: "POST" })));
-    expect(screen.getByText("Security Domain created.")).toBeTruthy();
+    expect(await screen.findByText("Security Domain created.")).toBeTruthy();
   });
 
   it("supports impact inspection and deactivation controls", async () => {

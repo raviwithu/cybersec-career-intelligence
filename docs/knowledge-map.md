@@ -140,6 +140,39 @@ Matches topic names, aliases and `topic_key` without regard to case. `q` must be
 ]
 ```
 
+## Map interface
+
+The **Security Knowledge Map** page is in the sidebar under **Explore**, after Knowledge Base (view id `knowledge-map`). It reads only the public endpoints above, so it shows published placements only.
+
+### Interactions
+
+- The map opens with the root and the active top-level domains. Expanding a node fetches its children once and keeps them in page state; collapsing hides them without discarding them.
+- Expanding a domain shows its child domains first, then its non-empty branches. A domain with nothing below it shows "No published topics yet".
+- Branch topics load 50 at a time. A "Load more (N remaining)" node fetches the next page.
+- Toolbar: Expand, Collapse, Expand children (opens one level below the selection, loading each child on demand, never the whole map), Collapse all, Go to parent, and for the graph view Zoom in, Zoom out, Fit, Reset view and four pan buttons.
+- Search is debounced (300 ms, at least 2 characters) and uses `/knowledge-map/search`. Choosing a result expands only the nodes on that result's path and selects the topic; nothing else is expanded or collapsed. A result with several placements asks which path to show. A topic beyond the loaded pages is added to its branch so it can be revealed without loading every page.
+- The breadcrumb shows the selected node's path; each crumb selects that node.
+- Selecting a topic opens the details panel: name, short description, every placement (each one reveals that path), and "Full topic details arrive in a later release." (replaced in Step KM-3). "Open in Knowledge Base" opens the existing topic page.
+- Deep links: `#knowledge-map?topic=<topic_key>` opens the map at the topic's first placement. The page keeps the URL in step with the selected topic using `history.replaceState`, so selection does not add history entries.
+- Graph / List switches views. Both share the same expansion and selection. The choice is stored in `localStorage` (`cybersec-career-intelligence.knowledge-map-view`); without a stored choice, screens up to 800 px wide start in List.
+- Failures: if the root fails, the page shows the shared error component with Try again. If a node's children fail, a "Could not load. Retry" node appears in its place.
+
+### Visual design
+
+Node types are root, domain, child domain, branch, topic, plus "load more", empty and error placeholders. Domains take an accent from a six-colour category palette; child domains inherit their parent's. Branches are blue (Foundations, ▤), green (Security, ◆) and red (Common Vulnerabilities, ⚠), always with their text label and icon so colour is never the only signal. The selected node has a white border and a focus-colour ring. Colours are CSS variables on `.knowledge-map-page`; the dark values match the app, and light values are defined under `:root[data-theme="light"]` for when the app gains a light theme (it has none today). At 800 px and narrower, the details panel becomes a bottom drawer with a close button. `prefers-reduced-motion` turns off viewport animations (zoom, fit, centring) and the drawer transition.
+
+### Accessibility
+
+- List view is a WAI-ARIA tree: `tree`, nested `treeitem` and `group`, with `aria-level`, `aria-posinset`, `aria-setsize`, `aria-expanded` (expandable nodes only) and `aria-selected`. One row is tabbable at a time. Keys: Up/Down move, Right expands or moves to the first child, Left collapses or moves to the parent, Home/End jump, Enter selects (or loads more / retries), Space expands or collapses.
+- Graph view: every toolbar control is a button reachable with Tab. Each graph node is a button; Enter selects it and Space expands or collapses it. Pan buttons and centring on search, breadcrumb and parent selections mean nothing requires drag-to-pan.
+
+### Loading and performance
+
+- `KnowledgeMapPage` is loaded with `React.lazy`, and inside it the graph (`@xyflow/react` 12.12.0, `d3-hierarchy` 3.1.2, pinned) is a second lazy chunk, so other pages and the List view never download the graph library. Build sizes at KM-2: main bundle 439.23 kB (119.69 kB gzip, +1.95 kB over KM-1), map page 24.6 kB (8.9 kB gzip), graph 187.1 kB (61.0 kB gzip) plus 15.9 kB CSS.
+- Layout uses `d3-hierarchy` `tree()` left to right over the visible nodes only. It is memoised on structure (nodes, children, expansion, loading state), so changing the selection never re-runs it. The tidy-tree layout is recomputed for all visible nodes when children load, not just the expanded subtree, because adding children shifts siblings; with 1,005 visible nodes it takes about 1 ms.
+- The graph renders only nodes inside the viewport (`onlyRenderVisibleElements`).
+- Measured in the Vitest/jsdom test with a 1,000-topic branch loaded 50 at a time: the slowest page load and render took 71 ms, and selecting a topic with all 1,000 listed took 59 ms. A real browser is usually faster than jsdom.
+
 ## Code
 
 | File | Purpose |
@@ -149,3 +182,8 @@ Matches topic names, aliases and `topic_key` without regard to case. `q` must be
 | `backend/app/knowledge_map_service.py` | Hierarchy, counts, placements, search, ETag |
 | `backend/app/knowledge_map_schemas.py` | Response models |
 | `backend/tests/test_knowledge_map.py` | Tests, including migration upgrade and downgrade |
+| `frontend/src/KnowledgeMapPage.jsx` | Map page: state, on-demand loading, search, deep links, toolbar, details panel |
+| `frontend/src/KnowledgeMapGraph.jsx` | Graph view (`@xyflow/react`), lazy loaded |
+| `frontend/src/KnowledgeMapTree.jsx` | Accessible tree view |
+| `frontend/src/knowledgeMapModel.js` | Pure state, visible tree and layout helpers |
+| `frontend/tests/KnowledgeMap.test.jsx` | Page, navigation and model tests |

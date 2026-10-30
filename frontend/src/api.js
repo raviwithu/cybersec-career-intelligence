@@ -66,6 +66,11 @@ export function fetchKnowledgeTopics(params = {}) { return request(`/api/v1/know
 export function fetchKnowledgeContractTopics(params = {}) { return request(`/api/v1/knowledge/topics${queryString(params)}`); }
 export function fetchKnowledgeContractTopic(identifier) { return request(`/api/v1/knowledge/topics/${encodeURIComponent(identifier)}`); }
 export function fetchKnowledgeContractCoverage(identifier) { return request(`/api/v1/knowledge/topics/${encodeURIComponent(identifier)}/coverage`); }
+export function fetchKnowledgeMapRoot() { return request("/api/v1/knowledge-map"); }
+export function fetchKnowledgeMapChildren(domainId) { return request(`/api/v1/knowledge-map/domains/${domainId}/children`); }
+export function fetchKnowledgeMapBranchTopics(domainId, branch, params = {}) { return request(`/api/v1/knowledge-map/domains/${domainId}/branches/${branch}/topics${queryString(params)}`); }
+export function fetchKnowledgeMapPlacements(identifier) { return request(`/api/v1/knowledge-map/topics/${encodeURIComponent(identifier)}/placements`); }
+export function searchKnowledgeMap(query, params = {}) { return request(`/api/v1/knowledge-map/search${queryString({ q: query, ...params })}`); }
 export function fetchKnowledgeAdminTopic(id, adminKey) { return request(`/api/v1/knowledge/admin/topics/${id}`, { headers: adminHeaders(adminKey) }); }
 export function fetchKnowledgeReviewQueue(params = {}, adminKey) { return request(`/api/v1/knowledge/admin/proposals${queryString(params)}`, { headers: adminHeaders(adminKey) }); }
 export function fetchKnowledgeProposal(id, adminKey) { return request(`/api/v1/knowledge/proposals/${id}`, { headers: adminHeaders(adminKey) }); }

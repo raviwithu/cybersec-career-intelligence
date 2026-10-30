@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 
 import { createProfile, fetchCategories, fetchCareerMatrix, fetchCompetencies, fetchDomains, fetchExpectations, fetchHealth, fetchIndustries, fetchLevels, fetchProfiles } from "./api";
 import { Badge, ErrorState, Loading } from "./components";
@@ -16,6 +16,9 @@ import KnowledgeTopicPage from "./KnowledgeTopicPage";
 import KnowledgeReviewPage from "./KnowledgeReviewPage";
 import SidebarNavigation, { findNavigationItem, getViewFromLocation } from "./SidebarNavigation";
 import { useApi } from "./useApi";
+
+// Lazy so other pages do not download the graph library.
+const KnowledgeMapPage = lazy(() => import("./KnowledgeMapPage"));
 
 function flattenDomains(domains) { return domains.flatMap((domain) => [domain, ...(domain.children || [])]); }
 
@@ -77,6 +80,7 @@ export default function AppShell() {
     : view === "readiness" ? <CareerReadinessPage domains={data.domains} levels={data.levels} categories={data.categories} industries={data.industries} selectedIndustry={selectedIndustry} onNavigate={navigate} onContextChange={updateReadinessContext} onIndustryChange={setSelectedIndustry} onCompetency={openCompetency} />
     : view === "domains" ? <DomainsPage domains={data.domains} levels={data.levels} categories={data.categories} matrix={data.matrix} selectedDomain={selectedDomain} selectedLevel={selectedLevel} selectedIndustry={selectedIndustry} onSelectDomain={selectDomain} onSelectLevel={setSelectedLevel} onCompetency={openCompetency} />
       : view === "knowledge-base" ? <KnowledgeTopicPage onNavigate={navigate} />
+        : view === "knowledge-map" ? <Suspense fallback={<Loading label="Loading the knowledge map" />}><KnowledgeMapPage onNavigate={navigate} /></Suspense>
         : view === "knowledge-topic" ? <KnowledgeTopicPage topicKey={selectedTopicKey} onNavigate={navigate} />
       : view === "matrix" ? <MatrixPage matrix={data.matrix} domains={data.domains} levels={data.levels} onCell={selectMatrixCell} />
         : view === "compare" ? <ComparePage domains={allDomains} levels={data.levels} selectedDomain={selectedDomain || allDomains[0]} selectedIndustry={selectedIndustry} compareLevels={compareLevels} onDomainChange={(domain) => setSelectedDomainSlug(domain.slug)} onLevelsChange={setCompareLevels} onCompetency={openCompetency} />
