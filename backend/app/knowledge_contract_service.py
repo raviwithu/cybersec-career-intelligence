@@ -13,7 +13,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from .knowledge_contract_schemas import SECTION_TYPES, KnowledgeProposalCreate, KnowledgeProposalReview, KnowledgeSourceReference
+from .knowledge_content_schemas import public_section_content, validate_section_content
+from .knowledge_contract_schemas import CORE_SECTION_TYPES, RELATIONSHIP_TYPES, SECTION_TYPES, KnowledgeProposalCreate, KnowledgeProposalReview, KnowledgeSourceReference
 from .models import (
     KnowledgePublicationRecord,
     KnowledgeProposalSource,
@@ -82,7 +83,21 @@ def _public_content(section_type: str, content: dict[str, Any]) -> dict[str, Any
     if section_type == "references":
         items = content.get("items", [])
         content["items"] = [item for item in items if not item.get("is_private") and item.get("access_scope", "public") == "public"]
-    return content
+    return public_section_content(section_type, content)
+
+
+def _validate_relationship(topic_id: int | None, content: dict[str, Any]) -> None:
+    if content.get("relationship_type", "related") not in RELATIONSHIP_TYPES:
+        raise HTTPException(status_code=422, detail=f"relationship_type must be one of: {', '.join(RELATIONSHIP_TYPES)}")
+    if topic_id is not None and content.get("target_topic_id") == topic_id:
+        raise HTTPException(status_code=422, detail="A topic cannot relate to itself")
+
+
+def _validated_content(section_type: str | None, action: str, content: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return validate_section_content(section_type, action, content)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _section_response(section: KnowledgeTopicSection, *, include_history: bool) -> dict[str, Any]:
@@ -115,7 +130,7 @@ def coverage(db: Session, topic: KnowledgeTopic, *, include_pending: bool = Fals
             if row.section_type and row.status in {"draft", "review", "deferred", "approved"}:
                 pending[row.section_type] = "pending_review" if row.status != "draft" else "draft"
     items = []
-    for section_type in SECTION_TYPES:
+    for section_type in CORE_SECTION_TYPES:
         section = _section(topic, section_type)
         if section is not None and section.status == "published":
             items.append({"section_type": section_type, "status": "published", "published_version": section.published_version})
@@ -133,13 +148,28 @@ def public_topic(db: Session, topic: KnowledgeTopic) -> dict[str, Any]:
         "description": topic.description or "",
         "sections": [_section_response(item, include_history=False) for item in sorted(topic.sections, key=lambda row: SECTION_TYPES.index(row.section_type) if row.section_type in SECTION_TYPES else 99) if item.status == "published"],
         "coverage": coverage(db, topic),
-        "related_topics": [
-            {"id": item.target_topic.id, "topic_key": _topic_key(item.target_topic), "name": item.target_topic.name, "relationship_type": item.relationship_type}
-            for item in topic.relationships_from if item.target_topic and item.target_topic.is_active and item.target_topic.publication_status == "published"
-        ],
+        "related_topics": _related_topics(topic),
         "level_expectations": _level_expectations(topic),
         "last_updated": topic.published_at or topic.updated_at,
     }
+
+
+OUTGOING_LABELS = {"prerequisite": "Prerequisite", "related": "Related", "specialization": "Specialization", "dependency": "Depends on", "mitigated_by": "Mitigated by", "tested_by": "Tested by"}
+# Inverse labels for relationships stored on the other topic (D4). They are display labels only.
+INCOMING_LABELS = {"prerequisite": "Prerequisite for", "related": "Related", "specialization": "Generalises", "dependency": "Used by", "mitigated_by": "Protects against", "tested_by": "Tests"}
+
+
+def _published(topic: KnowledgeTopic | None) -> bool:
+    return topic is not None and topic.is_active and topic.publication_status == "published"
+
+
+def _related_topics(topic: KnowledgeTopic) -> list[dict[str, Any]]:
+    def item(other: KnowledgeTopic, relationship_type: str, direction: str) -> dict[str, Any]:
+        labels = OUTGOING_LABELS if direction == "outgoing" else INCOMING_LABELS
+        return {"id": other.id, "topic_key": _topic_key(other), "name": other.name, "relationship_type": relationship_type, "direction": direction, "label": labels.get(relationship_type, relationship_type.replace("_", " ").capitalize())}
+    outgoing = [item(row.target_topic, row.relationship_type, "outgoing") for row in topic.relationships_from if _published(row.target_topic) and row.target_topic_id != topic.id]
+    incoming = [item(row.source_topic, row.relationship_type, "incoming") for row in topic.relationships_to if _published(row.source_topic) and row.source_topic_id != topic.id]
+    return outgoing + incoming
 
 
 def _level_expectations(topic: KnowledgeTopic) -> list[dict[str, Any]]:
@@ -178,6 +208,12 @@ def _content_for_action(topic: KnowledgeTopic | None, section_type: str | None, 
         if item not in items:
             items.append(item)
         return {**current, "items": items}
+    if action == "ADD_DIAGRAM" and section_type == "architecture":
+        diagrams = list(current.get("diagrams", []))
+        diagram = proposed.get("diagram", proposed)
+        if diagram not in diagrams:
+            diagrams.append(diagram)
+        return {**current, "diagrams": diagrams}
     if action == "ADD_DIAGRAM":
         return {**current, "diagram": proposed.get("diagram", proposed)}
     if action == "UPDATE_CAREER_LEVEL_GUIDANCE":
@@ -231,7 +267,7 @@ def create_proposal(db: Session, payload: KnowledgeProposalCreate, actor: str, i
         original = deepcopy(current_section.published_content) if current_section else None
         base_version = current_section.published_version if current_section else 0
     if payload.action in {"ADD_SECTION", "UPDATE_SECTION", "ADD_ATTACK_SURFACE", "ADD_MITIGATION", "ADD_DIAGRAM", "ADD_REFERENCE", "ADD_VULNERABILITY_EXAMPLE", "UPDATE_CAREER_LEVEL_GUIDANCE"}:
-        proposed_content = deepcopy(payload.proposed_content)
+        proposed_content = _validated_content(section_type, payload.action, deepcopy(payload.proposed_content))
     else:
         proposed_content = deepcopy(payload.proposed_content)
     if payload.action == "CREATE_TOPIC":
@@ -370,8 +406,11 @@ def review_proposal(db: Session, proposal_id: int, payload: KnowledgeProposalRev
     if payload.action == "modify":
         if proposal.action == "CREATE_TOPIC":
             _validate_topic_metadata(db, payload.proposed_content or {})
-        proposal.proposed_content = payload.proposed_content
-        proposal.proposed_snapshot = payload.proposed_content
+        content = _validated_content(proposal.section_type, proposal.action, payload.proposed_content) if proposal.section_type else payload.proposed_content
+        if proposal.action == "ADD_TOPIC_RELATIONSHIP":
+            _validate_relationship(proposal.topic_id, content)
+        proposal.proposed_content = content
+        proposal.proposed_snapshot = content
         proposal.status = "review"
     elif payload.action == "approve":
         proposal.status = "approved"
@@ -466,6 +505,8 @@ def publish_proposal(db: Session, proposal_id: int, expected_version: int, actor
         if current_version != proposal.base_section_version:
             raise HTTPException(status_code=409, detail="Section changed; reload and create a new proposal")
         content = _content_for_action(topic, proposal.section_type, proposal.action, proposal.proposed_content or proposal.proposed_snapshot)
+        if proposal.section_type in {"code_examples", "architecture"}:
+            content = _validated_content(proposal.section_type, "UPDATE_SECTION", content)
         if section is None:
             section = KnowledgeTopicSection(topic_id=topic.id, section_type=proposal.section_type, published_content=content, published_version=1, status="published", updated_at=now())
             db.add(section)
@@ -480,6 +521,7 @@ def publish_proposal(db: Session, proposal_id: int, expected_version: int, actor
         db.add(KnowledgeTopicSectionVersion(section_id=section.id, version=version, content=content, status="published", proposal_id=proposal.id, reason=change_reason or proposal.change_reason, actor=actor, created_at=now(), published_at=now()))
         db.add(KnowledgePublicationRecord(proposal_id=proposal.id, topic_id=topic.id, section_id=section.id, published_version=version, previous_version=current_version, actor=actor, transaction_id=str(uuid.uuid4()), published_at=now()))
     elif proposal.action == "ADD_TOPIC_RELATIONSHIP":
+        _validate_relationship(topic.id, proposal.proposed_content)
         target_id = proposal.proposed_content.get("target_topic_id")
         target = resolve_topic(db, int(target_id), None)
         if db.scalar(select(KnowledgeTopicRelationship).where(KnowledgeTopicRelationship.source_topic_id == topic.id, KnowledgeTopicRelationship.target_topic_id == target.id, KnowledgeTopicRelationship.relationship_type == proposal.proposed_content.get("relationship_type", "related"))) is None:

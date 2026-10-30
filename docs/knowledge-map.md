@@ -152,7 +152,7 @@ The **Security Knowledge Map** page is in the sidebar under **Explore**, after K
 - Toolbar: Expand, Collapse, Expand children (opens one level below the selection, loading each child on demand, never the whole map), Collapse all, Go to parent, and for the graph view Zoom in, Zoom out, Fit, Reset view and four pan buttons.
 - Search is debounced (300 ms, at least 2 characters) and uses `/knowledge-map/search`. Choosing a result expands only the nodes on that result's path and selects the topic; nothing else is expanded or collapsed. A result with several placements asks which path to show. A topic beyond the loaded pages is added to its branch so it can be revealed without loading every page.
 - The breadcrumb shows the selected node's path; each crumb selects that node.
-- Selecting a topic opens the details panel: name, short description, every placement (each one reveals that path), and "Full topic details arrive in a later release." (replaced in Step KM-3). "Open in Knowledge Base" opens the existing topic page.
+- Selecting a topic opens the topic detail panel (see "Topic detail panel" below). On desktop the panel widens while a topic is selected.
 - Deep links: `#knowledge-map?topic=<topic_key>` opens the map at the topic's first placement. The page keeps the URL in step with the selected topic using `history.replaceState`, so selection does not add history entries.
 - Graph / List switches views. Both share the same expansion and selection. The choice is stored in `localStorage` (`cybersec-career-intelligence.knowledge-map-view`); without a stored choice, screens up to 800 px wide start in List.
 - Failures: if the root fails, the page shows the shared error component with Try again. If a node's children fail, a "Could not load. Retry" node appears in its place.
@@ -168,10 +168,99 @@ Node types are root, domain, child domain, branch, topic, plus "load more", empt
 
 ### Loading and performance
 
-- `KnowledgeMapPage` is loaded with `React.lazy`, and inside it the graph (`@xyflow/react` 12.12.0, `d3-hierarchy` 3.1.2, pinned) is a second lazy chunk, so other pages and the List view never download the graph library. Build sizes at KM-2: main bundle 439.23 kB (119.69 kB gzip, +1.95 kB over KM-1), map page 24.6 kB (8.9 kB gzip), graph 187.1 kB (61.0 kB gzip) plus 15.9 kB CSS.
+- `KnowledgeMapPage` is loaded with `React.lazy`, and inside it the graph (`@xyflow/react` 12.12.0, `d3-hierarchy` 3.1.2, pinned) is a second lazy chunk, so other pages and the List view never download the graph library. Build sizes at KM-2: main bundle 439.23 kB (119.69 kB gzip, +1.95 kB over KM-1), map page 24.6 kB (8.9 kB gzip), graph 187.1 kB (61.0 kB gzip) plus 15.9 kB CSS. At KM-3: main bundle 450.87 kB (123.56 kB gzip; the shared section renderers and diagram wrapper load with the Knowledge Base page), map page 29.9 kB (10.6 kB gzip), `@xyflow/react` shared chunk 184.8 kB (60.1 kB gzip), diagram canvas 2.2 kB, syntax highlighter 86.5 kB (26.9 kB gzip, loaded only when code is shown).
 - Layout uses `d3-hierarchy` `tree()` left to right over the visible nodes only. It is memoised on structure (nodes, children, expansion, loading state), so changing the selection never re-runs it. The tidy-tree layout is recomputed for all visible nodes when children load, not just the expanded subtree, because adding children shifts siblings; with 1,005 visible nodes it takes about 1 ms.
 - The graph renders only nodes inside the viewport (`onlyRenderVisibleElements`).
 - Measured in the Vitest/jsdom test with a 1,000-topic branch loaded 50 at a time: the slowest page load and render took 71 ms, and selecting a topic with all 1,000 listed took 59 ms. A real browser is usually faster than jsdom.
+
+## Topic detail panel
+
+`KnowledgeMapTopicPanel.jsx` shows the selected topic from `GET /api/v1/knowledge/topics/{topic_identifier}`. The header has the name, the path, every placement (each one reveals that path), a "Mapped in N domains" badge and "Open full topic page", which opens the existing Knowledge Base topic view.
+
+Tabs appear only when the topic has published content for them, so foundational topics without vulnerability content simply have fewer tabs. Tabs follow the WAI-ARIA tabs pattern (Left/Right, Home/End).
+
+| Tab | Source |
+|---|---|
+| Overview | `overview`: short description first; the technical explanation sits behind "Show technical details" |
+| How It Works | `how_it_works` steps and diagram; a Vulnerable / Secure toggle when `architecture` has diagrams of both variants |
+| Example Code | `code_examples`: vulnerable and secure code side by side when there is room, stacked otherwise; explanation and security control below |
+| Attack Surface | `attack_surfaces` |
+| Mitigations | `mitigations` |
+| Real-World CVEs | `real_world_examples` |
+| Architecture | `architecture` diagrams |
+| Career Levels | `level_expectations` (from `knowledge_topic_levels`) |
+| Related Topics | `related_topics`, grouped by display label; clicking one moves the map to that topic |
+| References | `references`, with provenance and verification status |
+
+The section renderers live in `KnowledgeSections.jsx` and are shared with the Knowledge Base topic page (`KnowledgeTopicPage.jsx`), which also gained the Example Code and Architecture tabs and now draws `how_it_works` diagrams instead of printing their JSON.
+
+- **Code**: `prism-react-renderer` 2.4.1 (pinned) turns code into React text tokens; code is never evaluated or inserted as HTML. It has no grammar for Java, C#, PHP, Ruby, Bash or HTTP, so those use the generic C-like grammar or plain text. Panes are labelled "⚠ Vulnerable" and "✓ Secure" in text as well as colour, each with a Copy button. The highlighter is a lazy chunk; plain text shows while it loads.
+- **Diagrams**: `KnowledgeDiagram.jsx` checks the diagram again (nodes, unique ids, edges pointing at existing nodes) and shows "A diagram could not be displayed because the definition is invalid." instead of anything it cannot draw. The canvas (`KnowledgeDiagramCanvas.jsx`, read-only `@xyflow/react`, lazy) uses `knowledgeDiagramLayout.js`: sequence diagrams as one lane per node with one row per message in edge order; other kinds as a left-to-right layered layout where each trust boundary gets its own band and is drawn as a labelled dashed region. Every diagram has a "Text version of this diagram" listing the steps in edge order and the boundary membership; it starts open when the user prefers reduced motion.
+- **Real-World CVEs**: identifier, advisory title, affected product (`affected_product` or legacy `affected_component`), description (`description` or legacy `vulnerability_mechanism`), weakness (`weakness` or `cwe`), impact, remediation, reference, verification status and exploitation status. "Exploited in the wild" appears only when `exploitation_status` is `exploited_in_the_wild` and `verification_status` is `verified` or `authoritative`; otherwise the label is "Proof of concept" (when that is the status) or "Publicly disclosed". Anything not verified or authoritative carries an "Unverified" badge. An empty section shows "No verified real-world example has been added."
+- **Career levels**: the level selector lists the active career levels from `/api/v1/levels`, grouped Shared, Technical, Management. The chosen level shows Knowledge (`expectation`) and Practical Skills (`practical_capability`) separately, with industry-specific rows labelled. A level with no row shows "No expectations defined for this level yet."; no other level's text is reused. When a topic has no level rows but has the legacy `career_level_guidance` section, that section is shown read-only instead.
+- **Links**: only http(s) URLs become links, always `target="_blank"` with `rel="noopener noreferrer"`; the URL appears on hover and keyboard focus. Other URLs are not rendered.
+
+## Content model
+
+Both new section types are part of `SECTION_TYPES` and go through the knowledge contract like every other section (`ADD_SECTION`, `UPDATE_SECTION`, and `ADD_DIAGRAM` for diagrams). Their content is validated by strict Pydantic models in `backend/app/knowledge_content_schemas.py` when a proposal is created, when a reviewer modifies it, and again on publish. Unknown keys are rejected. The existing `_clean_value` (which rejects `<script>`, `<iframe>`, `<object>`, `<embed>`) and http(s)-only URL checks still apply. Coverage counts only the seven original sections, because code examples and architecture diagrams are optional for a topic; adding them did not change any topic's coverage.
+
+### `code_examples`
+
+```json
+{"items": [{
+  "title": "Order lookup",
+  "language": "python",
+  "vulnerable": "…",
+  "secure": "…",
+  "explanation": "…",
+  "security_control": "Object-level authorization"
+}]}
+```
+
+- `language`: one of python, javascript, typescript, java, go, csharp, c, cpp, rust, php, ruby, http, json, yaml, bash.
+- At most 6 items. `vulnerable`, `secure` and `explanation` at most 8,000 characters each; an item needs `vulnerable` or `secure`.
+- Only whole-section actions are accepted (`ADD_SECTION`, `UPDATE_SECTION`); item-append actions such as `ADD_MITIGATION` are rejected for this section.
+
+### `architecture` and the diagram schema
+
+```json
+{"diagrams": [{
+  "kind": "architecture | sequence | trust_boundary | attack_path | flow",
+  "title": "…",
+  "variant": "vulnerable | secure | neutral",
+  "nodes": [{"id": "api", "label": "API", "type": "actor | service | datastore | control | external", "boundary": "internet"}],
+  "edges": [{"from": "user", "to": "api", "label": "GET /orders/1002", "order": 1}],
+  "boundaries": [{"id": "internet", "label": "Internet"}]
+}]}
+```
+
+- Ids match `^[a-z0-9_-]{1,40}$` and are unique. Labels and titles are plain text (no `<` or `>`), at most 120 characters.
+- At most 40 nodes, 80 edges and 20 boundaries per diagram, and 12 diagrams per section. Edges must reference existing nodes; a node's `boundary` must reference a declared boundary.
+- No style, colour or URL fields exist; any extra key is rejected.
+- Defaults: `kind` flow, `variant` neutral, node `type` service, empty `title`.
+- `ADD_DIAGRAM` with section `architecture` appends one diagram (`{"diagram": {...}}` or the bare diagram); with `how_it_works` it replaces that section's single `diagram`, as before.
+- The same schema validates `how_it_works.diagram` on write. On read, the public topic endpoint drops a stored diagram that no longer validates instead of failing: `how_it_works` gets `diagram: null` and `diagram_hidden: true`; `architecture` keeps the valid diagrams and reports `hidden_diagram_count`; `code_examples` reports `hidden_item_count`. The admin endpoint returns stored content unchanged.
+
+### Relationship types
+
+Stored types for topic relationships (`knowledge_topic_relationships`, created through `ADD_TOPIC_RELATIONSHIP` proposals): `prerequisite`, `related`, `specialization`, `dependency`, `mitigated_by`, `tested_by`. Other types and self-relationships are rejected when the proposal is created, modified or published.
+
+`related_topics` in the topic response now lists both directions, each with `direction` (`outgoing` or `incoming`) and a display `label`. Inverse labels are never stored.
+
+| Type | Outgoing label | Incoming label |
+|---|---|---|
+| `prerequisite` | Prerequisite | Prerequisite for |
+| `related` | Related | Related |
+| `specialization` | Specialization | Generalises |
+| `dependency` | Depends on | Used by |
+| `mitigated_by` | Mitigated by | Protects against |
+| `tested_by` | Tested by | Tests |
+
+The competency relationship validator in `knowledge_schemas.py` (and its `ck_relationship_type` database constraint) belongs to competencies, not knowledge topics, and is unchanged.
+
+### Career-level source
+
+Career-level content comes from `knowledge_topic_levels` (`level_expectations` in the topic response); level lists come from the active `career_levels` rows grouped by `career_track`, never a hardcoded list. The legacy `career_level_guidance` section is shown only when a topic has no level rows. The Knowledge Base section editor now builds that section's default keys from `/api/v1/levels`, so Guide and Supervisor are included; saved content is loaded as it was stored.
 
 ## Code
 
@@ -187,3 +276,10 @@ Node types are root, domain, child domain, branch, topic, plus "load more", empt
 | `frontend/src/KnowledgeMapTree.jsx` | Accessible tree view |
 | `frontend/src/knowledgeMapModel.js` | Pure state, visible tree and layout helpers |
 | `frontend/tests/KnowledgeMap.test.jsx` | Page, navigation and model tests |
+| `backend/app/knowledge_content_schemas.py` | `code_examples`, `architecture` and diagram schemas; read-path filtering of invalid diagrams |
+| `backend/tests/test_knowledge_content.py` | Section schema, legacy content and relationship tests |
+| `frontend/src/KnowledgeMapTopicPanel.jsx` | Topic detail panel and career level selector |
+| `frontend/src/KnowledgeSections.jsx` | Section renderers shared with the Knowledge Base topic page |
+| `frontend/src/KnowledgeDiagram.jsx`, `KnowledgeDiagramCanvas.jsx`, `knowledgeDiagramLayout.js` | Diagram renderer, lazy canvas and pure layout |
+| `frontend/src/KnowledgeCodeBlock.jsx` | Syntax highlighting (`prism-react-renderer`), lazy loaded |
+| `frontend/tests/KnowledgeTopicDetail.test.jsx` | Topic panel, renderer, diagram layout and editor tests |

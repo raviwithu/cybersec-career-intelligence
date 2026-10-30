@@ -17,8 +17,14 @@ SECTION_TYPES = (
     "real_world_examples",
     "references",
     "career_level_guidance",
+    "code_examples",
+    "architecture",
 )
-SectionType = Literal["overview", "how_it_works", "attack_surfaces", "mitigations", "real_world_examples", "references", "career_level_guidance"]
+# Coverage reports the core sections only; code examples and architecture diagrams are optional for a topic.
+CORE_SECTION_TYPES = SECTION_TYPES[:7]
+SectionType = Literal["overview", "how_it_works", "attack_surfaces", "mitigations", "real_world_examples", "references", "career_level_guidance", "code_examples", "architecture"]
+# Stored relationship types (D4). Inverses such as "used by" are display labels only, never stored.
+RELATIONSHIP_TYPES = ("prerequisite", "related", "specialization", "dependency", "mitigated_by", "tested_by")
 ProposalAction = Literal[
     "CREATE_TOPIC", "UPDATE_TOPIC", "ADD_SECTION", "UPDATE_SECTION", "ADD_ATTACK_SURFACE", "ADD_MITIGATION",
     "ADD_DIAGRAM", "ADD_REFERENCE", "ADD_VULNERABILITY_EXAMPLE", "ADD_TOPIC_RELATIONSHIP", "UPDATE_CAREER_LEVEL_GUIDANCE",
@@ -138,6 +144,10 @@ class KnowledgeProposalCreate(BaseModel):
             target_id = self.proposed_content.get("target_topic_id")
             if not isinstance(target_id, int) or isinstance(target_id, bool) or target_id < 1:
                 raise ValueError("target_topic_id must be a positive integer for topic relationships")
+            if self.proposed_content.get("relationship_type", "related") not in RELATIONSHIP_TYPES:
+                raise ValueError(f"relationship_type must be one of: {', '.join(RELATIONSHIP_TYPES)}")
+            if self.topic_id is not None and target_id == self.topic_id:
+                raise ValueError("A topic cannot relate to itself")
         return self
 
 

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { createKnowledgeProposal, fetchKnowledgeAdminTopic } from "./api";
+import { createKnowledgeProposal, fetchKnowledgeAdminTopic, fetchLevels } from "./api";
 import { Badge, ErrorState, Loading } from "./components";
 
-const sectionLabels = { overview: "Overview", how_it_works: "How It Works", attack_surfaces: "Attack Surfaces", mitigations: "Mitigations", real_world_examples: "Real-World Examples", references: "References", career_level_guidance: "Career-Level Guidance" };
+const sectionLabels = { overview: "Overview", how_it_works: "How It Works", attack_surfaces: "Attack Surfaces", mitigations: "Mitigations", real_world_examples: "Real-World Examples", references: "References", career_level_guidance: "Career-Level Guidance", code_examples: "Code Examples", architecture: "Architecture Diagrams" };
 const defaults = {
   overview: { short_description: "", technical_explanation: "", key_concepts: [], related_technologies: [] },
   how_it_works: { workflow: "", architecture_explanation: "", diagram: { nodes: [], edges: [] }, steps: [] },
@@ -11,20 +11,29 @@ const defaults = {
   mitigations: { items: [] },
   real_world_examples: { items: [] },
   references: { items: [] },
-  career_level_guidance: { levels: { junior: "", intermediate: "", senior: "", architect: "", manager: "", director: "" } },
+  code_examples: { items: [] },
+  architecture: { diagrams: [] },
 };
+
+// Career-level guidance keys come from the active career levels, never a hardcoded list.
+function sectionDefaults(section, levels) {
+  if (section === "career_level_guidance") return { levels: Object.fromEntries(levels.map((level) => [level.slug, ""])) };
+  return defaults[section];
+}
 
 export default function KnowledgeSectionEditor({ topic, adminKey, onClose, onSaved }) {
   const [section, setSection] = useState("overview");
   const [detail, setDetail] = useState(topic);
   const [content, setContent] = useState(defaults.overview);
+  const [levels, setLevels] = useState([]);
   const [reference, setReference] = useState({ source_type: "technical_article", title: "", url: "", locator: "", excerpt: "", verification_status: "unverified" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   useEffect(() => { fetchKnowledgeAdminTopic(topic.id, adminKey).then(setDetail).catch(setError); }, [topic.id, adminKey]);
+  useEffect(() => { fetchLevels().then(setLevels).catch(() => setLevels([])); }, []);
   const current = useMemo(() => detail.sections?.find((item) => item.section_type === section), [detail.sections, section]);
-  useEffect(() => { setContent(current?.content || defaults[section]); }, [current, section]);
+  useEffect(() => { setContent(current?.content || sectionDefaults(section, levels)); }, [current, section, levels]);
   const existing = current?.content ? `Existing published section: version ${current.published_version}` : "No published section yet";
   async function save(submitForReview) {
     setBusy(true); setError(null); setNotice(null);
