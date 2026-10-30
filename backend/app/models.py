@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -307,12 +307,22 @@ class KnowledgeTopic(Base):
     relationships_to: Mapped[list["KnowledgeTopicRelationship"]] = relationship(foreign_keys="KnowledgeTopicRelationship.target_topic_id", back_populates="target_topic", cascade="all, delete-orphan")
 
 
+# Knowledge map branches within a domain, in display order. A NULL map_branch keeps the link off the map.
+MAP_BRANCHES = {"foundations": "Foundations", "security": "Security", "vulnerabilities": "Common Vulnerabilities"}
+
+
 class KnowledgeTopicDomain(Base):
     __tablename__ = "knowledge_topic_domains"
-    __table_args__ = (UniqueConstraint("topic_id", "domain_id", name="uq_knowledge_topic_domain"),)
+    __table_args__ = (
+        UniqueConstraint("topic_id", "domain_id", name="uq_knowledge_topic_domain"),
+        CheckConstraint("map_branch IN ('foundations','security','vulnerabilities')", name="ck_knowledge_topic_domains_map_branch"),
+        Index("ix_knowledge_topic_domains_map_placement", "domain_id", "map_branch", "display_order"),
+    )
 
     topic_id: Mapped[int] = mapped_column(ForeignKey("knowledge_topics.id", ondelete="CASCADE"), primary_key=True)
     domain_id: Mapped[int] = mapped_column(ForeignKey("security_domains.id", ondelete="CASCADE"), primary_key=True)
+    map_branch: Mapped[str | None] = mapped_column(String(20))
+    display_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     topic: Mapped[KnowledgeTopic] = relationship(back_populates="domains")
     domain: Mapped[SecurityDomain] = relationship()

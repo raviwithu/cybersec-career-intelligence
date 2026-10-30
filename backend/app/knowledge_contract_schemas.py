@@ -209,6 +209,13 @@ class KnowledgeCoverageResponse(BaseModel):
     complete: bool
 
 
+class KnowledgeTopicLevelResponse(BaseModel):
+    career_level: dict[str, Any]
+    industry: dict[str, Any] | None = None
+    expectation: str
+    practical_capability: str
+
+
 class KnowledgePublicTopicResponse(BaseModel):
     id: int
     topic_key: str
@@ -218,6 +225,8 @@ class KnowledgePublicTopicResponse(BaseModel):
     sections: list[KnowledgeSectionResponse]
     coverage: KnowledgeCoverageResponse
     related_topics: list[dict[str, Any]] = Field(default_factory=list)
+    # Per career level: expectation is the knowledge, practical_capability the practical skills. Active levels only.
+    level_expectations: list[KnowledgeTopicLevelResponse] = Field(default_factory=list)
     last_updated: datetime | None
 
 
