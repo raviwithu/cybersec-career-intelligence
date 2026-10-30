@@ -77,7 +77,7 @@ export default function KnowledgeReviewPage() {
   async function review(action, verifySources = false) {
     if (!selected) return;
     setBusy(true); setError(null); setNotice(null);
-    try { await reviewKnowledgeProposal(selected.id, { expected_version: selected.version, action, reviewer_note: `${action} by administrator.`, ...(action === "modify" ? { proposed_content: editing } : {}), ...(verifySources ? { verified_source_ids: verifiedSourceIds } : {}) }, adminKey); setNotice(verifySources ? "Selected sources verified and proposal approved." : `Proposal ${action}d and retained in review history.`); setEditing(null); await load(); } catch (requestError) { setError(requestError); } finally { setBusy(false); }
+    try { await reviewKnowledgeProposal(selected.id, { expected_version: selected.version, action, reviewer_note: `${action} by administrator.`, ...(action === "modify" ? { proposed_content: editing } : {}), ...(verifySources ? { verified_source_ids: verifiedSourceIds } : {}) }, adminKey); setNotice(verifySources ? "Selected sources verified and proposal approved." : `Proposal ${{ approve: "approved", modify: "modified", defer: "deferred", reject: "rejected" }[action] || action} and retained in review history.`); setEditing(null); await load(); } catch (requestError) { setError(requestError); } finally { setBusy(false); }
   }
   async function publish() {
     if (!selected || selected.status !== "approved") return;

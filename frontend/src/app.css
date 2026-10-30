@@ -658,3 +658,10 @@ code { color: #9ff2cc; font: .9em 'DM Mono', monospace; }
 .kse-code-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
 .kse-code { font: 11px/1.5 'DM Mono', monospace; }
 .kma-new-topic { padding: 18px 20px; }
+.kma-suggestions { display: grid; gap: 10px; padding: 18px 20px; }
+.kma-suggestions h2 { margin: 0; font-size: 1rem; }
+.kma-suggestion-list ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.kma-suggestion { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid #213c55; border-radius: 7px; font-size: .74rem; }
+.kma-suggestion span { display: grid; gap: 3px; }
+.kma-suggestion small { color: #8da3b7; }
+.kma-note { color: #f3c878 !important; }

@@ -307,3 +307,40 @@ class KnowledgeMapPreviewResponse(BaseModel):
     status: str
     branches: list[KnowledgeMapPreviewBranch] = Field(default_factory=list)
     message: str | None = None
+
+
+class KnowledgeMapSuggestionItem(BaseModel):
+    action: str
+    existing_topic_id: int | None = None
+    name: str | None = None
+    domain_id: int
+    map_branch: str
+    rationale: str
+    related_topic_id: int | None = None
+    relationship_type: str | None = None
+    domain_name: str
+    topic_name: str | None = None
+    related_topic_name: str | None = None
+    note: str | None = None
+
+
+class KnowledgeMapSuggestionsResponse(BaseModel):
+    finding_id: int
+    finding_name: str
+    provider: str | None
+    model_id: str | None
+    suggestions: list[KnowledgeMapSuggestionItem]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class KnowledgeMapSuggestionSubmitResponse(BaseModel):
+    created: list[KnowledgeProposalResponse]
+    errors: list[str] = Field(default_factory=list)
+
+
+class ApprovedFindingSummary(BaseModel):
+    id: int
+    candidate_name: str
+    finding_type: str
+    domain: str | None
+    status: str

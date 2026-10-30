@@ -501,7 +501,8 @@ def _create_topic(db: Session, proposal: KnowledgeTopicProposal, actor: str) -> 
         raise HTTPException(status_code=422, detail="CREATE_TOPIC is missing a topic name")
     if db.scalar(select(KnowledgeTopic).where((KnowledgeTopic.topic_key == key) | (KnowledgeTopic.slug == key))):
         raise HTTPException(status_code=409, detail="A knowledge topic with this stable key already exists")
-    topic = KnowledgeTopic(name=name, slug=slugify(metadata.get("slug") or key), topic_key=key, description=metadata.get("description", ""), category_id=metadata.get("category_id"), publication_status="draft", is_active=True, version=1, display_order=metadata.get("display_order", 0), created_at=now(), updated_at=now())
+    aliases = [str(alias).strip()[:120] for alias in metadata.get("aliases", []) if isinstance(alias, str) and alias.strip()][:20]
+    topic = KnowledgeTopic(name=name, slug=slugify(metadata.get("slug") or key), topic_key=key, description=metadata.get("description", ""), category_id=metadata.get("category_id"), aliases=aliases, publication_status="draft", is_active=True, version=1, display_order=metadata.get("display_order", 0), created_at=now(), updated_at=now())
     db.add(topic)
     db.flush()
     for domain_id in metadata.get("domain_ids", data.get("domain_ids", [])):
