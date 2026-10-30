@@ -623,3 +623,42 @@ def test_candidate_counts_revision_changes_when_a_row_is_deleted(client):
         db.commit()
     after = revision()
     assert after != before and 0 <= after < 2 ** 53
+
+
+def test_sync_ignores_alert_emails_scanned_before(monkeypatch):
+    from app.models import YahooAlertEmail, YahooMailSyncRun
+    from app.yahoo_mail_schemas import MailSyncRequest
+    from app.yahoo_mail_service import sync_connection
+
+    messages = {30: alert_message()}
+    settings, connection_id, fake = _sync_fixture("rescan@yahoo.example", messages)
+    fetched = []
+
+    class Tracking(fake):
+        def fetch_message(self, uid):
+            fetched.append(uid)
+            return super().fetch_message(uid)
+
+    def sync(client_class):
+        monkeypatch.setattr("app.yahoo_mail_service.YahooImapClient", client_class)
+        with SessionLocal() as db:
+            run = sync_connection(db, db.get(YahooMailConnection, connection_id), settings, MailSyncRequest(mode="initial", last_days=7), "administrator")
+            run = db.get(YahooMailSyncRun, run.id)
+            return run.messages_scanned, run.jobs_extracted, run.summary.get("already_scanned")
+
+    assert sync(Tracking) == (1, 2, 0)
+    # An initial sync searches from UID 0 again: the recorded UID is skipped without downloading it.
+    assert sync(Tracking) == (0, 0, 1)
+    assert fetched == [30]
+
+    # The same alert under a new UID (here a rebuilt mailbox) is recognised by its Message-ID and content.
+    class Rebuilt(Tracking):
+        def __init__(self, _settings):
+            super().__init__(_settings)
+            self.uidvalidity = "78"
+
+    messages[31] = messages.pop(30)
+    assert sync(Rebuilt) == (0, 0, 1)
+    assert fetched == [30, 31]
+    with SessionLocal() as db:
+        assert db.query(YahooAlertEmail).filter(YahooAlertEmail.connection_id == connection_id).count() == 1

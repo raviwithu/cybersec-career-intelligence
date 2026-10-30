@@ -212,6 +212,14 @@ def sync_connection(db: Session, connection: YahooMailConnection, settings: Sett
         lock.release()
 
 
+def _alert_already_scanned(db: Session, connection: YahooMailConnection, message_id: str | None, content_hash: str) -> bool:
+    # The same alert under another UID: a UIDVALIDITY reset, a moved message, a folder change or a second copy.
+    match = YahooAlertEmail.content_hash == content_hash
+    if message_id:
+        match = or_(match, YahooAlertEmail.message_id == message_id)
+    return db.scalar(select(YahooAlertEmail.id).where(YahooAlertEmail.connection_id == connection.id, match).limit(1)) is not None
+
+
 def _sync_locked(db: Session, connection: YahooMailConnection, settings: Settings, request: MailSyncRequest, actor: str) -> YahooMailSyncRun:
     date_from, date_to = _date_range(connection, request)
     run = YahooMailSyncRun(connection_id=connection.id, mode=request.mode, mailbox=connection.folder, date_from=date_from, date_to=date_to, uidvalidity_before=connection.uidvalidity, last_uid_before=connection.last_uid, created_by=actor)
@@ -230,7 +238,12 @@ def _sync_locked(db: Session, connection: YahooMailConnection, settings: Setting
                 minimum_uid = 0 if request.mode == "initial" else connection.last_uid
             uids = client.search_uids(date_from=date_from, date_to=date_to, minimum_uid=minimum_uid)
             run.uidvalidity_after = client.uidvalidity
+            already_scanned = 0
             for uid in uids:
+                # A UID recorded before is skipped without downloading the message again.
+                if db.scalar(select(YahooAlertEmail.id).where(YahooAlertEmail.connection_id == connection.id, YahooAlertEmail.mailbox == connection.folder, YahooAlertEmail.uidvalidity == client.uidvalidity, YahooAlertEmail.uid == uid)) is not None:
+                    already_scanned += 1
+                    continue
                 run.messages_scanned += 1
                 try:
                     message = client.fetch_message(uid)
@@ -242,8 +255,9 @@ def _sync_locked(db: Session, connection: YahooMailConnection, settings: Setting
                         continue
                     if source.subject_pattern and source.subject_pattern.casefold() not in parsed.subject.casefold():
                         continue
-                    email = db.scalar(select(YahooAlertEmail).where(YahooAlertEmail.connection_id == connection.id, YahooAlertEmail.mailbox == connection.folder, YahooAlertEmail.uidvalidity == message.uidvalidity, YahooAlertEmail.uid == uid))
-                    if email is not None:
+                    if _alert_already_scanned(db, connection, parsed.message_id, parsed.content_hash):
+                        already_scanned += 1
+                        run.messages_scanned -= 1
                         continue
                     email = YahooAlertEmail(connection_id=connection.id, sync_run_id=run.id, alert_source_id=source.id, mailbox=connection.folder, uidvalidity=message.uidvalidity, uid=uid, message_id=parsed.message_id, sender_address=parsed.sender, subject=parsed.subject, received_at=parsed.received_at, authentication_headers=parsed.authentication_headers, content_hash=parsed.content_hash)
                     db.add(email)
@@ -266,6 +280,7 @@ def _sync_locked(db: Session, connection: YahooMailConnection, settings: Setting
                 except Exception as exc:
                     # A malformed or unexpected message is recorded and skipped so it cannot block every later sync.
                     _record_message_error(db, run, uid, f"{type(exc).__name__}: {exc}")
+            run.summary = {**(run.summary or {}), "already_scanned": already_scanned}
             connection.uidvalidity = client.uidvalidity
             connection.last_uid = max(uids, default=0) if uidvalidity_reset else max([connection.last_uid, *uids])
             connection.last_successful_sync = now()
