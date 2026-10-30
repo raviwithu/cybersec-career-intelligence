@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchKnowledgeContractTopic, fetchKnowledgeMapBranchTopics, fetchKnowledgeMapChildren, fetchKnowledgeMapPlacements, fetchKnowledgeMapRoot, searchKnowledgeMap } from "./api";
-import { Badge, EmptyState, ErrorState, Loading, PageHeader } from "./components";
+import { EmptyState, ErrorState, Loading, PageHeader } from "./components";
+import KnowledgeMapTopicPanel from "./KnowledgeMapTopicPanel";
 import KnowledgeMapTree from "./KnowledgeMapTree";
 import { BRANCHES, ROOT_ID, TOPIC_PAGE_SIZE, applyDomainChildren, applyRoot, applyTopicPage, branchNodeId, collapse, collapseAll, domainNodeId, ensureTopic, expand, initialMapState, isExpandable, layoutTree, nextTopicOffset, pathTo, topicNodeId, visibleAncestor, visibleRows, visibleTree } from "./knowledgeMapModel";
 
@@ -40,22 +41,16 @@ function placementLabel(placement) {
   return [...placement.domain_path.map((domain) => domain.name), placement.label].join(" › ");
 }
 
-function NodeDetails({ node, state, placements, onReveal, onNavigate }) {
+function NodeDetails({ node, state, placements, onReveal, onSelectTopic, onNavigate }) {
   if (!node) return null;
-  if (node.type === "topic") return <>
-    <p className="eyebrow">TOPIC</p>
-    <h2>{node.label}</h2>
-    <p className="km-details-copy">{node.description || "No short description has been published for this topic yet."}</p>
-    <div className="km-details-section">
-      <span className="field-label">Appears in</span>
-      {placements.loading ? <Loading label="Loading placements" /> : placements.error ? <p className="muted-copy">Placements could not be loaded: {placements.error.message}</p> : <ul className="km-placement-list">{placements.items.map((placement) => {
-        const current = topicNodeId(placement.domain_path[placement.domain_path.length - 1].id, placement.branch, node.topicKey) === node.id;
-        return <li key={placementLabel(placement)}><button type="button" className={`text-link ${current ? "current" : ""}`} aria-current={current ? "location" : undefined} onClick={() => onReveal({ id: node.topicId, topic_key: node.topicKey, name: node.label, short_description: node.description }, placement)}>{placementLabel(placement)}</button></li>;
-      })}</ul>}
-    </div>
-    <p className="km-details-note">Full topic details arrive in a later release.</p>
-    {onNavigate && <button type="button" className="button button-secondary" onClick={() => onNavigate("knowledge-topic", node.topicKey)}>Open in Knowledge Base</button>}
-  </>;
+  if (node.type === "topic") return <KnowledgeMapTopicPanel
+    node={node}
+    breadcrumb={pathTo(state, node.id).map((id) => state.nodes[id].label)}
+    placements={placements}
+    isCurrentPlacement={(placement) => topicNodeId(placement.domain_path[placement.domain_path.length - 1].id, placement.branch, node.topicKey) === node.id}
+    onReveal={(placement) => onReveal({ id: node.topicId, topic_key: node.topicKey, name: node.label, short_description: node.description }, placement)}
+    onSelectTopic={onSelectTopic}
+    onNavigate={onNavigate} />;
   if (node.type === "branch") return <>
     <p className="eyebrow">BRANCH · {state.nodes[state.parents[node.id]]?.label}</p>
     <h2><span aria-hidden="true">{BRANCHES[node.branch]?.icon} </span>{node.label}</h2>
@@ -297,7 +292,7 @@ export default function KnowledgeMapPage({ onNavigate }) {
     </section>
     <nav className="km-breadcrumb" aria-label="Selected path"><ol>{breadcrumb.map((id, index) => <li key={id}>{index === breadcrumb.length - 1 ? <span aria-current="location">{state.nodes[id].label}</span> : <button type="button" className="text-link" onClick={() => selectNode(id, true)}>{state.nodes[id].label}</button>}</li>)}</ol></nav>
     <p className="km-status" role="status" aria-live="polite">{notice || (loadingCount ? "Loading…" : "")}</p>
-    <div className="km-workspace">
+    <div className={`km-workspace ${selectedNode?.type === "topic" ? "topic-open" : ""}`}>
       <section className="panel km-canvas" aria-label={graph ? "Map graph" : "Map list"}>
         {graph
           ? <Suspense fallback={<Loading label="Loading the graph view" />}><KnowledgeMapGraph layout={layout} expanded={state.expanded} selectedId={selectedId} focusRequest={focusRequest} onActivate={activateNode} onToggle={toggleNode} commandRef={commandRef} reduceMotion={reduceMotion} /></Suspense>
@@ -306,8 +301,7 @@ export default function KnowledgeMapPage({ onNavigate }) {
       </section>
       <aside className={`panel km-details ${panelOpen ? "open" : ""}`} aria-label="Selected node details">
         <button type="button" className="km-details-close" aria-label="Close details" onClick={() => setPanelOpen(false)}>×</button>
-        <NodeDetails node={selectedNode} state={state} placements={placements} onReveal={reveal} onNavigate={onNavigate} />
-        {selectedNode?.type === "topic" && selectedNode.placementCount > 1 && <span className="km-details-badge"><Badge tone="blue">Mapped in {selectedNode.placementCount} domains</Badge></span>}
+        <NodeDetails node={selectedNode} state={state} placements={placements} onReveal={reveal} onSelectTopic={openTopicKey} onNavigate={onNavigate} />
       </aside>
     </div>
   </div>;

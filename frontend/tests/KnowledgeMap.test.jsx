@@ -147,7 +147,7 @@ describe("Security Knowledge Map page", () => {
     press(await findItem("OAuth 2.0"), "Enter");
     const details = screen.getByRole("complementary", { name: "Selected node details" });
     expect(within(details).getByRole("heading", { name: "OAuth 2.0" })).toBeTruthy();
-    expect(within(details).getByText("Full topic details arrive in a later release.")).toBeTruthy();
+    expect(await within(details).findByText("Delegated authorization.")).toBeTruthy();
     expect(await within(details).findByRole("button", { name: "Embedded Systems Security › Secure Boot › Foundations" })).toBeTruthy();
     const crumbs = within(screen.getByRole("navigation", { name: "Selected path" })).getAllByRole("listitem").map((element) => element.textContent);
     expect(crumbs).toEqual(["CyberSec Career Intelligence", "Cloud API Security", "Foundations", "OAuth 2.0"]);
@@ -188,6 +188,25 @@ describe("Security Knowledge Map page", () => {
     render(<KnowledgeMapPage />);
     await waitFor(() => expect(item("OAuth 2.0").getAttribute("aria-selected")).toBe("true"));
     expect(window.location.hash).toBe("#knowledge-map?topic=oauth-2");
+  });
+
+  it("a related topic in the detail panel navigates the map to that topic", async () => {
+    window.location.hash = "#knowledge-map?topic=oauth-2";
+    const json = (body) => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+    mockApi((url) => {
+      if (url.endsWith("/knowledge/topics/oauth-2")) return json({ id: 1, topic_key: "oauth-2", name: "OAuth 2.0", description: "Delegated authorization.", sections: [], level_expectations: [], related_topics: [{ id: 3, topic_key: "secure-boot-chain", name: "Secure Boot Chain", relationship_type: "dependency", direction: "incoming", label: "Used by" }] });
+      if (url.endsWith("/knowledge/topics/secure-boot-chain")) return json({ id: 3, topic_key: "secure-boot-chain", name: "Secure Boot Chain", description: "", sections: [], level_expectations: [], related_topics: [] });
+      if (url.endsWith("/knowledge-map/topics/secure-boot-chain/placements")) return json([placement([[5, "Embedded Systems Security"]], "security", "Security")]);
+      return null;
+    });
+    render(<KnowledgeMapPage />);
+    const details = await screen.findByRole("complementary", { name: "Selected node details" });
+    fireEvent.click(await within(details).findByRole("tab", { name: "Related Topics" }));
+    expect(within(details).getByText("Used by")).toBeTruthy();
+    fireEvent.click(within(details).getByRole("button", { name: "Secure Boot Chain" }));
+    await waitFor(() => expect(item("Secure Boot Chain").getAttribute("aria-selected")).toBe("true"));
+    expect(window.location.hash).toBe("#knowledge-map?topic=secure-boot-chain");
+    expect(item("Embedded Systems Security").getAttribute("aria-expanded")).toBe("true");
   });
 
   it("supports tree keyboard navigation with ARIA levels", async () => {
