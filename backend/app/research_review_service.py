@@ -445,6 +445,27 @@ def accept_change(db: Session, change_id: int, expected_version: int, actor: str
     return change
 
 
+def accept_submission_changes(db: Session, submission_id: int, expected_versions: dict[int, int], actor: str, note: str | None) -> tuple[PublicationBatch, list[int], list[int]]:
+    # Accept-and-merge for several changes of one source in a single publication batch: a stale or invalid change publishes nothing.
+    changes = list(db.scalars(select(ReviewChange).where(ReviewChange.submission_id == submission_id, ReviewChange.id.in_(expected_versions)).order_by(ReviewChange.id)).all())
+    if len(changes) != len(expected_versions):
+        raise HTTPException(status_code=404, detail="One or more review changes were not found for this source")
+    for change in changes:
+        _check_version(change, expected_versions[change.id])
+        if change.status in APPROVED_STATUSES:
+            continue
+        proposed = deepcopy(change.proposed_snapshot)
+        try:
+            _validate_snapshot(db, proposed)
+        except HTTPException as exc:
+            raise HTTPException(status_code=exc.status_code, detail=f"{change.proposed_snapshot.get('competency_name') or f'Change {change.id}'}: {exc.detail}") from exc
+        change.status = "accepted"
+        change.reviewer_snapshot = proposed
+        _record(change, "accepted", actor, change.proposed_snapshot, proposed, note)
+    db.flush()
+    return publish_changes(db, [change.id for change in changes], {change.id: change.version for change in changes}, actor)
+
+
 def modify_change(db: Session, change_id: int, payload: ReviewModifyRequest, actor: str) -> ReviewChange:
     change = _require_change(db, change_id)
     _check_version(change, payload.expected_version)
@@ -632,6 +653,8 @@ def _attach_evidence(db: Session, expectation: DomainLevelExpectation, change: R
         ))
         if exists is None:
             db.add(ExpectationSource(expectation_id=expectation.id, source_id=source_id, supporting_excerpt=excerpt))
+            # Flushed so a later change in the same batch citing this source finds the link instead of inserting it again.
+            db.flush()
         elif excerpt not in exists.supporting_excerpt:
             exists.supporting_excerpt = f"{exists.supporting_excerpt}; {excerpt}" if exists.supporting_excerpt else excerpt
 
