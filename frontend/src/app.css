@@ -665,3 +665,5 @@ code { color: #9ff2cc; font: .9em 'DM Mono', monospace; }
 .kma-suggestion span { display: grid; gap: 3px; }
 .kma-suggestion small { color: #8da3b7; }
 .kma-note { color: #f3c878 !important; }
+.duplicate-check { display: grid; gap: 4px; margin-top: 8px; padding: 8px 10px; border: 1px solid #315e8f; border-radius: 6px; background: rgba(55,108,164,.1); font-size: .72rem; }
+.duplicate-check p { margin: 0; color: #b2c2d1; }

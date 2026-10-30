@@ -10,6 +10,8 @@ from fastapi import HTTPException
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, selectinload
 
+from .duplicate_matching import competency_names
+from .name_matching import STRONG_MATCH, best_match
 from .models import (
     CareerLevel,
     Competency,
@@ -154,6 +156,16 @@ def ensure_review_change(db: Session, finding: ResearchFinding) -> ReviewChange:
     domains = _domain_items(finding)
     expectations = _find_expectations(db, finding)
     incoming = _incoming_snapshot(finding, domains)
+    details = finding.details or {}
+    # Duplicate analysis for reviewers: how the skill was matched, and similar published skills worth merging into.
+    if details.get("skill_match"):
+        incoming["skill_match"] = details["skill_match"]
+    if details.get("possible_competency_matches"):
+        incoming["possible_competency_matches"] = details["possible_competency_matches"]
+    if finding.competency_id is None:
+        twin = db.scalar(select(ReviewChange.id).where(ReviewChange.change_type == "new_competency", ReviewChange.status.in_(("pending", "modified", "accepted")), func.lower(ReviewChange.proposed_snapshot["competency_name"].as_string()) == incoming["competency_name"].strip().lower()).order_by(ReviewChange.id))
+        if twin is not None:
+            incoming["same_new_skill_as_change_id"] = twin
     original = {
         "competency": _competency_snapshot(finding.competency),
         "expectations": [_expectation_snapshot(item) for item in expectations],
@@ -731,8 +743,14 @@ def publish_changes(db: Session, change_ids: list[int] | None, expected_versions
     for change in changes:
         snapshot = change.proposed_snapshot
         if change.change_type == "new_competency":
-            # A competency with the same name may already exist (published earlier); merge into it instead of duplicating.
+            # A competency with the same name, or a name meaning the same thing, may already exist (published earlier
+            # or earlier in this batch); merge into it instead of creating a duplicate skill.
             competency = db.scalar(select(Competency).where(func.lower(Competency.name) == snapshot["competency_name"].strip().lower()))
+            if competency is None:
+                similar, score = best_match(snapshot["competency_name"], db.scalars(select(Competency)).all(), competency_names)
+                if similar is not None and score >= STRONG_MATCH:
+                    competency = similar
+                    change.reviewer_note = f"{change.reviewer_note or ''} Published into existing skill {similar.name} (name similarity {score:.2f}).".strip()
             if competency is None:
                 category = db.get(CompetencyCategory, snapshot["category_id"])
                 competency = Competency(name=snapshot["competency_name"].strip(), slug=_make_slug_unique(db, snapshot["competency_name"]), description=snapshot.get("competency_description", ""), category_id=category.id)

@@ -32,6 +32,7 @@ from .models import (
 from .ai_providers import AIProviderRegistry
 from .ollama_client import OllamaClient
 from .phase5_schemas import DraftUpdate, ExtractionResult, ExtractedRequirement
+from .duplicate_matching import PROMPT_PENDING_SKILLS, match_skill, open_new_skill_names, possible_competency_matches
 from .research_review_service import ensure_submission_changes
 from .knowledge_topic_service import ensure_all_topic_proposals
 
@@ -102,6 +103,8 @@ def taxonomy(db: Session) -> dict[str, list[dict]]:
         "categories": [{"slug": item.slug, "name": item.name, "description": item.description, "aliases": alias_data(item)} for item in categories],
         "industries": [{"slug": item.slug, "name": item.name, "description": item.description, "parent_id": item.parent_id, "aliases": alias_data(item)} for item in industries],
         "competencies": [{"slug": item.slug, "name": item.name, "category_slug": item.category.slug if item.category else None} for item in db.scalars(select(Competency).join(Competency.category).where(CompetencyCategory.is_active.is_(True)).options(selectinload(Competency.category)).order_by(Competency.name)).all()],
+        # Skills already proposed by earlier research and awaiting review; reusing their names avoids duplicates.
+        "proposed_competencies": open_new_skill_names(db, PROMPT_PENDING_SKILLS),
     }
 
 
@@ -202,6 +205,7 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
     categories = list(db.scalars(select(CompetencyCategory).where(CompetencyCategory.is_active.is_(True)).options(selectinload(CompetencyCategory.aliases))).all())
     competencies = list(db.scalars(select(Competency).options(selectinload(Competency.category))).all())
     grouped: dict[tuple[int, int, int, int | None], list[tuple[ExtractedRequirement, Competency]]] = defaultdict(list)
+    pending_skill_names = open_new_skill_names(db)
     category_lookup = {item.slug.casefold() for item in categories} | {item.name.casefold() for item in categories} | {alias.normalized_alias for item in categories for alias in getattr(item, "aliases", []) if not alias.requires_context}
     for requirement in extraction.requirements:
         domain_candidates = classify_domains(requirement, domains)
@@ -210,6 +214,12 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
         level = classify_level(requirement, levels)
         category = category_for(requirement, categories)
         competency, normalized_name = normalize_competency(requirement.competency_name, competencies)
+        skill_match = None
+        if competency is None:
+            # Reuse a published skill or a skill already awaiting review when the name means the same thing.
+            competency, normalized_name, skill_match = match_skill(normalized_name, competencies, pending_skill_names)
+            if competency is None and normalized_name.casefold() not in {name.casefold() for name in pending_skill_names}:
+                pending_skill_names.append(normalized_name)
         classification_gaps = []
         if not domain_candidates:
             classification_gaps.append("domain")
@@ -240,6 +250,8 @@ def consolidate(db: Session, submission: ResearchSubmission, extraction: Extract
                 "industry_slugs": [item.slug for item in ([primary_industry] if primary_industry else []) + secondary_industries],
                 "industry_classification_evidence": requirement.industry_classification_evidence,
                 "classification_gaps": classification_gaps,
+                "skill_match": skill_match,
+                "possible_competency_matches": possible_competency_matches(normalized_name, competencies) if competency is None else [],
             },
         )
         db.add(finding)

@@ -149,3 +149,22 @@ describe("Research Review", () => {
     expect(screen.queryByText("Unlock research review")).toBeNull();
   });
 });
+
+describe("Research Review duplicate check", () => {
+  it("explains automatic matches, twins awaiting review and possible duplicates", async () => {
+    const { DuplicateCheck } = await import("../src/ResearchReviewPage");
+    const { render: draw, screen: view } = await import("@testing-library/react");
+    draw(<DuplicateCheck proposed={{ skill_match: { method: "similar_pending_skill", matched: "Security incident response", score: 1 }, same_new_skill_as_change_id: 42, possible_competency_matches: [{ competency_id: 3, name: "Threat Modeling", score: 0.72 }] }} />);
+    expect(view.getByText("Security incident response")).toBeTruthy();
+    expect(view.getByText(/Same new skill as review change #42/)).toBeTruthy();
+    expect(view.getByText("Threat Modeling")).toBeTruthy();
+    expect(view.getByText(/\(72%\)/)).toBeTruthy();
+  });
+
+  it("renders nothing without duplicate information", async () => {
+    const { DuplicateCheck } = await import("../src/ResearchReviewPage");
+    const { render: draw } = await import("@testing-library/react");
+    const { container } = draw(<DuplicateCheck proposed={{ competency_name: "Unique skill" }} />);
+    expect(container.innerHTML).toBe("");
+  });
+});

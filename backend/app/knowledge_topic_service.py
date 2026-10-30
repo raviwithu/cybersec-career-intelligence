@@ -30,6 +30,7 @@ from .models import (
     ResearchSource,
     SecurityDomain,
 )
+from .name_matching import STRONG_MATCH, best_match
 from .knowledge_topic_schemas import KnowledgeTopicDraft, KnowledgeTopicUpdate, TopicProposalReview
 
 
@@ -292,34 +293,98 @@ def _proposal_query():
     return select(KnowledgeTopicProposal).options(selectinload(KnowledgeTopicProposal.topic)).where(KnowledgeTopicProposal.contract == "legacy")
 
 
-def ensure_topic_proposal(db: Session, finding: ResearchFinding) -> KnowledgeTopicProposal | None:
-    existing = db.scalar(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.finding_id == finding.id))
-    if existing is not None:
-        return existing
-    candidate_name = (finding.normalized_name or finding.candidate_name or "").strip()
-    if not candidate_name:
-        return None
-    topics = db.scalars(topic_query().where(KnowledgeTopic.publication_status == "published", KnowledgeTopic.is_active.is_(True))).unique().all()
-    matching = next((topic for topic in topics if normalize(topic.name) == normalize(candidate_name) or any(normalize(alias) == normalize(candidate_name) for alias in (topic.aliases or []))), None)
+def _finding_additions(finding: ResearchFinding) -> tuple[list[int], list[int], list[dict[str, Any]]]:
     domain_ids = [link.domain_id for link in finding.domains] or ([finding.domain_id] if finding.domain_id else [])
     industry_ids = [link.industry_id for link in finding.industries] or ([finding.primary_industry_id] if finding.primary_industry_id else [])
     level_expectations = []
     if finding.career_level_id:
         level_expectations.append({"career_level_id": finding.career_level_id, "industry_id": finding.primary_industry_id, "expectation": finding.practical_capability or finding.responsibilities or finding.technical_knowledge, "practical_capability": finding.practical_capability or finding.responsibilities, "display_order": 0})
+    return domain_ids, industry_ids, level_expectations
+
+
+def _with_additions(data: dict[str, Any], domain_ids: list[int], industry_ids: list[int], level_expectations: list[dict[str, Any]], competency_id: int | None = None, alias: str | None = None) -> dict[str, Any]:
+    """Adds a finding's domains, industries, missing career levels, skill link and alternative name to topic data."""
+    merged = deepcopy(data)
+    merged["domain_ids"] = sorted(set(merged.get("domain_ids", []) + domain_ids))
+    merged["industry_ids"] = sorted(set(merged.get("industry_ids", []) + industry_ids))
+    existing_levels = {(item["career_level_id"], item.get("industry_id")) for item in merged.get("level_expectations", [])}
+    for item in level_expectations:
+        if (item["career_level_id"], item.get("industry_id")) not in existing_levels:
+            merged.setdefault("level_expectations", []).append(item)
+            existing_levels.add((item["career_level_id"], item.get("industry_id")))
+    if competency_id and competency_id not in merged.get("related_competency_ids", []):
+        merged["related_competency_ids"] = sorted(set(merged.get("related_competency_ids", []) + [competency_id]))
+    if alias and normalize(alias) != normalize(merged.get("name", "")) and all(normalize(alias) != normalize(item) for item in merged.get("aliases", [])):
+        merged["aliases"] = sorted(set(merged.get("aliases", []) + [alias.strip()[:120]]), key=str.casefold)
+    return merged
+
+
+def _topic_names(topic: KnowledgeTopic) -> list[str]:
+    return [topic.name, *(topic.aliases or [])]
+
+
+def _matching_topic(topics: list[KnowledgeTopic], finding: ResearchFinding, candidate_name: str) -> KnowledgeTopic | None:
+    # Exact name or alias first, then the topic already linked to the finding's skill, then a name meaning the same thing.
+    exact = next((topic for topic in topics if any(normalize(name) == normalize(candidate_name) for name in _topic_names(topic))), None)
+    if exact is not None:
+        return exact
+    if finding.competency_id:
+        linked = next((topic for topic in topics if any(link.competency_id == finding.competency_id for link in topic.competencies)), None)
+        if linked is not None:
+            return linked
+    similar, score = best_match(candidate_name, topics, _topic_names)
+    return similar if score >= STRONG_MATCH else None
+
+
+def _remember(finding: ResearchFinding, proposal: KnowledgeTopicProposal) -> None:
+    finding.details = {**(finding.details or {}), "topic_proposal_id": proposal.id}
+
+
+def _consolidate_into(db: Session, proposal: KnowledgeTopicProposal, finding: ResearchFinding, proposed: dict[str, Any]) -> KnowledgeTopicProposal:
+    """Adds a finding to an open proposal instead of creating another one for the same topic."""
+    before = deepcopy(proposal.proposed_snapshot)
+    if proposed != before:
+        proposal.proposed_snapshot = proposed
+        if proposal.proposal_type == "evidence_update":
+            proposal.proposal_type = "topic_update"
+        proposal.version += 1
+    proposal.updated_at = now()
+    source_id = finding.submission.source_id if finding.submission else None
+    if source_id and finding.evidence_excerpt:
+        db.add(KnowledgeTopicEvidence(topic_id=proposal.topic_id, source_id=source_id, proposal_id=proposal.id, excerpt=finding.evidence_excerpt, evidence_type="supporting", confidence=finding.confidence))
+    db.add(KnowledgeTopicAudit(topic_id=proposal.topic_id, proposal_id=proposal.id, action="proposal_consolidated", actor="system", before_snapshot=before, after_snapshot=proposal.proposed_snapshot, reason=f"Research finding {finding.id} matched this open proposal; added to it instead of creating a duplicate."))
+    _remember(finding, proposal)
+    return proposal
+
+
+def ensure_topic_proposal(db: Session, finding: ResearchFinding) -> KnowledgeTopicProposal | None:
+    existing = db.scalar(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.finding_id == finding.id))
+    if existing is not None:
+        return existing
+    consolidated_id = (finding.details or {}).get("topic_proposal_id")
+    if consolidated_id and (consolidated := db.get(KnowledgeTopicProposal, consolidated_id)) is not None:
+        return consolidated
+    candidate_name = (finding.normalized_name or finding.candidate_name or "").strip()
+    if not candidate_name:
+        return None
+    topics = list(db.scalars(topic_query().where(KnowledgeTopic.publication_status == "published", KnowledgeTopic.is_active.is_(True))).unique().all())
+    matching = _matching_topic(topics, finding, candidate_name)
+    domain_ids, industry_ids, level_expectations = _finding_additions(finding)
     if matching:
+        # One open update per topic: later findings for the same topic join it.
+        open_update = db.scalar(_proposal_query().where(KnowledgeTopicProposal.topic_id == matching.id, KnowledgeTopicProposal.status == "review", KnowledgeTopicProposal.proposal_type.in_(("topic_update", "evidence_update"))).order_by(KnowledgeTopicProposal.id))
+        if open_update is not None:
+            return _consolidate_into(db, open_update, finding, _with_additions(open_update.proposed_snapshot, domain_ids, industry_ids, level_expectations))
         before = snapshot(matching)
-        proposed = deepcopy(before)
-        proposed["domain_ids"] = sorted(set(proposed.get("domain_ids", []) + domain_ids))
-        proposed["industry_ids"] = sorted(set(proposed.get("industry_ids", []) + industry_ids))
-        if level_expectations:
-            existing_levels = {(item["career_level_id"], item.get("industry_id")) for item in proposed.get("level_expectations", [])}
-            for item in level_expectations:
-                if (item["career_level_id"], item.get("industry_id")) not in existing_levels:
-                    proposed.setdefault("level_expectations", []).append(item)
+        proposed = _with_additions(before, domain_ids, industry_ids, level_expectations)
         proposal_type = "evidence_update" if proposed == before else "topic_update"
         original_snapshot = before
         topic_id = matching.id
     else:
+        open_new = list(db.scalars(_proposal_query().where(KnowledgeTopicProposal.proposal_type == "new_topic", KnowledgeTopicProposal.topic_id.is_(None), KnowledgeTopicProposal.status == "review")).all())
+        twin, score = best_match(candidate_name, open_new, lambda item: [item.proposed_snapshot.get("name", ""), *item.proposed_snapshot.get("aliases", [])])
+        if twin is not None and score >= STRONG_MATCH:
+            return _consolidate_into(db, twin, finding, _with_additions(twin.proposed_snapshot, domain_ids, industry_ids, level_expectations, finding.competency_id, finding.candidate_name or candidate_name))
         proposed = {"name": candidate_name, "slug": slugify(candidate_name), "description": finding.technical_knowledge or finding.practical_capability or f"Understand {candidate_name}.", "category_id": finding.category_id, "parent_topic_id": None, "domain_ids": domain_ids, "industry_ids": industry_ids, "aliases": [], "related_competency_ids": [finding.competency_id] if finding.competency_id else [], "level_expectations": level_expectations, "display_order": 0}
         proposal_type = "new_topic"
         original_snapshot = None
@@ -427,6 +492,26 @@ def publish_topics(db: Session, proposal_ids: list[int] | None, topic_ids: list[
         versions[topic.id] = topic.version
     for proposal in proposals:
         data = proposal.proposed_snapshot
+        duplicate_of = None
+        if proposal.proposal_type == "new_topic" and proposal.topic_id is None and not data.get("target_topic_id"):
+            # The same topic may have been published since this proposal was made: merge into it instead of duplicating.
+            existing_topics = list(db.scalars(topic_query().where(KnowledgeTopic.is_active.is_(True))).unique().all())
+            similar, score = best_match(data.get("name", ""), existing_topics, _topic_names)
+            same_slug = next((item for item in existing_topics if item.slug == slugify(data.get("slug") or data.get("name", ""))), None)
+            duplicate_of = same_slug or (similar if score >= STRONG_MATCH else None)
+        if duplicate_of is not None:
+            merged_before = snapshot(duplicate_of)
+            _publish_topic(db, duplicate_of, _with_additions(merged_before, data.get("domain_ids", []), data.get("industry_ids", []), data.get("level_expectations", []), alias=data.get("name")) | {"related_competency_ids": sorted(set(merged_before.get("related_competency_ids", []) + data.get("related_competency_ids", [])))}, actor, reason or "New topic proposal matched an existing topic and was merged into it.")
+            db.add(KnowledgeTopicAudit(topic_id=duplicate_of.id, proposal_id=proposal.id, action="merged", actor=actor, before_snapshot=merged_before, after_snapshot=snapshot(duplicate_of), reason=f"Proposed new topic “{data.get('name', '')}” matched existing topic {duplicate_of.name}; merged instead of creating a duplicate."))
+            proposal.topic_id = duplicate_of.id
+            _replace_evidence(db, duplicate_of, proposal)
+            published_topics.append(duplicate_of.id)
+            versions[duplicate_of.id] = duplicate_of.version
+            proposal.status = "published"
+            proposal.published_at = now()
+            proposal.updated_at = now()
+            db.add(KnowledgeTopicAudit(topic_id=proposal.topic_id, proposal_id=proposal.id, action="proposal_published", actor=actor, before_snapshot=proposal.original_snapshot, after_snapshot=proposal.proposed_snapshot, reason=reason))
+            continue
         if proposal.proposal_type == "new_topic" and proposal.topic_id is None:
             draft = draft_from_snapshot(data)
             stable_key = slugify(draft.slug or draft.name)
