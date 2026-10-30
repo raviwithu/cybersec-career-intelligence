@@ -38,6 +38,16 @@ describe("Yahoo Job Alerts administrator page", () => {
     expect(await screen.findByRole("heading", { name: "Sync History" })).toBeTruthy();
   });
 
+  it("shows how many emails a sync run skipped as already scanned", async () => {
+    const run = { id: 7, mode: "initial", mailbox: "Inbox", status: "completed", date_from: null, date_to: null, messages_scanned: 2, alerts_detected: 1, jobs_extracted: 3, duplicates: 0, errors: 0, error_message: null, summary: { already_scanned: 5 } };
+    const baseFetch = global.fetch;
+    global.fetch = vi.fn((url) => url.includes("/sync-runs") ? response([run]) : baseFetch(url));
+    render(<YahooJobAlertsPage />);
+    await screen.findByRole("heading", { name: "Job Inbox" });
+    fireEvent.click(screen.getByRole("tab", { name: "Sync History" }));
+    expect(await screen.findByText("5 already scanned")).toBeTruthy();
+  });
+
   it("approves large selections in batches of 100 and summarises the result", async () => {
     const items = Array.from({ length: 250 }, (_, index) => ({ id: index + 1, title: `Job ${index + 1}`, employer: "Example", location: "Remote", source_provider: "LinkedIn Job Alerts", description_complete: false, review_status: "pending", duplicate_status: "unique", ingestion_status: "not_approved", first_seen_at: null }));
     const batches = [];
