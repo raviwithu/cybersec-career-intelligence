@@ -613,3 +613,48 @@ code { color: #9ff2cc; font: .9em 'DM Mono', monospace; }
   .km-workspace.topic-open { grid-template-columns: 1fr; }
   .kd-canvas { height: 280px; }
 }
+
+/* Knowledge Map Management, the Mind Map Changes review tab and structured section editors (KM-4) */
+.km-pending-badge { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 2px 6px; border: 1px solid #8a6a2a; border-radius: 4px; color: #f3c878; background: rgba(138,106,42,.18); font: 700 9px 'DM Mono', monospace; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+.km-pending-badge::before { content: "◷"; }
+.knowledge-map-admin { display: grid; gap: 14px; }
+.kma-top { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; align-items: start; }
+.kma-hint { margin: 0; }
+.kma-form { display: grid; gap: 9px; }
+.kma-form h3 { margin: 0; font-size: .9rem; }
+.kma-form label { display: grid; gap: 4px; margin: 0; font-size: .7rem; }
+.kma-form input, .kma-form select, .kma-form textarea { padding: 8px 10px; border: 1px solid #29455f; border-radius: 6px; color: #eaf4fc; background: #0b1b2c; font-size: .74rem; }
+.kma-topic-select { display: grid; gap: 6px; }
+.kma-warning { margin: 0; padding: 8px 10px; border: 1px solid #8a6a2a; border-radius: 6px; color: #f3c878; background: rgba(138,106,42,.12); font-size: .7rem; }
+.kma-error { margin: 0; color: #f7b4c3; font-size: .72rem; }
+.kma-duplicates ul { margin: 4px 0 0; padding-left: 16px; font-size: .72rem; }
+.kma-duplicates li { margin-bottom: 4px; }
+.kma-actions { display: grid; gap: 10px; padding-bottom: 14px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.kma-actions-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.kma-action-picker { display: flex; flex-wrap: wrap; gap: 4px; }
+.kma-action-picker button { min-height: 28px; padding: 4px 8px; border: 1px solid #29455f; border-radius: 6px; color: #aebdd0; background: transparent; font-size: .64rem; font-weight: 700; }
+.kma-action-picker button.active { border-color: #74e0b7; color: #07151f; background: #74e0b7; }
+.kma-reorder { display: grid; gap: 4px; margin: 0; padding-left: 20px; font-size: .72rem; }
+.kma-reorder li span { display: inline-block; min-width: 60%; }
+.kma-reorder button { min-width: 28px; margin-left: 4px; padding: 2px 6px; border: 1px solid #31506d; border-radius: 4px; color: #bdd0e0; background: #132a40; }
+.kma-reorder button:disabled { opacity: .4; }
+.kma-history { display: grid; gap: 6px; max-height: 260px; overflow-y: auto; margin: 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+.kma-history-row { display: flex !important; grid-template-columns: none; align-items: flex-start; gap: 8px; }
+.kma-history-row span { display: grid; gap: 2px; }
+.kma-history-row small { color: #7d95ab; font-size: .64rem; }
+.kma-pending-list { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; font-size: .72rem; }
+.kma-pending-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.kr-reason { display: grid; gap: 3px; margin: 8px 0 0; color: #b2c2d1; font-size: .74rem; }
+.kr-map-change { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-top: 14px; }
+.kr-diff { margin: 6px 0 0; max-height: 360px; overflow: auto; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #091928; font: 11px/1.55 'DM Mono', monospace; white-space: pre-wrap; }
+.kr-diff-added { display: block; color: #9bf1c9; background: rgba(42,105,96,.18); }
+.kr-diff-removed { display: block; color: #f7b4c3; background: rgba(122,68,82,.18); text-decoration: line-through; text-decoration-color: rgba(247,180,195,.5); }
+.kr-diff-same { display: block; color: #8da3b7; }
+.kr-branch { margin-top: 8px; padding: 10px; border: 1px solid #213c55; border-radius: 7px; }
+.kr-branch-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px; font-size: .72rem; }
+.kr-branch-columns ol { margin: 4px 0 0; padding-left: 18px; }
+.kse-structured { display: grid; gap: 12px; margin: 12px 0; }
+.kse-item { display: grid; gap: 8px; padding: 12px; border: 1px solid #29455f; border-radius: 8px; }
+.kse-code-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.kse-code { font: 11px/1.5 'DM Mono', monospace; }
+.kma-new-topic { padding: 18px 20px; }

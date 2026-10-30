@@ -14,7 +14,7 @@ export function nodeClassName(node, selected) {
 }
 
 // WAI-ARIA tree view of the visible map. One row holds focus at a time (roving tabindex).
-export default function KnowledgeMapTree({ treeRoot, rows, expanded, selectedId, onActivate, onToggle }) {
+export default function KnowledgeMapTree({ treeRoot, rows, expanded, selectedId, onActivate, onToggle, badgeFor }) {
   const [focusedId, setFocusedId] = useState(selectedId);
   const itemRefs = useRef({});
   const indexById = useMemo(() => Object.fromEntries(rows.map((row, index) => [row.id, index])), [rows]);
@@ -59,6 +59,7 @@ export default function KnowledgeMapTree({ treeRoot, rows, expanded, selectedId,
         {node.type === "branch" && <small>{node.topicCount}</small>}
         {(node.type === "domain" || node.type === "child-domain") && <small>{node.topicCount} topics</small>}
         {node.type === "topic" && node.placementCount > 1 && <small>{node.placementCount} domains</small>}
+        {badgeFor?.(node) && <span className="km-pending-badge">{badgeFor(node)}</span>}
       </div>
       {open && item.children.length > 0 && <ul role="group">{item.children.map((child, index) => renderItem(child, level + 1, index + 1, item.children.length))}</ul>}
     </li>;

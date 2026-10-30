@@ -10,13 +10,13 @@ const PAN_STEP = 160;
 
 // Graph nodes are rendered by us: one focusable button per node. Enter selects; Space expands or collapses.
 const MapNode = memo(function MapNode({ data }) {
-  const { node, selected, open, onActivate, onToggle } = data;
+  const { node, selected, open, badge, onActivate, onToggle } = data;
   const expandable = isExpandable(node);
   const inert = node.type === "empty" || node.type === "loading";
   return <div className={nodeClassName(node, selected)} style={{ width: NODE_WIDTH }}>
     <Handle type="target" position={Position.Left} isConnectable={false} className="km-handle" />
     <button type="button" className="km-node-main" disabled={inert} aria-pressed={selected} aria-expanded={expandable ? open : undefined} onClick={() => onActivate(node)} onKeyDown={(event) => { if (event.key === " " && expandable) { event.preventDefault(); onToggle(node.id); } }}>
-      <span className="km-node-icon" aria-hidden="true">{nodeIcon(node)}</span><span className="km-node-label" title={node.label}>{node.label}</span>
+      <span className="km-node-icon" aria-hidden="true">{nodeIcon(node)}</span><span className="km-node-label" title={node.label}>{node.label}</span>{badge && <span className="km-pending-badge">{badge}</span>}
     </button>
     {expandable && <button type="button" className="km-node-toggle" tabIndex={-1} aria-label={`${open ? "Collapse" : "Expand"} ${node.label}`} onClick={() => onToggle(node.id)}>{open ? "−" : "+"}</button>}
     <Handle type="source" position={Position.Right} isConnectable={false} className="km-handle" />
@@ -25,11 +25,11 @@ const MapNode = memo(function MapNode({ data }) {
 
 const nodeTypes = { mapNode: MapNode };
 
-function GraphCanvas({ layout, expanded, selectedId, focusRequest, onActivate, onToggle, commandRef, reduceMotion }) {
+function GraphCanvas({ layout, expanded, selectedId, focusRequest, onActivate, onToggle, commandRef, reduceMotion, badgeFor }) {
   const flow = useReactFlow();
   const duration = reduceMotion ? 0 : 250;
   // Positions come from the memoised layout; selection only changes node data, never positions.
-  const nodes = useMemo(() => layout.positions.map((item) => ({ id: item.id, type: "mapNode", position: { x: item.x, y: item.y }, data: { node: item.node, selected: item.id === selectedId, open: Boolean(expanded[item.id]), onActivate, onToggle } })), [layout, expanded, selectedId, onActivate, onToggle]);
+  const nodes = useMemo(() => layout.positions.map((item) => ({ id: item.id, type: "mapNode", position: { x: item.x, y: item.y }, data: { node: item.node, selected: item.id === selectedId, open: Boolean(expanded[item.id]), badge: badgeFor?.(item.node) || null, onActivate, onToggle } })), [layout, expanded, selectedId, onActivate, onToggle, badgeFor]);
   const edges = useMemo(() => layout.edges.map((edge) => ({ ...edge, type: "smoothstep", focusable: false })), [layout]);
 
   useEffect(() => {

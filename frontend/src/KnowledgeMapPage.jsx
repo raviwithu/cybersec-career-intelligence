@@ -32,7 +32,7 @@ function topicFromHash() {
 
 // Deep links take the form #knowledge-map?topic=<topic_key>. replaceState keeps history clean and fires no hashchange.
 function writeTopicToHash(topicKey) {
-  if (!window.location.hash.startsWith("#knowledge-map")) return;
+  if (window.location.hash.split("?")[0] !== "#knowledge-map") return;
   const next = `#knowledge-map${topicKey ? `?topic=${encodeURIComponent(topicKey)}` : ""}`;
   if (window.location.hash !== next) window.history.replaceState(window.history.state, "", next);
 }
@@ -72,7 +72,9 @@ function NodeDetails({ node, state, placements, onReveal, onSelectTopic, onNavig
   </>;
 }
 
-export default function KnowledgeMapPage({ onNavigate }) {
+// admin (Knowledge Map Management only): { badgeFor(node) -> label or null, renderDetails(node, context) -> element }.
+// The public page never receives it, so pending badges and admin actions never appear on the public map.
+export default function KnowledgeMapPage({ onNavigate, admin = null }) {
   const [state, setMapState] = useState(initialMapState);
   // Async loaders read and write through this ref so sequential steps (search reveal) see each other's results.
   const stateRef = useRef(state);
@@ -247,13 +249,14 @@ export default function KnowledgeMapPage({ onNavigate }) {
   const loadingCount = Object.values(status).filter((value) => value === "loading").length;
 
   const rootStatus = status[ROOT_ID];
+  const header = admin ? null : <PageHeader eyebrow="EXPLORE" title="Security Knowledge Map" description="Expand security domains into Foundations, Security and Common Vulnerabilities, one level at a time. Only published, reviewed topics appear." />;
   if (!state.nodes[ROOT_ID]) return <>
-    <PageHeader eyebrow="EXPLORE" title="Security Knowledge Map" description="Expand security domains into Foundations, Security and Common Vulnerabilities, one level at a time." />
+    {header}
     {rootStatus instanceof Error ? <ErrorState error={rootStatus} onRetry={() => loadChildren(ROOT_ID)} /> : <Loading label="Loading the knowledge map" />}
   </>;
 
   return <div className="knowledge-map-page">
-    <PageHeader eyebrow="EXPLORE" title="Security Knowledge Map" description="Expand security domains into Foundations, Security and Common Vulnerabilities, one level at a time. Only published, reviewed topics appear." />
+    {header}
     <section className="panel km-toolbar" role="toolbar" aria-label="Map controls">
       <div className="km-search">
         <label><span className="field-label">Search topics</span><input type="search" value={query} maxLength={100} placeholder="Name, alias or topic key" aria-describedby="km-search-hint" onChange={(event) => setQuery(event.target.value)} /></label>
@@ -295,12 +298,13 @@ export default function KnowledgeMapPage({ onNavigate }) {
     <div className={`km-workspace ${selectedNode?.type === "topic" ? "topic-open" : ""}`}>
       <section className="panel km-canvas" aria-label={graph ? "Map graph" : "Map list"}>
         {graph
-          ? <Suspense fallback={<Loading label="Loading the graph view" />}><KnowledgeMapGraph layout={layout} expanded={state.expanded} selectedId={selectedId} focusRequest={focusRequest} onActivate={activateNode} onToggle={toggleNode} commandRef={commandRef} reduceMotion={reduceMotion} /></Suspense>
-          : <KnowledgeMapTree treeRoot={treeRoot} rows={rows} expanded={state.expanded} selectedId={selectedId} onActivate={activateNode} onToggle={toggleNode} />}
+          ? <Suspense fallback={<Loading label="Loading the graph view" />}><KnowledgeMapGraph layout={layout} expanded={state.expanded} selectedId={selectedId} focusRequest={focusRequest} onActivate={activateNode} onToggle={toggleNode} commandRef={commandRef} reduceMotion={reduceMotion} badgeFor={admin?.badgeFor} /></Suspense>
+          : <KnowledgeMapTree treeRoot={treeRoot} rows={rows} expanded={state.expanded} selectedId={selectedId} onActivate={activateNode} onToggle={toggleNode} badgeFor={admin?.badgeFor} />}
         {state.children[ROOT_ID]?.length === 0 && <EmptyState title="No active security domains" message="Domains appear here once they are active in Taxonomy Management." />}
       </section>
       <aside className={`panel km-details ${panelOpen ? "open" : ""}`} aria-label="Selected node details">
         <button type="button" className="km-details-close" aria-label="Close details" onClick={() => setPanelOpen(false)}>×</button>
+        {admin && selectedNode && admin.renderDetails(selectedNode, { state, placements, loadChildren })}
         <NodeDetails node={selectedNode} state={state} placements={placements} onReveal={reveal} onSelectTopic={openTopicKey} onNavigate={onNavigate} />
       </aside>
     </div>

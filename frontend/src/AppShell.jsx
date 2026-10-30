@@ -19,6 +19,7 @@ import { useApi } from "./useApi";
 
 // Lazy so other pages do not download the graph library.
 const KnowledgeMapPage = lazy(() => import("./KnowledgeMapPage"));
+const KnowledgeMapAdminPage = lazy(() => import("./KnowledgeMapAdminPage"));
 
 function flattenDomains(domains) { return domains.flatMap((domain) => [domain, ...(domain.children || [])]); }
 
@@ -81,6 +82,7 @@ export default function AppShell() {
     : view === "domains" ? <DomainsPage domains={data.domains} levels={data.levels} categories={data.categories} matrix={data.matrix} selectedDomain={selectedDomain} selectedLevel={selectedLevel} selectedIndustry={selectedIndustry} onSelectDomain={selectDomain} onSelectLevel={setSelectedLevel} onCompetency={openCompetency} />
       : view === "knowledge-base" ? <KnowledgeTopicPage onNavigate={navigate} />
         : view === "knowledge-map" ? <Suspense fallback={<Loading label="Loading the knowledge map" />}><KnowledgeMapPage onNavigate={navigate} /></Suspense>
+        : view === "knowledge-map-admin" ? <Suspense fallback={<Loading label="Loading knowledge map management" />}><KnowledgeMapAdminPage onNavigate={navigate} /></Suspense>
         : view === "knowledge-topic" ? <KnowledgeTopicPage topicKey={selectedTopicKey} onNavigate={navigate} />
       : view === "matrix" ? <MatrixPage matrix={data.matrix} domains={data.domains} levels={data.levels} onCell={selectMatrixCell} />
         : view === "compare" ? <ComparePage domains={allDomains} levels={data.levels} selectedDomain={selectedDomain || allDomains[0]} selectedIndustry={selectedIndustry} compareLevels={compareLevels} onDomainChange={(domain) => setSelectedDomainSlug(domain.slug)} onLevelsChange={setCompareLevels} onCompetency={openCompetency} />
