@@ -410,7 +410,11 @@ def test_scheduler_fetches_descriptions_then_approves_or_returns_to_pending(clie
         assert fetched.approved_by == "administrator"
         for item in (short, denied):
             assert (item.review_status, item.ingestion_status) == ("pending", "approval_blocked")
-            assert item.review_note.startswith("Not approved: the full description could not be retrieved")
+        # The short text is kept as a partial description, not counted as a failed fetch.
+        assert (short.description_text, short.description_status) == ("Too short", "partial")
+        assert short.review_note.startswith("Not approved: only a partial description could be retrieved")
+        assert denied.description_status == "failed"
+        assert denied.review_note.startswith("Not approved: the full description could not be retrieved")
         assert "403" in denied.review_note
 
 
@@ -560,3 +564,62 @@ def test_candidate_counts_revision_changes_when_a_row_changes(client):
     # Editing a title leaves every total unchanged but must still be visible to the inbox poll.
     client.patch(f"/api/v1/admin/mail/job-candidates/{candidate_id}", headers=ADMIN_HEADERS, json={"title": "Renamed role"})
     assert revision() != before
+
+
+def test_partial_retry_keeps_the_block_and_replaces_the_failed_fetch_note(client, monkeypatch):
+    from app.config import get_settings
+    from app.url_importer import UrlImportError
+    from app.yahoo_mail_service import fetch_pending_descriptions
+
+    candidate_id = _candidates("9012", [False])[0]
+    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": [candidate_id], "action": "approve"})
+
+    class Denied:
+        def __init__(self, _settings): pass
+        def import_job(self, _url): raise UrlImportError("access_denied", "denied", 403)
+
+    monkeypatch.setattr("app.yahoo_mail_service.UrlImporter", Denied)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "jsearch_api_key", None)
+    fetch_pending_descriptions(settings, limit=1000)
+    monkeypatch.setattr("app.yahoo_mail_service.UrlImporter", lambda _settings: type("Importer", (), {"import_job": lambda self, _url: type("Imported", (), {"job_description": "Partial text.", "extraction_method": "html"})()})())
+    assert client.post(f"/api/v1/admin/mail/job-candidates/{candidate_id}/retry-description", headers=ADMIN_HEADERS).status_code == 200
+    with SessionLocal() as db:
+        item = db.get(YahooJobCandidate, candidate_id)
+        assert (item.ingestion_status, item.description_status) == ("approval_blocked", "partial")
+        assert item.review_note.startswith("Not approved: only a partial description could be retrieved")
+
+
+def test_scheduler_does_not_count_jobs_reviewed_during_the_fetch(client, monkeypatch):
+    from app.config import get_settings
+    from app.yahoo_mail_service import fetch_pending_descriptions
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "jsearch_api_key", None)
+    monkeypatch.setattr("app.yahoo_mail_service.UrlImporter", lambda _settings: type("Importer", (), {"import_job": lambda self, _url: type("Imported", (), {"job_description": "Full description. " * 30, "extraction_method": "html"})()})())
+    # Drain fetches queued by earlier tests in the shared database.
+    fetch_pending_descriptions(settings, limit=1000)
+    ids = _candidates("9013", [False, False])
+    client.post("/api/v1/admin/mail/job-candidates/bulk-review", headers=ADMIN_HEADERS, json={"candidate_ids": ids, "action": "approve"})
+
+    class RejectedMidFetch:
+        def __init__(self, _settings): pass
+
+        def import_job(self, url):
+            candidate_id = ids[0] if url.endswith("0") else ids[1]
+            client.post(f"/api/v1/admin/mail/job-candidates/{candidate_id}/reject", headers=ADMIN_HEADERS, json={})
+            return type("Imported", (), {"job_description": "Full description. " * 30, "extraction_method": "html"})()
+
+    monkeypatch.setattr("app.yahoo_mail_service.UrlImporter", RejectedMidFetch)
+    assert fetch_pending_descriptions(settings) == 0
+
+
+def test_candidate_counts_revision_changes_when_a_row_is_deleted(client):
+    candidate_id = _candidates("9014", [False])[0]
+    revision = lambda: client.get("/api/v1/admin/mail/job-candidates/counts", headers=ADMIN_HEADERS).json()["revision"]
+    before = revision()
+    with SessionLocal() as db:
+        db.delete(db.get(YahooJobCandidate, candidate_id))
+        db.commit()
+    after = revision()
+    assert after != before and 0 <= after < 2 ** 53

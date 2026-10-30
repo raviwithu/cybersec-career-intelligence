@@ -195,7 +195,9 @@ services:
         # "/" = same origin; nginx proxies /api/ to the backend
         VITE_API_BASE_URL: /
     ports:
-      - "0.0.0.0:3100:3000"
+      # Localhost by default: nginx proxies /api/ (admin endpoints included) over plain HTTP.
+      # Set FRONTEND_BIND_ADDRESS=0.0.0.0 to reach it from the local network.
+      - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:3100:3000"
     depends_on:
       backend:
         condition: service_healthy
