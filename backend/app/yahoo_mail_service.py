@@ -315,7 +315,7 @@ def _retrieve_description(candidate: YahooJobCandidate, settings: Settings) -> t
         description, method = imported.job_description, imported.extraction_method
     except UrlImportError as exc:
         page_error = exc
-    if len(description.strip()) < 240 and settings.jsearch_api_key:
+    if len(description.strip()) < COMPLETE_DESCRIPTION_LENGTH and settings.jsearch_api_key:
         try:
             provider = JSearchProvider(settings)
             criteria = JobSearchCriteria(keywords=[candidate.title], location=candidate.location, experience_level="", date_posted="any", employment_type="", work_mode="", max_results=10, country="us", max_pages=1)
@@ -331,10 +331,15 @@ def _retrieve_description(candidate: YahooJobCandidate, settings: Settings) -> t
     return description, method
 
 
-def _apply_description(candidate: YahooJobCandidate, description: str, method: str, settings: Settings) -> None:
-    candidate.description_text = description[:settings.max_research_bytes]
-    candidate.description_complete = len(candidate.description_text.strip()) >= 240
+def set_description(candidate: YahooJobCandidate, description: str) -> None:
+    # The one place a description's completeness is decided, for retrieved and administrator-supplied text alike.
+    candidate.description_text = description
+    candidate.description_complete = len(description.strip()) >= COMPLETE_DESCRIPTION_LENGTH
     candidate.description_status = "complete" if candidate.description_complete else "partial"
+
+
+def _apply_description(candidate: YahooJobCandidate, description: str, method: str, settings: Settings) -> None:
+    set_description(candidate, description[:settings.max_research_bytes])
     candidate.metadata_payload = {**(candidate.metadata_payload or {}), "description_retrieval": method}
 
 
@@ -343,6 +348,9 @@ def retry_description(db: Session, candidate: YahooJobCandidate, settings: Setti
     _apply_description(candidate, description, method, settings)
     if candidate.description_complete:
         clear_approval_block(candidate)
+    elif candidate.ingestion_status == APPROVAL_BLOCKED:
+        # Still blocked, but the stored text is now a partial description rather than a failed fetch.
+        _block_approval(candidate, PARTIAL_DESCRIPTION_REASON)
     db.commit()
     db.refresh(candidate)
     return candidate
@@ -413,6 +421,8 @@ def review_candidate(db: Session, candidate: YahooJobCandidate, action: str, pay
     return candidate
 
 
+COMPLETE_DESCRIPTION_LENGTH = 240
+PARTIAL_DESCRIPTION_REASON = "only a partial description could be retrieved"
 BULK_REVIEW_STATUSES = {"approve": "approve", "reject": "rejected", "defer": "deferred"}
 FETCHING_DESCRIPTION = "fetching_description"
 # A bulk approval whose description fetch failed; approving, rejecting, deferring, editing the description or a successful retry clears it.
@@ -448,16 +458,14 @@ def bulk_review(db: Session, payload: BulkReview, actor: str) -> dict[str, int]:
     return result
 
 
-def _lock_candidate(db: Session, candidate_id: int) -> YahooJobCandidate | None:
+def lock_candidate(db: Session, candidate_id: int) -> YahooJobCandidate | None:
     # Row lock until the next commit, so an administrator review cannot land between the status check and the scheduler's write.
     return db.scalar(select(YahooJobCandidate).where(YahooJobCandidate.id == candidate_id).with_for_update().execution_options(populate_existing=True))
 
 
-def _description_fetch_failed(db: Session, candidate: YahooJobCandidate, reason: str) -> None:
+def _block_approval(candidate: YahooJobCandidate, reason: str) -> None:
     candidate.ingestion_status = APPROVAL_BLOCKED
-    candidate.description_status = "failed"
-    candidate.review_note = f"Not approved: the full description could not be retrieved ({reason[:300]}). Edit the description or approve with the partial-source override."
-    db.commit()
+    candidate.review_note = f"Not approved: {reason}. Edit the description or approve with the partial-source override."
 
 
 def fetch_pending_descriptions(settings: Settings, *, limit: int = 20) -> int:
@@ -479,21 +487,25 @@ def fetch_pending_descriptions(settings: Settings, *, limit: int = 20) -> int:
             except Exception as exc:
                 failure = str(exc) or type(exc).__name__
             db.rollback()
-            candidate = _lock_candidate(db, candidate_id)
-            processed += 1
+            candidate = lock_candidate(db, candidate_id)
             if candidate is None or candidate.ingestion_status != FETCHING_DESCRIPTION:
                 # Reviewed or edited by the administrator during the fetch: their decision and description stand.
                 db.commit()
                 continue
+            processed += 1
             if failure is not None:
-                _description_fetch_failed(db, candidate, failure)
+                candidate.description_status = "failed"
+                _block_approval(candidate, f"the full description could not be retrieved ({failure[:300]})")
+                db.commit()
                 continue
             _apply_description(candidate, description, method, settings)
             if candidate.description_complete:
                 metadata = candidate.metadata_payload or {}
                 review_candidate(db, candidate, "approve", CandidateReview(note=metadata.get("approval_note", "")), metadata.get("approval_requested_by") or "scheduler")
             else:
-                _description_fetch_failed(db, candidate, "the retrieved description was too short")
+                # The partial text is kept and counted as partial, not as a failed fetch.
+                _block_approval(candidate, PARTIAL_DESCRIPTION_REASON)
+                db.commit()
     return processed
 
 

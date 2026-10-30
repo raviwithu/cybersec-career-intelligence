@@ -15,13 +15,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # ph12bapprovalblocked only moved pending jobs, but the inferred count it replaced also covered deferred ones.
+    # Only jobs whose latest review is the bulk approval: a deferral made after the failed fetch already resolved the block.
     op.execute(
         """
         UPDATE yahoo_job_candidates SET ingestion_status = 'approval_blocked'
         WHERE ingestion_status = 'not_approved'
           AND description_status = 'failed'
           AND review_status = 'deferred'
-          AND id IN (SELECT candidate_id FROM yahoo_job_reviews WHERE action = 'approve_after_fetch')
+          AND (SELECT action FROM yahoo_job_reviews WHERE candidate_id = yahoo_job_candidates.id ORDER BY id DESC LIMIT 1) = 'approve_after_fetch'
         """
     )
 

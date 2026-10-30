@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -34,8 +36,10 @@ from .yahoo_mail_service import (
     clear_approval_block,
     connection_response,
     create_or_update_connection,
+    lock_candidate,
     retry_description,
     review_candidate,
+    set_description,
     sync_connection,
     sync_run_response,
     test_connection,
@@ -156,16 +160,24 @@ def _candidate_counts(db: Session) -> dict[str, int]:
         counts[value] = int(count)
     for value, count in db.execute(select(YahooJobCandidate.ingestion_status, func.count()).group_by(YahooJobCandidate.ingestion_status)).all():
         counts[f"ingestion_{value}"] = int(count)
-    duplicates, extraction_failed, last_updated = db.execute(select(
+    duplicates, extraction_failed = db.execute(select(
         func.coalesce(func.sum(case((YahooJobCandidate.duplicate_status == "duplicate", 1), else_=0)), 0),
         func.coalesce(func.sum(case((YahooJobCandidate.description_status == "failed", 1), else_=0)), 0),
-        func.max(YahooJobCandidate.updated_at),
     )).one()
     counts["duplicates"] = int(duplicates)
     counts["extraction_failed"] = int(extraction_failed)
-    # Changes whenever any candidate row changes, so the inbox poll also notices edits that leave every total unchanged.
-    counts["revision"] = int(last_updated.timestamp() * 1_000_000) if last_updated else 0
+    counts["revision"] = _candidate_revision(db)
     return counts
+
+
+def _candidate_revision(db: Session) -> int:
+    # Fingerprint of every row's (id, updated_at), so the inbox poll also notices edits that leave every total unchanged,
+    # deletions, and writes that commit after a newer one (MAX(updated_at) would miss those).
+    digest = hashlib.blake2b(digest_size=6)
+    for candidate_id, updated_at in db.execute(select(YahooJobCandidate.id, YahooJobCandidate.updated_at).order_by(YahooJobCandidate.id)):
+        digest.update(f"{candidate_id}:{updated_at.isoformat() if updated_at else ''};".encode())
+    # 48 bits stays within JavaScript's exact integer range.
+    return int.from_bytes(digest.digest(), "big")
 
 
 @router.get("/job-candidates/counts", response_model=dict[str, int], dependencies=[Depends(require_admin)])
@@ -210,14 +222,15 @@ def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
 
 @router.patch("/job-candidates/{candidate_id}", response_model=CandidateResponse, dependencies=[Depends(require_admin)])
 def patch_candidate(candidate_id: int, payload: CandidateUpdate, db: Session = Depends(get_db)):
-    item = _candidate(db, candidate_id)
+    # Locked so the fetching check below cannot interleave with the scheduler approving the same row.
+    item = lock_candidate(db, candidate_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Job candidate was not found")
     values = payload.model_dump(exclude_none=True)
     if "description_text" in values and values["description_text"] == item.description_text:
         values.pop("description_text")
     if "description_text" in values:
-        item.description_text = values.pop("description_text")
-        item.description_complete = len(item.description_text.strip()) >= 240
-        item.description_status = "complete" if item.description_complete else "partial"
+        set_description(item, values.pop("description_text"))
         item.extraction_method = "administrator_corrected"
         if item.ingestion_status == FETCHING_DESCRIPTION:
             # The administrator supplied the description, so the scheduler must not overwrite it; they approve it themselves.
