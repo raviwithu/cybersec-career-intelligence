@@ -340,6 +340,51 @@ Rollback is a proposal (D6). `RESTORE_VERSION` goes through review and publish l
 - **Topic:** `{"target": "topic", "version"}` restores the stored snapshot's name, description, category, display order, aliases, parent (cycle-checked), active state, placements and career-level rows. Placements are put back exactly: missing ones are placed, and extra ones are unplaced while keeping their domain links. Snapshots recorded before KM-4 have no `placements` key; restoring one leaves placements unchanged. Restore is the one action allowed on an inactive topic, so restoring a version from when it was active brings it back.
 - In Knowledge Map Management, "Restore version" lists topic and section versions from the history endpoint.
 
+## Example content
+
+`backend/app/knowledge_map_examples.py` submits example content as proposals. It is run by hand, never from startup or `seed.py`:
+
+```bash
+docker compose exec backend python -m app.knowledge_map_examples --dry-run         # show what would be proposed
+docker compose exec backend python -m app.knowledge_map_examples                   # submit the example proposals
+docker compose exec backend python -m app.knowledge_map_examples --place-existing  # also propose branches for existing unplaced topics
+```
+
+- **What it proposes:** IDOR / BOLA, OAuth 2.0, Server-Side Request Forgery (SSRF), Secure Boot and Firmware Signature Verification (content in `knowledge_map_example_content.py`). That covers placements, overview, how it works, code examples (where meaningful), attack surface, mitigations, vulnerable and secure diagrams, references, career levels (Junior, Intermediate, Senior, Architect, Manager) and relationships. Examples: IDOR `mitigated_by` API Authorization; Secure Boot `dependency` Chain of Trust, Hardware Root of Trust and Firmware Signature Verification.
+- **Idempotent:** every proposal is `source_type = "manual"` with a stable idempotency key (`km5:<topic>:<part>`). A second run creates nothing and reports "exists". Nothing is published.
+- **Two runs for new topics:** a topic that does not exist yet is proposed with `CREATE_TOPIC` (with aliases and placements). Once it is published, run the script again to propose its sections, career levels and relationships, because those need a topic id.
+- **Reuse:** an existing topic is reused when its name, key or an alias matches; Secure Boot already exists. Sections a topic already has are never replaced, and existing career-level rows are left alone.
+- **Placements:** these use the live taxonomy slugs: `cloud-api-security`, `web-application-security` and `identity-access-management` for the API and identity topics, and the Embedded Systems Security child domain `boot-security` for the boot topics. A missing domain is reported and skipped.
+- **References:** these are public pages (OWASP, MITRE CWE, IETF RFCs, NIST, UEFI Forum, AWS, NVD), all `verification_status = "unverified"` for the administrator to verify.
+- **Real-world examples:** only Secure Boot has one: CVE-2020-10713 (BootHole), cited from NVD, `publicly_disclosed`, with no claim of exploitation in the wild. The other topics leave `real_world_examples` out and say so in their change reasons. Proposals that mention a CVE need a verified or authoritative source before they can be published: tick "Verify selected sources & approve" in Knowledge Review.
+- **`--place-existing`:** proposes `PLACE_TOPIC` for every published topic that has no placement yet. Each goes into the domains it is already linked to. Chain of Trust, Hardware Root of Trust, Cryptographic Key Management and Threat Modeling get Foundations, and everything else gets Security. Unlinked topics get a default domain: Chain of Trust → Boot Security, Kubernetes Security → Cloud Infrastructure Security.
+
+## AI map suggestions
+
+An admin-only action, triggered by hand; ingestion and scheduling are unchanged.
+
+- **`GET /api/v1/knowledge/admin/findings?limit=50`:** research findings approved in Research Review (review change `accepted` or `published`), newest first.
+- **`POST /api/v1/knowledge/admin/findings/{finding_id}/map-suggestions`:** returns suggestions and stores nothing.
+  - **Context sent to the model:** the finding's domains and their child domains, plus up to 60 candidate topics (name, key, aliases) linked to those domains or unlinked. The configured model is called through the existing provider and model-selection code (`providers.complete_selected`, `model_selection.active_selection`). The system prompt says all context is untrusted data and that job descriptions must not become technical content.
+  - **Required output:** a JSON array (a fenced block is accepted). Each item must match `{action: PLACE_TOPIC | CREATE_TOPIC | ADD_TOPIC_RELATIONSHIP, existing_topic_id?, name?, domain_id, map_branch, rationale, related_topic_id?, relationship_type?}`. The last two apply only to relationships, because the plan's schema had no way to name the related topic.
+  - **Validation:** output that is not JSON, or not a list, is refused with 502. Items with extra keys or wrong types are dropped. So are ids that do not exist, inactive topics, and domains outside the finding's domains. Text goes through the same cleaning as proposals. A `CREATE_TOPIC` whose name matches an existing topic becomes a `PLACE_TOPIC` for that topic, with a note.
+  - **Response:** `{finding_id, finding_name, provider, model_id, suggestions: [... with domain and topic names], warnings: [why items were dropped]}`.
+- **`POST /api/v1/knowledge/admin/findings/{finding_id}/map-suggestions/submit`** with `{"suggestions": [...]}`: re-validates the selected suggestions and creates proposals.
+  - Each proposal has `source_type = "ai"`, its `finding_id` set, and the finding's evidence as an unverified `KnowledgeProposalSource`. That source's metadata records "employer expectation only, not technical content".
+  - AI-created topics carry a name and one placement only. Technical sections come from later, reviewed proposals.
+  - Idempotency keys come from the finding and the suggestion, so submitting twice returns the same proposals.
+- **UI:** in Knowledge Map Management, under "AI map suggestions", choose an approved finding, then select "Suggest map changes", tick suggestions and submit them. They then appear in Knowledge Review › Mind Map Changes.
+
+## RAG readiness
+
+No RAG engine is built. A future retrieval service submits content the same way as everything else, as reviewable proposals:
+
+- **Endpoint:** `POST /api/v1/knowledge/proposals`, authenticated as an integration (`X-Knowledge-Integration-Key`, configured in `KNOWLEDGE_INTEGRATION_KEYS`) or with the admin key. Integration submissions are rate limited and can read only their own proposals' status.
+- **Body:** `source_type = "rag"`, `schema_version = "1.0"`, a `topic_id` or `topic_key`, and an action. Section content uses `ADD_SECTION` or `UPDATE_SECTION`, with `section` set to one of the section types and `proposed_content` matching that section's schema. `code_examples` and `architecture` follow the strict schemas under "Content model"; the other sections follow their existing shapes. New topics use `CREATE_TOPIC`, and placements use the map actions.
+- **Idempotency:** send an `Idempotency-Key` header, for example a hash of the source document id, its version and the section, so retries never duplicate proposals.
+- **Provenance:** `references` is a list of `KnowledgeSourceReference` (`source_type`, `document_identifier`, `title`, `author`, `publisher`, `url` (http or https only), `document_version`, `publication_date`, `locator`, `excerpt` (up to 6,000 characters), `content_hash` (SHA-256), `access_scope`, `is_private`, `metadata`). Submitted references are always stored as `unverified`; only a reviewer can verify them. Content from private or restricted sources cannot support public CVE claims.
+- **Review:** RAG proposals go through the same review, modify, approve and publish steps, and nothing publishes automatically.
+
 ## Code
 
 | File | Purpose |
@@ -367,3 +412,7 @@ Rollback is a proposal (D6). `RESTORE_VERSION` goes through review and publish l
 | `frontend/src/knowledgeMapActions.js` | Map action labels and the review line diff |
 | `frontend/src/KnowledgeSectionForms.jsx` | Structured `code_examples` and `architecture` editors |
 | `frontend/tests/KnowledgeMapAdmin.test.jsx` | Management payloads, Pending badges, Mind Map Changes review and publish |
+| `backend/app/knowledge_map_examples.py`, `knowledge_map_example_content.py` | Manual, idempotent example-content proposal script and its content |
+| `backend/app/knowledge_map_suggestions.py` | AI map suggestions for approved findings, and their submission as proposals |
+| `backend/tests/test_knowledge_map_examples_ai.py` | Example script and AI suggestion tests (mocked provider) |
+| `frontend/src/KnowledgeMapSuggestions.jsx` | AI map suggestions panel in Knowledge Map Management |

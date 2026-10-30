@@ -4,14 +4,16 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .admin_auth import require_admin
 from .database import get_db
 from .knowledge_auth import enforce_proposal_rate_limit, require_proposal_submitter
-from .knowledge_contract_schemas import KnowledgeCoverageResponse, KnowledgeMapPreviewResponse, KnowledgeProposalCreate, KnowledgeProposalPage, KnowledgeProposalPublish, KnowledgeProposalResponse, KnowledgeProposalReview, KnowledgePublicTopicResponse
+from .knowledge_contract_schemas import ApprovedFindingSummary, KnowledgeCoverageResponse, KnowledgeMapPreviewResponse, KnowledgeMapSuggestionSubmitResponse, KnowledgeMapSuggestionsResponse, KnowledgeProposalCreate, KnowledgeProposalPage, KnowledgeProposalPublish, KnowledgeProposalResponse, KnowledgeProposalReview, KnowledgePublicTopicResponse
 from .knowledge_contract_service import admin_topic, coverage, get_proposal, is_map_proposal, list_proposals, map_preview, topic_history, list_public_topics, proposal_response, public_topic, publish_proposal, resolve_topic, create_proposal, review_proposal
+from .knowledge_map_suggestions import Suggestion, approved_findings, submit_suggestions, suggest
 from .knowledge_topic_schemas import TopicHistoryResponse
 from .models import KnowledgeTopic, KnowledgeTopicProposal
 
@@ -143,3 +145,24 @@ def get_admin_topic_coverage(topic_id: int, db: Session = Depends(get_db)) -> Kn
     if topic is None:
         raise HTTPException(status_code=404, detail="Knowledge topic was not found")
     return KnowledgeCoverageResponse.model_validate(coverage(db, topic, include_pending=True))
+
+
+class SuggestionSubmission(BaseModel):
+    suggestions: list[Suggestion] = Field(min_length=1, max_length=20)
+
+
+@router.get("/admin/findings", response_model=list[ApprovedFindingSummary], dependencies=[Depends(require_admin)])
+def get_approved_findings(limit: int = Query(default=50, ge=1, le=200), db: Session = Depends(get_db)) -> list[ApprovedFindingSummary]:
+    return [ApprovedFindingSummary.model_validate(item) for item in approved_findings(db, limit)]
+
+
+@router.post("/admin/findings/{finding_id}/map-suggestions", response_model=KnowledgeMapSuggestionsResponse, dependencies=[Depends(require_admin)])
+def create_map_suggestions(finding_id: int, db: Session = Depends(get_db)) -> KnowledgeMapSuggestionsResponse:
+    # Calls the configured model and returns suggestions only; nothing is stored.
+    return KnowledgeMapSuggestionsResponse.model_validate(suggest(db, finding_id))
+
+
+@router.post("/admin/findings/{finding_id}/map-suggestions/submit", response_model=KnowledgeMapSuggestionSubmitResponse, dependencies=[Depends(require_admin)])
+def submit_map_suggestions(finding_id: int, payload: SuggestionSubmission, actor: str = Depends(require_admin), db: Session = Depends(get_db)) -> KnowledgeMapSuggestionSubmitResponse:
+    result = submit_suggestions(db, finding_id, payload.suggestions, actor)
+    return KnowledgeMapSuggestionSubmitResponse(created=[KnowledgeProposalResponse.model_validate(proposal_response(item)) for item in result["created"]], errors=result["errors"])

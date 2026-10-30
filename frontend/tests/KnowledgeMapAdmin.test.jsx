@@ -35,9 +35,15 @@ function mockApi() {
       posted.push(body);
       return json({ id: 900 + posted.length, version: 1, status: "review", ...body }, 201);
     }
+    if (options.method === "POST" && path === "/knowledge/admin/findings/31/map-suggestions") return json({ finding_id: 31, finding_name: "Experience securing cloud-native APIs", provider: "ollama", model_id: "test-model", warnings: ["Suggestion 3 was dropped: unknown topic 999."], suggestions: [
+      { action: "PLACE_TOPIC", existing_topic_id: 1, name: null, domain_id: 2, map_branch: "security", rationale: "Employers expect OAuth.", related_topic_id: null, relationship_type: null, domain_name: "Cloud API Security", topic_name: "OAuth 2.0", related_topic_name: null, note: null },
+      { action: "CREATE_TOPIC", existing_topic_id: null, name: "API Gateway Security", domain_id: 2, map_branch: "security", rationale: "Gateways appear in the finding.", related_topic_id: null, relationship_type: null, domain_name: "Cloud API Security", topic_name: null, related_topic_name: null, note: null },
+    ] });
+    if (options.method === "POST" && path.endsWith("/map-suggestions/submit")) { const body = JSON.parse(options.body); posted.push({ path, ...body }); return json({ created: body.suggestions.map((_, index) => ({ id: 700 + index })), errors: [] }); }
     if (options.method === "POST") { posted.push({ path, ...JSON.parse(options.body) }); return json({ id: 1, status: "approved", version: 2 }); }
     if (path === "/knowledge/admin/topics") return json([adminTopic(oauth, { related_topics: [{ id: 7, topic_key: "jwt", name: "JSON Web Tokens", relationship_type: "dependency", direction: "outgoing", label: "Depends on" }] }), adminTopic(jwt, { aliases: ["JWT"] })]);
     if (path === "/domains") return json(DOMAINS);
+    if (path === "/knowledge/admin/findings") return json([{ id: 31, candidate_name: "Experience securing cloud-native APIs", finding_type: "practical-capability", domain: "Cloud API Security", status: "published" }]);
     if (path === "/levels") return json(LEVELS);
     if (path === "/industries") return json([]);
     if (path === "/knowledge/admin/proposals") {
@@ -179,6 +185,23 @@ describe("Knowledge Map Management", () => {
     fireEvent.keyDown(await treeItem("Foundations"), { key: "ArrowRight" });
     await treeItem("OAuth 2.0");
     expect(screen.queryByText("Pending")).toBeNull();
+  });
+});
+
+describe("AI map suggestions", () => {
+  it("asks for suggestions, then submits only the selected ones with schema fields", async () => {
+    render(<KnowledgeMapAdminPage onNavigate={() => {}} />);
+    const panel = await screen.findByRole("region", { name: "AI map suggestions" });
+    fireEvent.change(await within(panel).findByRole("combobox", { name: "Approved finding" }), { target: { value: "31" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Suggest map changes" }));
+    const create = await within(panel).findByRole("checkbox", { name: /Create topic .*API Gateway Security/ });
+    expect(within(panel).getByText("1 suggestions were dropped")).toBeTruthy();
+    expect(posted).toHaveLength(0);
+    fireEvent.click(create);
+    fireEvent.click(within(panel).getByRole("button", { name: "Submit 1 selected as proposals" }));
+    expect(await within(panel).findByText(/1 proposal submitted for review \(#700\)/)).toBeTruthy();
+    expect(posted[0].path).toBe("/knowledge/admin/findings/31/map-suggestions/submit");
+    expect(posted[0].suggestions).toEqual([{ action: "CREATE_TOPIC", existing_topic_id: null, name: "API Gateway Security", domain_id: 2, map_branch: "security", rationale: "Gateways appear in the finding.", related_topic_id: null, relationship_type: null }]);
   });
 });
 

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { clearAdminSessionKey, createKnowledgeProposal, fetchDomains, fetchIndustries, fetchKnowledgeAdminTopics, fetchKnowledgeContractHistory, fetchKnowledgeMapBranchTopics, fetchKnowledgeReviewQueue, fetchLevels, getAdminSessionKey, setAdminSessionKey } from "./api";
 import { Badge, EmptyState, ErrorState, Loading, PageHeader } from "./components";
 import KnowledgeMapPage from "./KnowledgeMapPage";
+import KnowledgeMapSuggestions from "./KnowledgeMapSuggestions";
 import KnowledgeSectionEditor from "./KnowledgeSectionEditor";
 import { MAP_ACTION_LABELS } from "./knowledgeMapActions";
 import { BRANCHES, branchNodeId } from "./knowledgeMapModel";
@@ -290,6 +291,7 @@ export default function KnowledgeMapAdminPage({ onNavigate }) {
           {openProposals.length ? <ul className="kma-pending-list">{openProposals.slice(0, 12).map((item) => <li key={item.id}><span className="km-pending-badge">Pending</span><strong>{MAP_ACTION_LABELS[item.action] || item.action}</strong><span>{item.topic_key || item.proposed_content?.topic?.name || "New topic"}</span><Badge>{item.status}</Badge></li>)}</ul> : <EmptyState title="No pending map changes" message="Proposals you submit here appear in this list and in Knowledge Review until they are published or rejected." />}
         </section>
       </div>
+      <KnowledgeMapSuggestions adminKey={adminKey} onSubmitted={load} />
       <p className="muted-copy kma-hint">Select a domain, branch or topic on the map to propose a change for it. “Pending” marks items with open proposals; the public map never shows these badges.</p>
       <KnowledgeMapPage onNavigate={onNavigate} admin={admin} />
     </>}
