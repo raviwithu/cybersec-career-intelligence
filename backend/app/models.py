@@ -323,6 +323,8 @@ class KnowledgeTopicDomain(Base):
     domain_id: Mapped[int] = mapped_column(ForeignKey("security_domains.id", ondelete="CASCADE"), primary_key=True)
     map_branch: Mapped[str | None] = mapped_column(String(20))
     display_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # How a shared topic applies in this domain (e.g. SSRF in AWS Lambda vs in web applications). NULL: no note.
+    context_note: Mapped[str | None] = mapped_column(Text)
 
     topic: Mapped[KnowledgeTopic] = relationship(back_populates="domains")
     domain: Mapped[SecurityDomain] = relationship()

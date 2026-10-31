@@ -529,6 +529,8 @@ code { color: #9ff2cc; font: .9em 'DM Mono', monospace; }
 .km-placement-list { margin: 6px 0 0; padding-left: 16px; }
 .km-placement-list .text-link { margin-top: 4px; font-size: .72rem; }
 .km-placement-list .text-link.current { color: var(--km-focus); }
+.km-placement-note { display: block; margin: 2px 0 4px; color: var(--muted, inherit); font-size: .68rem; line-height: 1.4; }
+.km-context-note p { margin: 4px 0 0; font-size: .78rem; line-height: 1.5; }
 .km-details-close { display: none; }
 @media (prefers-reduced-motion: reduce) { .km-graph .react-flow__viewport, .km-details { transition: none !important; } }
 @media (max-width: 800px) {

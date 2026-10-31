@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from .database import get_db
-from .knowledge_map_schemas import MapBranch, MapChildrenResponse, MapPlacement, MapRootResponse, MapSearchResponse, MapTopicPage
-from .knowledge_map_service import branch_topics, domain_children, map_etag, map_root, search_topics, topic_placements
+from .knowledge_map_schemas import MapBranch, MapChildrenResponse, MapPlacement, MapRootResponse, MapSearchResponse, MapTopicChildren, MapTopicPage
+from .knowledge_map_service import branch_topics, domain_children, map_etag, map_root, search_topics, topic_children, topic_placements
 
 router = APIRouter(prefix="/knowledge-map", tags=["knowledge-map"])
 
@@ -43,9 +43,15 @@ def get_branch_topics(
     response: Response,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
+    include_nested: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
-    return _cached(request, response, db, lambda: branch_topics(db, domain_id, branch, offset, limit))
+    return _cached(request, response, db, lambda: branch_topics(db, domain_id, branch, offset, limit, include_nested))
+
+
+@router.get("/domains/{domain_id}/branches/{branch}/topics/{topic_id}/children", response_model=MapTopicChildren)
+def get_topic_children(domain_id: int, branch: MapBranch, topic_id: int, request: Request, response: Response, db: Session = Depends(get_db)):
+    return _cached(request, response, db, lambda: topic_children(db, domain_id, branch, topic_id))
 
 
 @router.get("/topics/{topic_identifier}/placements", response_model=list[MapPlacement])

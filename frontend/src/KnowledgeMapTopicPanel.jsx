@@ -69,7 +69,7 @@ function RelatedTopics({ related, onSelectTopic }) {
 }
 
 function placementLabel(placement) {
-  return [...placement.domain_path.map((domain) => domain.name), placement.label].join(" › ");
+  return [...placement.domain_path.map((domain) => domain.name), placement.label, ...(placement.ancestors || []).map((topic) => topic.name)].join(" › ");
 }
 
 export default function KnowledgeMapTopicPanel({ node, breadcrumb, placements, isCurrentPlacement, onReveal, onSelectTopic, onNavigate }) {
@@ -107,15 +107,18 @@ export default function KnowledgeMapTopicPanel({ node, breadcrumb, placements, i
     return <SectionContent section={sections[id]} sections={sections} collapsible />;
   }
 
+  const current = placements.items.find((placement) => isCurrentPlacement(placement));
+  const currentNote = current ? current.context_note : node.contextNote;
   return <div className="km-topic-panel">
     <p className="eyebrow">TOPIC</p>
     <h2>{node.label}</h2>
     <p className="km-topic-path">{breadcrumb.join(" › ")}</p>
+    {currentNote && <div className="km-details-section km-context-note"><span className="field-label">In {current?.domain_path[current.domain_path.length - 1]?.name || "this domain"}</span><p>{currentNote}</p></div>}
     <div className="km-details-section">
       <span className="field-label">Appears in</span>
       {placements.loading ? <Loading label="Loading placements" /> : placements.error ? <p className="muted-copy">Placements could not be loaded: {placements.error.message}</p> : <ul className="km-placement-list">{placements.items.map((placement) => {
         const current = isCurrentPlacement(placement);
-        return <li key={placementLabel(placement)}><button type="button" className={`text-link ${current ? "current" : ""}`} aria-current={current ? "location" : undefined} onClick={() => onReveal(placement)}>{placementLabel(placement)}</button></li>;
+        return <li key={placementLabel(placement)}><button type="button" className={`text-link ${current ? "current" : ""}`} aria-current={current ? "location" : undefined} onClick={() => onReveal(placement)}>{placementLabel(placement)}</button>{placement.context_note && !current && <small className="km-placement-note">{placement.context_note}</small>}</li>;
       })}</ul>}
     </div>
     <div className="km-topic-actions">

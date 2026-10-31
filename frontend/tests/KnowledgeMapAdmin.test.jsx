@@ -78,7 +78,7 @@ function mockApi() {
     const children = path.match(/^\/knowledge-map\/domains\/(5|6|6\d)\/children$/);
     if (children) return json({ domain: mapDomain(domains.find((item) => item.id === Number(children[1]))), nodes: nest(domains, Number(children[1])).map(mapDomain) });
     if (path === "/knowledge-map/domains/2/branches/foundations/topics") return json({ domain_id: 2, branch: "foundations", label: "Foundations", items: [oauth, jwt], total: 2, offset: 0, limit: Number(searchParams.get("limit")) });
-    if (path.startsWith("/knowledge-map/topics/")) return json([{ domain_path: [{ id: 2, name: "Cloud API Security" }], branch: "foundations", label: "Foundations" }]);
+    if (path.startsWith("/knowledge-map/topics/")) return json([{ domain_path: [{ id: 2, name: "Cloud API Security" }], branch: "foundations", label: "Foundations", context_note: "Delegated access for cloud APIs." }, { domain_path: [{ id: 5, name: "Embedded Systems Security" }], branch: "security", label: "Security", context_note: "Device-to-cloud authorization." }]);
     if (path.startsWith("/knowledge/topics/")) return json({ ...adminTopic(oauth), description: "Delegated authorization." });
     throw new Error(`Unexpected request ${url}`);
   });
@@ -194,6 +194,40 @@ describe("Knowledge Map Management", () => {
     expect(posted[0]).toMatchObject({ action: "CREATE_TOPIC", topic_name: "Token Binding", proposed_content: { topic: { name: "Token Binding" }, placements: [{ domain_id: 2, map_branch: "security" }] } });
   });
 
+  it("reuses one topic in several domains with a context note, one proposal per domain", async () => {
+    const actions = await openTopicActions();
+    const form = within(actions).getByRole("form", { name: "Place topic" });
+    const domainsList = within(form).getByRole("listbox", { name: "Domains (select one or more to reuse the topic)" });
+    [...domainsList.options].forEach((option) => { option.selected = ["5", "6"].includes(option.value); });
+    fireEvent.change(domainsList);
+    expect(form.textContent).toContain("One shared topic, placed in 2 domains");
+    fireEvent.change(within(form).getByRole("combobox", { name: "Branch" }), { target: { value: "vulnerabilities" } });
+    fireEvent.change(within(form).getByRole("textbox", { name: "How it applies in these domains (optional, same note for each)" }), { target: { value: " Device tokens. " } });
+    reason(form, "Reuse in embedded.");
+    fireEvent.click(within(form).getByRole("button", { name: "Submit for review" }));
+    expect((await within(form).findByRole("status")).textContent).toContain("Proposals #901, #902 submitted for review");
+    expect(posted.map((item) => [item.action, item.topic_id, item.proposed_content])).toEqual([
+      ["PLACE_TOPIC", 1, { domain_id: 5, map_branch: "vulnerabilities", context_note: "Device tokens." }],
+      ["PLACE_TOPIC", 1, { domain_id: 6, map_branch: "vulnerabilities", context_note: "Device tokens." }],
+    ]);
+  });
+
+  it("shows the note for the current domain and edits only that placement's note", async () => {
+    const actions = await openTopicActions();
+    const panel = screen.getAllByText("Delegated access for cloud APIs.")[0].closest(".km-topic-panel");
+    expect(within(panel).getByText("In Cloud API Security")).toBeTruthy();
+    expect(within(panel).getByText("Device-to-cloud authorization.")).toBeTruthy();
+    fireEvent.click(within(actions).getByRole("button", { name: "Domain context" }));
+    const form = within(actions).getByRole("form", { name: "How OAuth 2.0 applies in Cloud API Security" });
+    const note = within(form).getByRole("textbox", { name: "Domain context note" });
+    await waitFor(() => expect(note.value).toBe("Delegated access for cloud APIs."));
+    fireEvent.change(note, { target: { value: "" } });
+    reason(form, "Note no longer needed.");
+    fireEvent.click(within(form).getByRole("button", { name: "Submit for review" }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toMatchObject({ action: "PLACE_TOPIC", topic_id: 1, proposed_content: { domain_id: 2, map_branch: "foundations", context_note: "" } });
+  });
+
   it("adds a sub-domain under a child domain and shows it on the map", async () => {
     render(<KnowledgeMapAdminPage onNavigate={() => {}} />);
     fireEvent.keyDown(await treeItem("Embedded Systems Security"), { key: "ArrowRight" });
@@ -210,6 +244,22 @@ describe("Knowledge Map Management", () => {
     expect(await treeItem("Measured Boot")).toBeTruthy();
     const placeIn = screen.getAllByRole("combobox", { name: "Place in domain (optional)" })[0];
     expect([...placeIn.options].map((option) => option.textContent.replace(/\u00a0/g, " "))).toContain("      ↳ Measured Boot");
+  });
+
+  it("adds a sub-domain from the top of the page with a chosen parent", async () => {
+    render(<KnowledgeMapAdminPage onNavigate={() => {}} />);
+    fireEvent.keyDown(await treeItem("Embedded Systems Security"), { key: "ArrowRight" });
+    await treeItem("Secure Boot");
+    const form = screen.getByRole("form", { name: "Add sub-domain" });
+    fireEvent.change(within(form).getByRole("textbox", { name: "Sub-domain name" }), { target: { value: "Measured Boot" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Add sub-domain" }));
+    expect((await within(form).findByRole("alert")).textContent).toContain("Choose the parent domain");
+    fireEvent.change(within(form).getByRole("combobox", { name: "Parent domain" }), { target: { value: "6" } });
+    expect(form.textContent).toContain("Adds a child domain under Embedded Systems Security › Secure Boot.");
+    fireEvent.click(within(form).getByRole("button", { name: "Add sub-domain" }));
+    expect((await within(form).findByRole("status")).textContent).toContain("Measured Boot was added under Embedded Systems Security › Secure Boot");
+    expect(posted).toEqual([{ path: "/research/taxonomy/domain", name: "Measured Boot", description: "", parent_id: 6 }]);
+    expect((await treeItem("Measured Boot")).getAttribute("aria-level")).toBe("4");
   });
 
   it("edits, moves, deactivates and refuses to delete a used sub-domain", async () => {

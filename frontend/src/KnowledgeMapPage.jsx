@@ -1,10 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { fetchKnowledgeContractTopic, fetchKnowledgeMapBranchTopics, fetchKnowledgeMapChildren, fetchKnowledgeMapPlacements, fetchKnowledgeMapRoot, searchKnowledgeMap } from "./api";
+import { fetchKnowledgeContractTopic, fetchKnowledgeMapBranchTopics, fetchKnowledgeMapChildren, fetchKnowledgeMapPlacements, fetchKnowledgeMapRoot, fetchKnowledgeMapTopicChildren, searchKnowledgeMap } from "./api";
 import { EmptyState, ErrorState, Loading, PageHeader } from "./components";
 import KnowledgeMapTopicPanel from "./KnowledgeMapTopicPanel";
 import KnowledgeMapTree from "./KnowledgeMapTree";
-import { BRANCHES, ROOT_ID, TOPIC_PAGE_SIZE, applyDomainChildren, applyRoot, applyTopicPage, branchNodeId, collapse, collapseAll, domainNodeId, ensureTopic, expand, initialMapState, isExpandable, layoutTree, nextTopicOffset, pathTo, topicNodeId, visibleAncestor, visibleRows, visibleTree } from "./knowledgeMapModel";
+import { BRANCHES, ROOT_ID, TOPIC_PAGE_SIZE, applyDomainChildren, applyRoot, applyTopicChildren, applyTopicPage, branchNodeId, collapse, collapseAll, domainNodeId, ensureTopic, expand, initialMapState, isExpandable, layoutTree, nextTopicOffset, pathTo, topicNodeId, visibleAncestor, visibleRows, visibleTree } from "./knowledgeMapModel";
 
 // The graph library is only downloaded when the graph view is shown.
 const KnowledgeMapGraph = lazy(() => import("./KnowledgeMapGraph"));
@@ -38,7 +38,7 @@ function writeTopicToHash(topicKey) {
 }
 
 function placementLabel(placement) {
-  return [...placement.domain_path.map((domain) => domain.name), placement.label].join(" › ");
+  return [...placement.domain_path.map((domain) => domain.name), placement.label, ...(placement.ancestors || []).map((topic) => topic.name)].join(" › ");
 }
 
 function NodeDetails({ node, state, placements, onReveal, onSelectTopic, onNavigate }) {
@@ -110,6 +110,7 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
     setNodeStatus(id, "loading");
     const request = id === ROOT_ID ? fetchKnowledgeMapRoot({ fresh }).then((data) => update((value) => applyRoot(value, data)))
       : node.type === "branch" ? fetchKnowledgeMapBranchTopics(node.domainId, node.branch, { offset: 0, limit: TOPIC_PAGE_SIZE }).then((page) => update((value) => applyTopicPage(value, id, page)))
+        : node.type === "topic" ? fetchKnowledgeMapTopicChildren(node.domainId, node.branch, node.topicId, { fresh }).then((data) => update((value) => applyTopicChildren(value, id, data)))
         : fetchKnowledgeMapChildren(node.domainId, { fresh }).then((data) => update((value) => applyDomainChildren(value, id, data)));
     inflight.current[id] = request
       .then(() => { setNodeStatus(id, null); return true; }, (error) => { setNodeStatus(id, error); return false; })
@@ -140,6 +141,7 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
     update((value) => expand(value, [id]));
     return loadChildren(id, { fresh: true });
   }, [update, loadChildren]);
+  useEffect(() => { admin?.onMapReady?.({ reloadChildren }); }, [admin, reloadChildren]);
   const expandNode = useCallback((id) => { update((value) => expand(value, [id])); loadChildren(id); }, [update, loadChildren]);
   const collapseNode = useCallback((id) => {
     update((value) => collapse(value, id));
@@ -162,7 +164,13 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
     for (const id of [...domainIds, branchId]) {
       if (!stateRef.current.nodes[id] || !(await loadChildren(id))) { setNotice(`${topic.name} could not be shown under ${placementLabel(placement)}.`); return; }
     }
-    update((value) => expand(ensureTopic(value, branchId, topic), [ROOT_ID, ...domainIds, branchId]));
+    // A child topic sits under its parent topics in this branch: open each one in turn, outermost first.
+    const ancestorIds = (placement.ancestors || []).map((ancestor) => topicNodeId(leaf.id, placement.branch, ancestor.topic_key));
+    if (placement.ancestors?.length) update((value) => ensureTopic(value, branchId, { ...placement.ancestors[0], has_children: true }));
+    for (const id of ancestorIds) {
+      if (!stateRef.current.nodes[id] || !(await loadChildren(id))) { setNotice(`${topic.name} could not be shown under ${placementLabel(placement)}.`); return; }
+    }
+    update((value) => expand(ancestorIds.length ? value : ensureTopic(value, branchId, topic), [ROOT_ID, ...domainIds, branchId, ...ancestorIds]));
     setNotice("");
     selectNode(topicNodeId(leaf.id, placement.branch, topic.topic_key), true);
   }, [loadChildren, update, selectNode]);

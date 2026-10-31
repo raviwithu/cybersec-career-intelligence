@@ -5,7 +5,7 @@ export const MAP_ACTION_LABELS = {
   CREATE_TOPIC: "Create topic", PLACE_TOPIC: "Place topic", UNPLACE_TOPIC: "Remove placement", MOVE_TOPIC: "Move topic",
   REORDER_TOPICS: "Reorder branch", SET_PARENT_TOPIC: "Set parent topic", ADD_TOPIC_RELATIONSHIP: "Add relationship",
   REMOVE_TOPIC_RELATIONSHIP: "Remove relationship", DEACTIVATE_TOPIC: "Deactivate topic", UPDATE_CAREER_LEVELS: "Career levels",
-  RESTORE_VERSION: "Restore version",
+  RESTORE_VERSION: "Restore version", PLACEMENT_CONTEXT: "Domain context",
 };
 
 export const MAP_ACTIONS = Object.keys(MAP_ACTION_LABELS).filter((action) => !["CREATE_TOPIC", "ADD_TOPIC_RELATIONSHIP"].includes(action));

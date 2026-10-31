@@ -4,8 +4,8 @@ import hashlib
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import String, case, cast, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import String, case, cast, func, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from .models import MAP_BRANCHES, KnowledgeTopic, KnowledgeTopicDomain, KnowledgeTopicSection, KnowledgeTopicSectionVersion, SecurityDomain
 
@@ -116,21 +116,56 @@ def _placement_counts(db: Session, reachable: dict[int, SecurityDomain], topic_i
     ).all())
 
 
-def branch_topics(db: Session, domain_id: int, branch: str, offset: int, limit: int) -> dict[str, Any]:
-    reachable = _reachable_domains(db)
-    _require_domain(reachable, domain_id)
-    query = _placements_query({domain_id}).where(KnowledgeTopicDomain.map_branch == branch)
-    total = db.scalar(query.with_only_columns(func.count())) or 0
-    topics = list(db.scalars(query.with_only_columns(KnowledgeTopic).order_by(KnowledgeTopicDomain.display_order, KnowledgeTopic.name, KnowledgeTopic.id).offset(offset).limit(limit)).all())
+def _placed_in_branch(domain_id: int, branch: str):
+    # Ids of published topics placed in one domain branch (a subquery).
+    parent, link = aliased(KnowledgeTopic), aliased(KnowledgeTopicDomain)
+    return select(link.topic_id).join(parent, parent.id == link.topic_id).where(
+        link.domain_id == domain_id, link.map_branch == branch, parent.publication_status == "published", parent.is_active.is_(True),
+    )
+
+
+def _topic_items(db: Session, reachable: dict[int, SecurityDomain], rows: list[tuple[KnowledgeTopic, str | None]]) -> list[dict[str, Any]]:
+    topics = [topic for topic, _ in rows]
+    notes = {topic.id: note for topic, note in rows}
     ids = [item.id for item in topics]
     placement_counts = _placement_counts(db, reachable, ids)
     with_children = set(db.scalars(select(KnowledgeTopic.parent_topic_id).where(KnowledgeTopic.parent_topic_id.in_(ids), *_published_topic()).distinct()).all())
     descriptions = _short_descriptions(db, topics)
-    items = [{
+    return [{
         "id": topic.id, "topic_key": topic.topic_key or topic.slug, "name": topic.name, "short_description": descriptions[topic.id],
-        "placement_count": placement_counts.get(topic.id, 0), "has_children": topic.id in with_children,
+        "placement_count": placement_counts.get(topic.id, 0), "has_children": topic.id in with_children, "context_note": notes[topic.id],
     } for topic in topics]
-    return {"domain_id": domain_id, "branch": branch, "label": MAP_BRANCHES[branch], "items": items, "total": total, "offset": offset, "limit": limit}
+
+
+def branch_topics(db: Session, domain_id: int, branch: str, offset: int, limit: int, include_nested: bool = False) -> dict[str, Any]:
+    reachable = _reachable_domains(db)
+    _require_domain(reachable, domain_id)
+    query = _placements_query({domain_id}).where(KnowledgeTopicDomain.map_branch == branch)
+    if not include_nested:
+        # A topic whose parent topic is placed in the same branch is listed under that parent, not at the top of the branch.
+        # include_nested lists every placed topic (the reorder form needs them all, matching REORDER_TOPICS validation).
+        query = query.where(or_(KnowledgeTopic.parent_topic_id.is_(None), KnowledgeTopic.parent_topic_id.not_in(_placed_in_branch(domain_id, branch))))
+    total = db.scalar(query.with_only_columns(func.count())) or 0
+    rows = db.execute(query.with_only_columns(KnowledgeTopic, KnowledgeTopicDomain.context_note).order_by(KnowledgeTopicDomain.display_order, KnowledgeTopic.name, KnowledgeTopic.id).offset(offset).limit(limit)).all()
+    return {"domain_id": domain_id, "branch": branch, "label": MAP_BRANCHES[branch], "items": _topic_items(db, reachable, rows), "total": total, "offset": offset, "limit": limit}
+
+
+def topic_children(db: Session, domain_id: int, branch: str, topic_id: int) -> dict[str, Any]:
+    """Published child topics of one topic, shown nested under it in a domain branch. Children placed in this branch
+    keep their branch order and context note; children not placed here are still listed, after them, by name."""
+    reachable = _reachable_domains(db)
+    _require_domain(reachable, domain_id)
+    if db.scalar(select(KnowledgeTopic.id).where(KnowledgeTopic.id == topic_id, *_published_topic())) is None:
+        raise HTTPException(status_code=404, detail="Published knowledge topic was not found")
+    link = aliased(KnowledgeTopicDomain)
+    rows = db.execute(
+        select(KnowledgeTopic, link.context_note)
+        .outerjoin(link, (link.topic_id == KnowledgeTopic.id) & (link.domain_id == domain_id) & (link.map_branch == branch))
+        .where(KnowledgeTopic.parent_topic_id == topic_id, *_published_topic())
+        .order_by(link.display_order.is_(None), link.display_order, func.lower(KnowledgeTopic.name), KnowledgeTopic.id)
+        .limit(200)
+    ).all()
+    return {"topic_id": topic_id, "domain_id": domain_id, "branch": branch, "items": _topic_items(db, reachable, rows)}
 
 
 def _domain_path(domain: SecurityDomain, reachable: dict[int, SecurityDomain]) -> list[dict[str, Any]]:
@@ -146,10 +181,26 @@ def _placements_by_topic(db: Session, reachable: dict[int, SecurityDomain], topi
     rows = db.scalars(_placements_query(set(reachable)).where(KnowledgeTopicDomain.topic_id.in_(topic_ids))).all()
     result: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
-        result.setdefault(row.topic_id, []).append({"domain_path": _domain_path(reachable[row.domain_id], reachable), "branch": row.map_branch, "label": MAP_BRANCHES[row.map_branch]})
+        result.setdefault(row.topic_id, []).append({
+            "domain_path": _domain_path(reachable[row.domain_id], reachable), "branch": row.map_branch, "label": MAP_BRANCHES[row.map_branch],
+            "context_note": row.context_note, "ancestors": _nested_ancestors(db, row.topic_id, row.domain_id, row.map_branch),
+        })
     for placements in result.values():
         placements.sort(key=lambda item: ([part["name"].casefold() for part in item["domain_path"]], list(MAP_BRANCHES).index(item["branch"])))
     return result
+
+
+def _nested_ancestors(db: Session, topic_id: int, domain_id: int, branch: str) -> list[dict[str, Any]]:
+    # Parent topics the map shows this topic under in one branch, outermost first: the chain of ancestors that are
+    # themselves placed in the same branch (matching branch_topics, which hides a topic whose parent is placed there).
+    placed = set(db.scalars(_placed_in_branch(domain_id, branch)).all())
+    chain: list[dict[str, Any]] = []
+    parent_id = db.scalar(select(KnowledgeTopic.parent_topic_id).where(KnowledgeTopic.id == topic_id))
+    while parent_id is not None and parent_id in placed and all(item["id"] != parent_id for item in chain):
+        parent = db.get(KnowledgeTopic, parent_id)
+        chain.append({"id": parent.id, "topic_key": parent.topic_key or parent.slug, "name": parent.name})
+        parent_id = parent.parent_topic_id
+    return list(reversed(chain))
 
 
 def topic_placements(db: Session, topic_identifier: str) -> list[dict[str, Any]]:
