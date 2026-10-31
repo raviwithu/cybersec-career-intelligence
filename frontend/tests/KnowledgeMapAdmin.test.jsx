@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setAdminSessionKey } from "../src/api";
-import KnowledgeMapAdminPage, { pendingIndex, possibleDuplicates } from "../src/KnowledgeMapAdminPage";
+import KnowledgeMapAdminPage, { domainTree, pendingIndex, possibleDuplicates } from "../src/KnowledgeMapAdminPage";
 import KnowledgeMapPage from "../src/KnowledgeMapPage";
 import KnowledgeReviewPage from "../src/KnowledgeReviewPage";
 import { lineDiff } from "../src/knowledgeMapActions";
@@ -15,7 +15,10 @@ const embedded = { node_type: "domain", id: 5, slug: "embedded", name: "Embedded
 const oauth = { id: 1, topic_key: "oauth-2", name: "OAuth 2.0", short_description: "", placement_count: 1 };
 const jwt = { id: 7, topic_key: "jwt", name: "JSON Web Tokens", short_description: "", placement_count: 1 };
 const adminTopic = (topic, extra = {}) => ({ id: topic.id, topic_key: topic.topic_key, name: topic.name, slug: topic.topic_key, description: "", sections: [], coverage: { topic_id: topic.id, topic_key: topic.topic_key, items: [], complete: false }, related_topics: [], level_expectations: [], last_updated: null, is_active: true, publication_status: "published", parent_topic_id: null, aliases: [], ...extra });
-const DOMAINS = [{ id: 2, name: "Cloud API Security", parent_id: null, is_active: true }, { id: 5, name: "Embedded Systems Security", parent_id: null, is_active: true }, { id: 6, name: "Secure Boot", parent_id: 5, is_active: true }];
+const DOMAINS = [{ id: 2, name: "Cloud API Security", parent_id: null, is_active: true, display_order: 1 }, { id: 5, name: "Embedded Systems Security", parent_id: null, is_active: true, display_order: 2 }, { id: 6, name: "Secure Boot", parent_id: 5, is_active: true, display_order: 0 }];
+// GET /domains returns top-level domains with their sub-domains nested under children, like the real API.
+const nest = (list, parentId = null) => list.filter((item) => item.parent_id === parentId && item.is_active).sort((a, b) => a.display_order - b.display_order).map((item) => ({ ...item, description: "", updated_at: `2026-10-30T00:00:0${item.version || 0}Z`, children: nest(list, item.id) }));
+const mapDomain = (item) => ({ node_type: "domain", id: item.id, slug: `d-${item.id}`, name: item.name, child_domain_count: nest(domains, item.id).length, placed_topic_count: item.id === 2 ? 2 : 0 });
 const LEVELS = [{ id: 1, name: "Junior", slug: "junior", career_track: "shared" }];
 
 function json(body, status = 200) {
@@ -24,9 +27,11 @@ function json(body, status = 200) {
 
 let proposals;
 let posted;
+let domains;
 
 function mockApi() {
   posted = [];
+  domains = DOMAINS.map((item) => ({ ...item }));
   global.fetch = vi.fn((url, options = {}) => {
     const { pathname, searchParams } = new URL(url);
     const path = pathname.replace("/api/v1", "");
@@ -40,9 +45,26 @@ function mockApi() {
       { action: "CREATE_TOPIC", existing_topic_id: null, name: "API Gateway Security", domain_id: 2, map_branch: "security", rationale: "Gateways appear in the finding.", related_topic_id: null, relationship_type: null, domain_name: "Cloud API Security", topic_name: null, related_topic_name: null, note: null },
     ] });
     if (options.method === "POST" && path.endsWith("/map-suggestions/submit")) { const body = JSON.parse(options.body); posted.push({ path, ...body }); return json({ created: body.suggestions.map((_, index) => ({ id: 700 + index })), errors: [] }); }
+    if (options.method === "POST" && path === "/research/taxonomy/domain") {
+      const body = JSON.parse(options.body);
+      posted.push({ path, ...body });
+      const created = { id: 60 + domains.length, name: body.name, parent_id: body.parent_id, is_active: true, display_order: 0 };
+      domains.push(created);
+      return json(created, 201);
+    }
+    const taxonomy = path.match(/^\/research\/taxonomy\/domain\/(\d+)(\/deactivate)?$/);
+    if (taxonomy) {
+      const item = domains.find((entry) => entry.id === Number(taxonomy[1]));
+      const body = options.body ? JSON.parse(options.body) : {};
+      posted.push({ path, method: options.method, ...body });
+      if (options.method === "PATCH") Object.assign(item, body, { version: (item.version || 0) + 1 });
+      if (taxonomy[2]) item.is_active = false;
+      if (options.method === "DELETE") return json({ message: "Only unused taxonomy entries can be permanently deleted", dependencies: { knowledge_topics: 1 } }, 409).then((response) => ({ ...response, json: () => Promise.resolve({ detail: { message: "Only unused taxonomy entries can be permanently deleted" } }) }));
+      return json(item);
+    }
     if (options.method === "POST") { posted.push({ path, ...JSON.parse(options.body) }); return json({ id: 1, status: "approved", version: 2 }); }
     if (path === "/knowledge/admin/topics") return json([adminTopic(oauth, { related_topics: [{ id: 7, topic_key: "jwt", name: "JSON Web Tokens", relationship_type: "dependency", direction: "outgoing", label: "Depends on" }] }), adminTopic(jwt, { aliases: ["JWT"] })]);
-    if (path === "/domains") return json(DOMAINS);
+    if (path === "/domains") return json(nest(domains));
     if (path === "/knowledge/admin/findings") return json([{ id: 31, candidate_name: "Experience securing cloud-native APIs", finding_type: "practical-capability", domain: "Cloud API Security", status: "published" }]);
     if (path === "/levels") return json(LEVELS);
     if (path === "/industries") return json([]);
@@ -51,8 +73,10 @@ function mockApi() {
       return json({ items, total: items.length, counts: {} });
     }
     if (path.endsWith("/map-preview")) return json({ proposal_id: 50, action: "PLACE_TOPIC", status: "review", message: null, branches: [{ domain_id: 2, domain_name: "Cloud API Security", map_branch: "security", label: "Security", before: [{ topic_id: 7, name: "JSON Web Tokens" }], after: [{ topic_id: 7, name: "JSON Web Tokens" }, { topic_id: 1, name: "OAuth 2.0" }] }] });
-    if (path === "/knowledge-map") return json({ root: { id: "root", name: "CyberSec Career Intelligence" }, domains: [cloud, embedded] });
+    if (path === "/knowledge-map") return json({ root: { id: "root", name: "CyberSec Career Intelligence" }, domains: nest(domains).map(mapDomain) });
     if (path === "/knowledge-map/domains/2/children") return json({ domain: cloud, nodes: [{ node_type: "branch", domain_id: 2, branch: "foundations", label: "Foundations", topic_count: 2 }] });
+    const children = path.match(/^\/knowledge-map\/domains\/(5|6|6\d)\/children$/);
+    if (children) return json({ domain: mapDomain(domains.find((item) => item.id === Number(children[1]))), nodes: nest(domains, Number(children[1])).map(mapDomain) });
     if (path === "/knowledge-map/domains/2/branches/foundations/topics") return json({ domain_id: 2, branch: "foundations", label: "Foundations", items: [oauth, jwt], total: 2, offset: 0, limit: Number(searchParams.get("limit")) });
     if (path.startsWith("/knowledge-map/topics/")) return json([{ domain_path: [{ id: 2, name: "Cloud API Security" }], branch: "foundations", label: "Foundations" }]);
     if (path.startsWith("/knowledge/topics/")) return json({ ...adminTopic(oauth), description: "Delegated authorization." });
@@ -170,6 +194,53 @@ describe("Knowledge Map Management", () => {
     expect(posted[0]).toMatchObject({ action: "CREATE_TOPIC", topic_name: "Token Binding", proposed_content: { topic: { name: "Token Binding" }, placements: [{ domain_id: 2, map_branch: "security" }] } });
   });
 
+  it("adds a sub-domain under a child domain and shows it on the map", async () => {
+    render(<KnowledgeMapAdminPage onNavigate={() => {}} />);
+    fireEvent.keyDown(await treeItem("Embedded Systems Security"), { key: "ArrowRight" });
+    fireEvent.keyDown(await treeItem("Secure Boot"), { key: "Enter" });
+    const region = await screen.findByRole("region", { name: "Propose changes to Secure Boot" });
+    const form = within(region).getByRole("form", { name: "Add sub-domain" });
+    expect(form.textContent).toContain("Embedded Systems Security › Secure Boot");
+    fireEvent.click(within(form).getByRole("button", { name: "Add sub-domain" }));
+    expect((await within(form).findByRole("alert")).textContent).toContain("name is required");
+    fireEvent.change(within(form).getByRole("textbox", { name: "Sub-domain name" }), { target: { value: "Measured Boot" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Add sub-domain" }));
+    expect((await within(form).findByRole("status")).textContent).toContain("Measured Boot was added under Embedded Systems Security › Secure Boot");
+    expect(posted).toEqual([{ path: "/research/taxonomy/domain", name: "Measured Boot", description: "", parent_id: 6 }]);
+    expect(await treeItem("Measured Boot")).toBeTruthy();
+    const placeIn = screen.getAllByRole("combobox", { name: "Place in domain (optional)" })[0];
+    expect([...placeIn.options].map((option) => option.textContent.replace(/\u00a0/g, " "))).toContain("      ↳ Measured Boot");
+  });
+
+  it("edits, moves, deactivates and refuses to delete a used sub-domain", async () => {
+    render(<KnowledgeMapAdminPage onNavigate={() => {}} />);
+    fireEvent.keyDown(await treeItem("Embedded Systems Security"), { key: "Enter" });
+    let form = within(await screen.findByRole("region", { name: "Propose changes to Embedded Systems Security" })).getByRole("form", { name: "Edit domain" });
+    expect([...within(form).getByRole("combobox", { name: "Parent domain" }).options].map((option) => option.textContent)).toEqual(["Top level (no parent)", "Cloud API Security"]);
+    fireEvent.keyDown(await treeItem("Embedded Systems Security"), { key: "ArrowRight" });
+    fireEvent.keyDown(await treeItem("Secure Boot"), { key: "Enter" });
+    const region = await screen.findByRole("region", { name: "Propose changes to Secure Boot" });
+    form = within(region).getByRole("form", { name: "Edit domain" });
+    expect(within(form).getByRole("textbox", { name: "Domain name" }).value).toBe("Secure Boot");
+    fireEvent.change(within(form).getByRole("textbox", { name: "Domain name" }), { target: { value: "Secure Boot Chain" } });
+    fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), { target: { value: "Boot integrity." } });
+    fireEvent.change(within(form).getByRole("combobox", { name: "Parent domain" }), { target: { value: "" } });
+    fireEvent.change(within(form).getByRole("spinbutton", { name: "Display order" }), { target: { value: "3" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Save domain" }));
+    expect((await within(form).findByRole("status")).textContent).toContain("Secure Boot Chain was saved.");
+    expect(posted).toEqual([{ path: "/research/taxonomy/domain/6", method: "PATCH", name: "Secure Boot Chain", description: "Boot integrity.", parent_id: null, display_order: 3, expected_updated_at: "2026-10-30T00:00:00Z" }]);
+    await waitFor(() => expect(screen.getAllByRole("treeitem", { name: /^Secure Boot Chain/ }).map((item) => item.getAttribute("aria-level"))).toEqual(["2"]));
+
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(within(form).getByRole("button", { name: "Delete if unused" }));
+    expect((await within(form).findByRole("alert")).textContent).toContain("Only unused taxonomy entries can be permanently deleted");
+    fireEvent.click(within(form).getByRole("button", { name: "Deactivate" }));
+    await waitFor(() => expect(within(region).getAllByRole("status").map((item) => item.textContent).join(" ")).toContain("Secure Boot Chain was deactivated"));
+    expect(within(region).queryByRole("form", { name: "Edit domain" })).toBeNull();
+    expect(posted.at(-1)).toMatchObject({ path: "/research/taxonomy/domain/6/deactivate", method: "POST" });
+    await waitFor(() => expect(screen.queryByRole("treeitem", { name: /^Secure Boot Chain/ })).toBeNull());
+  });
+
   it("shows Pending badges in the admin view only", async () => {
     proposals = [{ id: 50, map: true, action: "PLACE_TOPIC", status: "review", topic_id: 1, topic_key: "oauth-2", proposed_content: { domain_id: 2, map_branch: "foundations" } }];
     const { unmount } = render(<KnowledgeMapAdminPage onNavigate={() => {}} />);
@@ -250,6 +321,11 @@ describe("knowledge map admin helpers", () => {
     ]);
     expect([...topics.keys()]).toEqual([4]);
     expect([...branches]).toEqual(["branch:5:security", "branch:6:vulnerabilities"]);
+  });
+
+  it("orders domains as a tree of any depth", () => {
+    const tree = domainTree([{ id: 3, name: "Leaf", parent_id: 2 }, { id: 2, name: "Child", parent_id: 1 }, { id: 4, name: "Another root", parent_id: null }, { id: 1, name: "Root", parent_id: null }, { id: 9, name: "Orphan", parent_id: 99 }]);
+    expect(tree.map((item) => [item.name, item.depth, item.path.join(" › ")])).toEqual([["Another root", 0, "Another root"], ["Orphan", 0, "Orphan"], ["Root", 0, "Root"], ["Child", 1, "Root › Child"], ["Leaf", 2, "Root › Child › Leaf"]]);
   });
 
   it("flags exact and similar duplicates", () => {

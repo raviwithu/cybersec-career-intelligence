@@ -16,7 +16,9 @@ from .knowledge_contract_service import create_proposal, get_proposal
 from .knowledge_map_proposals import find_duplicate_topic
 from .knowledge_map_service import _reachable_domains
 from .models import KnowledgeTopic, KnowledgeTopicDomain, ResearchFinding, ReviewChange, SecurityDomain
+from .ollama_client import OllamaError
 from .phase5_api import model_selection, providers
+from .provider_common import ProviderError
 
 # Admin-triggered AI decomposition of an approved research finding into knowledge map suggestions (KM-5).
 # Suggestions are returned, never stored; only the ones an administrator selects become proposals (source_type "ai").
@@ -164,7 +166,9 @@ def suggest(db: Session, finding_id: int) -> dict[str, Any]:
     try:
         raw = providers.complete_selected(provider, model_id, SYSTEM_PROMPT, _prompt(finding, domains, candidates), get_settings().ask_timeout_seconds)
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"The configured AI provider could not produce suggestions: {type(exc).__name__}") from exc
+        # Provider errors carry a safe, readable reason (e.g. HTTP 429 out of credits); anything else shows only its type.
+        reason = str(exc) if isinstance(exc, (ProviderError, OllamaError)) else type(exc).__name__
+        raise HTTPException(status_code=503, detail=f"The configured AI provider could not produce suggestions: {reason}") from exc
     allowed = {domain.id: domain for domain in domains}
     suggestions, dropped = [], []
     for index, value in enumerate(_parse(raw)):

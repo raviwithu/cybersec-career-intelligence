@@ -101,15 +101,16 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
   }), []);
 
   // Loads a node's children once; concurrent callers share the request. Resolves to false on failure.
-  const loadChildren = useCallback((id) => {
+  const loadChildren = useCallback((id, { fresh = false } = {}) => {
     const current = stateRef.current;
     const node = current.nodes[id];
-    if (id === ROOT_ID ? current.nodes[ROOT_ID] : !isExpandable(node) || current.children[id]) return Promise.resolve(Boolean(id === ROOT_ID || node));
+    if (!fresh && (id === ROOT_ID ? current.nodes[ROOT_ID] : !isExpandable(node) || current.children[id])) return Promise.resolve(Boolean(id === ROOT_ID || node));
+    if (fresh && id !== ROOT_ID && !isExpandable(node)) return Promise.resolve(false);
     if (inflight.current[id]) return inflight.current[id];
     setNodeStatus(id, "loading");
-    const request = id === ROOT_ID ? fetchKnowledgeMapRoot().then((data) => update((value) => applyRoot(value, data)))
+    const request = id === ROOT_ID ? fetchKnowledgeMapRoot({ fresh }).then((data) => update((value) => applyRoot(value, data)))
       : node.type === "branch" ? fetchKnowledgeMapBranchTopics(node.domainId, node.branch, { offset: 0, limit: TOPIC_PAGE_SIZE }).then((page) => update((value) => applyTopicPage(value, id, page)))
-        : fetchKnowledgeMapChildren(node.domainId).then((data) => update((value) => applyDomainChildren(value, id, data)));
+        : fetchKnowledgeMapChildren(node.domainId, { fresh }).then((data) => update((value) => applyDomainChildren(value, id, data)));
     inflight.current[id] = request
       .then(() => { setNodeStatus(id, null); return true; }, (error) => { setNodeStatus(id, error); return false; })
       .finally(() => { delete inflight.current[id]; });
@@ -133,6 +134,12 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
     if (centre) setFocusRequest({ id });
   }, []);
 
+  // Fetches a node's children again from the server and expands it (admin: after a domain is added, edited or moved).
+  const reloadChildren = useCallback((id) => {
+    if (!stateRef.current.nodes[id]) return Promise.resolve(false);
+    update((value) => expand(value, [id]));
+    return loadChildren(id, { fresh: true });
+  }, [update, loadChildren]);
   const expandNode = useCallback((id) => { update((value) => expand(value, [id])); loadChildren(id); }, [update, loadChildren]);
   const collapseNode = useCallback((id) => {
     update((value) => collapse(value, id));
@@ -304,7 +311,7 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
       </section>
       <aside className={`panel km-details ${panelOpen ? "open" : ""}`} aria-label="Selected node details">
         <button type="button" className="km-details-close" aria-label="Close details" onClick={() => setPanelOpen(false)}>×</button>
-        {admin && selectedNode && admin.renderDetails(selectedNode, { state, placements, loadChildren })}
+        {admin && selectedNode && admin.renderDetails(selectedNode, { state, placements, loadChildren, reloadChildren })}
         <NodeDetails node={selectedNode} state={state} placements={placements} onReveal={reveal} onSelectTopic={openTopicKey} onNavigate={onNavigate} />
       </aside>
     </div>

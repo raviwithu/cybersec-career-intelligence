@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { clearAdminSessionKey, createKnowledgeProposal, fetchDomains, fetchIndustries, fetchKnowledgeAdminTopics, fetchKnowledgeContractHistory, fetchKnowledgeMapBranchTopics, fetchKnowledgeReviewQueue, fetchLevels, getAdminSessionKey, setAdminSessionKey } from "./api";
+import { clearAdminSessionKey, createKnowledgeProposal, createTaxonomyEntry, deleteTaxonomyEntry, fetchDomains, fetchIndustries, fetchKnowledgeAdminTopics, fetchKnowledgeContractHistory, fetchKnowledgeMapBranchTopics, fetchKnowledgeReviewQueue, fetchLevels, getAdminSessionKey, setAdminSessionKey, setTaxonomyActive, updateTaxonomyEntry } from "./api";
 import { Badge, EmptyState, ErrorState, Loading, PageHeader } from "./components";
 import KnowledgeMapPage from "./KnowledgeMapPage";
 import KnowledgeMapSuggestions from "./KnowledgeMapSuggestions";
 import KnowledgeSectionEditor from "./KnowledgeSectionEditor";
 import { MAP_ACTION_LABELS } from "./knowledgeMapActions";
-import { BRANCHES, branchNodeId } from "./knowledgeMapModel";
+import { BRANCHES, ROOT_ID, branchNodeId, domainNodeId } from "./knowledgeMapModel";
 
-// Knowledge Map Management: administrators propose map changes here. Nothing on this page changes live data;
-// every form creates a knowledge-contract proposal that is reviewed and published in Knowledge Review.
+// Knowledge Map Management: administrators propose map changes here. Every topic form creates a knowledge-contract
+// proposal that is reviewed and published in Knowledge Review; only "Add sub-domain" saves taxonomy directly.
 
 const OPEN_STATUSES = new Set(["draft", "review", "deferred", "approved"]);
 const RELATIONSHIP_TYPES = [["prerequisite", "Prerequisite"], ["related", "Related"], ["specialization", "Specialization"], ["dependency", "Depends on"], ["mitigated_by", "Mitigated by"], ["tested_by", "Tested by"]];
@@ -42,8 +42,68 @@ export function pendingIndex(proposals) {
   return { topics, branches };
 }
 
-function DomainSelect({ domains, value, onChange, label = "Domain" }) {
-  return <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)}><option value="">Choose a domain</option>{domains.map((domain) => <option key={domain.id} value={domain.id}>{domain.parent_id ? "↳ " : ""}{domain.name}</option>)}</select></label>;
+// GET /domains nests children under their parents; the page works with one flat list of every level.
+export function flattenDomains(domains) {
+  return domains.flatMap(({ children = [], ...domain }) => [domain, ...flattenDomains(children)]);
+}
+
+// Domains in tree order (each child right under its parent, any depth), with depth and the full path for labels.
+export function domainTree(domains) {
+  const known = new Set(domains.map((domain) => domain.id));
+  const byParent = new Map();
+  domains.forEach((domain) => {
+    const parent = known.has(domain.parent_id) ? domain.parent_id : null;
+    byParent.set(parent, [...(byParent.get(parent) || []), domain]);
+  });
+  const result = [];
+  const seen = new Set();
+  function visit(parentId, depth, path) {
+    (byParent.get(parentId) || []).sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0) || a.name.localeCompare(b.name)).forEach((domain) => {
+      if (seen.has(domain.id)) return;
+      seen.add(domain.id);
+      const domainPath = [...path, domain.name];
+      result.push({ ...domain, depth, path: domainPath });
+      visit(domain.id, depth + 1, domainPath);
+    });
+  }
+  visit(null, 0, []);
+  return result;
+}
+
+function DomainSelect({ domains, value, onChange, label = "Domain", emptyLabel = "Choose a domain" }) {
+  return <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)}><option value="">{emptyLabel}</option>{domainTree(domains).map((domain) => <option key={domain.id} value={domain.id}>{"   ".repeat(domain.depth)}{domain.depth ? "↳ " : ""}{domain.name}</option>)}</select></label>;
+}
+
+// Adds a child domain under the selected domain, at any depth. Domains are taxonomy, not knowledge content, so this
+// saves immediately through the Taxonomy Management API (same as adding it there); topic changes still need review.
+function SubDomainForm({ parent, domains, adminKey, onCreated }) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState("");
+  const path = domainTree(domains).find((domain) => domain.id === parent.domainId)?.path || [parent.label];
+  async function submit(event) {
+    event.preventDefault();
+    setError(null); setNotice("");
+    if (!name.trim()) { setError(new Error("A sub-domain name is required.")); return; }
+    setBusy(true);
+    try {
+      const created = await createTaxonomyEntry("domain", { name: name.trim(), description: description.trim(), parent_id: parent.domainId }, adminKey);
+      setNotice(`${created.name} was added under ${path.join(" › ")}. Place topics in its Foundations, Security or Common Vulnerabilities branch, or add another level under it.`);
+      setName(""); setDescription("");
+      await onCreated?.(created);
+    } catch (requestError) { setError(requestError); } finally { setBusy(false); }
+  }
+  return <form className="kma-form" onSubmit={submit} aria-label="Add sub-domain">
+    <h3>Add sub-domain</h3>
+    <p className="muted-copy">Adds a child domain under {path.join(" › ")}. It is saved immediately, like in Taxonomy Management; select the new sub-domain to add further levels under it.</p>
+    <label>Sub-domain name<input value={name} maxLength="180" onChange={(event) => setName(event.target.value)} /></label>
+    <label>Description<textarea rows="2" maxLength="4000" value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+    {error && <p className="kma-error" role="alert">{error.message}</p>}
+    {notice && <p className="success-copy" role="status">{notice}</p>}
+    <button type="submit" className="button" disabled={busy}>{busy ? "Adding…" : "Add sub-domain"}</button>
+  </form>;
 }
 
 function BranchSelect({ value, onChange }) {
@@ -219,6 +279,74 @@ function TopicActions({ node, topic, topics, domains, levels, industries, adminK
   </section>;
 }
 
+// The domain and every domain below it: a domain cannot move under itself or its own sub-domains.
+function withDescendants(domains, id) {
+  const ids = new Set([id]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    domains.forEach((domain) => { if (ids.has(domain.parent_id) && !ids.has(domain.id)) { ids.add(domain.id); grew = true; } });
+  }
+  return ids;
+}
+
+// Edits, moves, deactivates or deletes the selected domain. Like "Add sub-domain", this saves taxonomy immediately.
+function DomainEditForm({ node, domains, adminKey, onChanged }) {
+  const domain = domains.find((item) => item.id === node.domainId);
+  const [form, setForm] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    if (domain) setForm({ name: domain.name, description: domain.description || "", parent_id: domain.parent_id ? String(domain.parent_id) : "", display_order: String(domain.display_order ?? 0) });
+  }, [domain?.id, domain?.updated_at]);
+  // After a deactivation or deletion the domain leaves the list; keep the confirmation visible.
+  if (!domain || !form) return notice ? <p className="success-copy" role="status">{notice}</p> : null;
+  const blocked = withDescendants(domains, domain.id);
+  const subDomains = blocked.size - 1;
+  const change = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  async function run(task, message, previousParentId) {
+    setError(null); setNotice(""); setBusy(true);
+    try {
+      const result = await task();
+      setNotice(message(result));
+      await onChanged?.(previousParentId);
+    } catch (requestError) { setError(requestError); } finally { setBusy(false); }
+  }
+  function save(event) {
+    event.preventDefault();
+    if (!form.name.trim()) { setError(new Error("A domain name is required.")); return; }
+    const order = Number(form.display_order);
+    if (!Number.isInteger(order) || order < 0) { setError(new Error("Display order must be a whole number of 0 or more.")); return; }
+    run(() => updateTaxonomyEntry("domain", domain.id, { name: form.name.trim(), description: form.description.trim(), parent_id: form.parent_id ? Number(form.parent_id) : null, display_order: order, expected_updated_at: domain.updated_at }, adminKey),
+      (updated) => `${updated.name} was saved.`, domain.parent_id);
+  }
+  function deactivate() {
+    const extra = subDomains ? ` Its ${subDomains} sub-domain${subDomains === 1 ? "" : "s"} will be hidden too.` : "";
+    if (!window.confirm(`Deactivate ${domain.name}? It and its topic branches leave the map.${extra} You can reactivate it in Taxonomy Management.`)) return;
+    run(() => setTaxonomyActive("domain", domain.id, false, adminKey), () => `${domain.name} was deactivated. Reactivate it in Taxonomy Management.`, domain.parent_id);
+  }
+  function remove() {
+    if (!window.confirm(`Permanently delete ${domain.name}? This only works when nothing uses it.`)) return;
+    run(() => deleteTaxonomyEntry("domain", domain.id, adminKey), () => `${domain.name} was deleted.`, domain.parent_id);
+  }
+  return <form className="kma-form" onSubmit={save} aria-label="Edit domain">
+    <h3>Edit domain</h3>
+    <p className="muted-copy">Rename, describe, reorder or move this domain under another parent. Changes are saved immediately, like in Taxonomy Management.</p>
+    <label>Domain name<input value={form.name} maxLength="180" onChange={(event) => change("name", event.target.value)} /></label>
+    <label>Description<textarea rows="2" maxLength="4000" value={form.description} onChange={(event) => change("description", event.target.value)} /></label>
+    <DomainSelect domains={domains.filter((item) => !blocked.has(item.id))} value={form.parent_id} onChange={(value) => change("parent_id", value)} label="Parent domain" emptyLabel="Top level (no parent)" />
+    <label>Display order<input type="number" min="0" max="100000" value={form.display_order} onChange={(event) => change("display_order", event.target.value)} /></label>
+    {error && <p className="kma-error" role="alert">{error.message}</p>}
+    {notice && <p className="success-copy" role="status">{notice}</p>}
+    <div className="review-card-actions">
+      <button type="submit" className="button" disabled={busy}>{busy ? "Saving…" : "Save domain"}</button>
+      <button type="button" className="button button-secondary" disabled={busy} onClick={deactivate}>Deactivate</button>
+      <button type="button" className="button button-secondary" disabled={busy} onClick={remove}>Delete if unused</button>
+    </div>
+  </form>;
+}
+
 export default function KnowledgeMapAdminPage({ onNavigate }) {
   const [enteredKey, setEnteredKey] = useState(() => getAdminSessionKey());
   const [adminKey, setAdminKey] = useState(() => getAdminSessionKey());
@@ -231,7 +359,7 @@ export default function KnowledgeMapAdminPage({ onNavigate }) {
     setData((current) => ({ ...current, loading: true, error: null }));
     try {
       const [topics, domains, levels, industries, queue] = await Promise.all([fetchKnowledgeAdminTopics(adminKey), fetchDomains(), fetchLevels(), fetchIndustries(), fetchKnowledgeReviewQueue({ group: "map", limit: 500 }, adminKey)]);
-      setData({ loading: false, error: null, topics: topics.sort((a, b) => a.name.localeCompare(b.name)), domains: domains.filter((domain) => domain.is_active !== false), levels, industries, proposals: queue.items });
+      setData({ loading: false, error: null, topics: topics.sort((a, b) => a.name.localeCompare(b.name)), domains: flattenDomains(domains).filter((domain) => domain.is_active !== false), levels, industries, proposals: queue.items });
     } catch (error) { setData((current) => ({ ...current, loading: false, error })); }
   }, [adminKey]);
   useEffect(() => { load(); }, [load]);
@@ -248,11 +376,17 @@ export default function KnowledgeMapAdminPage({ onNavigate }) {
     return null;
   }, [pending]);
 
-  const renderDetails = useCallback((node, { state }) => {
+  const renderDetails = useCallback((node, { state, reloadChildren }) => {
     const parentLabel = state.nodes[state.parents[node.id]]?.label;
     if (node.type === "topic") return <TopicActions key={node.id} node={{ ...node, domainLabel: state.nodes[state.parents[state.parents[node.id]]]?.label }} topic={topicById.get(node.topicId)} topics={activeTopics} domains={data.domains} levels={data.levels} industries={data.industries} adminKey={adminKey} onSubmitted={load} onEditSections={setEditing} />;
     if (node.type === "branch") return <section className="kma-actions" key={node.id} aria-label={`Propose changes to ${parentLabel} ${node.label}`}><p className="eyebrow">PROPOSE A CHANGE</p><ReorderForm node={node} adminKey={adminKey} onSubmitted={load} /><PlaceForm topics={activeTopics} domains={data.domains} adminKey={adminKey} onSubmitted={load} fixedDomainId={node.domainId} fixedBranch={node.branch} /></section>;
-    if (node.type === "domain" || node.type === "child-domain") return <section className="kma-actions" key={node.id} aria-label={`Propose changes to ${node.label}`}><p className="eyebrow">PROPOSE A CHANGE</p><PlaceForm topics={activeTopics} domains={data.domains} adminKey={adminKey} onSubmitted={load} fixedDomainId={node.domainId} /></section>;
+    if (node.type === "domain" || node.type === "child-domain") return <section className="kma-actions" key={node.id} aria-label={`Propose changes to ${node.label}`}><p className="eyebrow">PROPOSE A CHANGE</p><PlaceForm topics={activeTopics} domains={data.domains} adminKey={adminKey} onSubmitted={load} fixedDomainId={node.domainId} /><SubDomainForm parent={node} domains={data.domains} adminKey={adminKey} onCreated={() => Promise.all([load(), reloadChildren(node.id)])} /><DomainEditForm node={node} domains={data.domains} adminKey={adminKey} onChanged={async (previousParentId) => {
+      // Refresh where the domain was and where it is now, so renames, moves and removals all show on the map.
+      const [domains] = await Promise.all([fetchDomains().then(flattenDomains), load()]);
+      const now = domains.find((item) => item.id === node.domainId);
+      const ids = new Set([previousParentId ? domainNodeId(previousParentId) : ROOT_ID, now ? (now.parent_id ? domainNodeId(now.parent_id) : ROOT_ID) : null].filter(Boolean));
+      await Promise.all([...ids].map((id) => reloadChildren(id)));
+    }} /></section>;
     return null;
   }, [topicById, activeTopics, data.domains, data.levels, data.industries, adminKey, load]);
 
@@ -261,7 +395,7 @@ export default function KnowledgeMapAdminPage({ onNavigate }) {
   function unlock() { if (enteredKey.trim()) { setAdminSessionKey(enteredKey.trim()); setAdminKey(enteredKey.trim()); } }
   function lock() { clearAdminSessionKey(); setEnteredKey(""); setAdminKey(""); }
 
-  const header = <PageHeader eyebrow="ADMINISTRATION / KNOWLEDGE MAP" title="Knowledge Map Management" description="Propose placements, ordering, hierarchy and topic changes. Every change is a proposal: it reaches the public map only after review and explicit publication in Knowledge Review.">
+  const header = <PageHeader eyebrow="ADMINISTRATION / KNOWLEDGE MAP" title="Knowledge Map Management" description="Add sub-domains at any depth, then propose placements, ordering, hierarchy and topic changes in each domain's Foundations, Security and Common Vulnerabilities. Topic changes are proposals: they reach the public map only after review and explicit publication in Knowledge Review.">
     {adminKey && <div className="review-card-actions"><button className="button button-secondary" onClick={() => onNavigate?.("knowledge-review")}>Open Knowledge Review</button><button className="button button-secondary" onClick={() => onNavigate?.("taxonomy-management")}>Manage domains in Taxonomy Management</button><button className="button button-secondary" onClick={lock}>Lock workspace</button></div>}
   </PageHeader>;
 
