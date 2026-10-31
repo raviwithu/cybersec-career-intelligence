@@ -338,3 +338,46 @@ def test_end_to_end_propose_modify_approve_publish_and_reject(client):
     rejected = propose(client, "UNPLACE_TOPIC", topic["id"], {"domain_id": domain}).json()
     review(client, rejected, "reject")
     assert branch_keys(client, domain, "security") == [topic["topic_key"]]
+
+
+def test_one_shared_topic_reused_across_domains_with_a_context_note_per_domain(client):
+    # One SSRF topic, placed under two domains' Common Vulnerabilities, each with its own "how it applies here" note.
+    lambda_domain, web_domain = make_domain(), make_domain()
+    ssrf = make_topic("Shared SSRF")
+    for domain, note in ((lambda_domain, "Reads local files and environment through file:// in Lambda."), (web_domain, "Reaches internal services from the web server.")):
+        create_and_publish(client, "PLACE_TOPIC", ssrf["id"], {"domain_id": domain, "map_branch": "vulnerabilities", "context_note": f"  {note}  "})
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(KnowledgeTopic).where(KnowledgeTopic.name == "Shared SSRF")) == 1
+    placements = client.get(f"{MAP}/topics/{ssrf['topic_key']}/placements").json()
+    assert sorted((item["domain_path"][-1]["id"], item["context_note"]) for item in placements) == sorted([(lambda_domain, "Reads local files and environment through file:// in Lambda."), (web_domain, "Reaches internal services from the web server.")])
+    item = client.get(f"{MAP}/domains/{web_domain}/branches/vulnerabilities/topics").json()["items"][0]
+    assert (item["topic_key"], item["placement_count"], item["context_note"]) == (ssrf["topic_key"], 2, "Reaches internal services from the web server.")
+
+    # Re-placing without a note keeps it; a new note replaces it; "" clears it. Other domains are untouched.
+    created = propose(client, "PLACE_TOPIC", ssrf["id"], {"domain_id": web_domain, "map_branch": "vulnerabilities"})
+    assert "context_note" not in created.json()["proposed_content"]
+    publish(client, review(client, created.json(), "approve"))
+    notes = lambda: {item["domain_path"][-1]["id"]: item["context_note"] for item in client.get(f"{MAP}/topics/{ssrf['topic_key']}/placements").json()}
+    assert notes()[web_domain] == "Reaches internal services from the web server."
+    create_and_publish(client, "PLACE_TOPIC", ssrf["id"], {"domain_id": web_domain, "map_branch": "vulnerabilities", "context_note": "Server-side URL fetchers."})
+    assert notes() == {lambda_domain: "Reads local files and environment through file:// in Lambda.", web_domain: "Server-side URL fetchers."}
+    create_and_publish(client, "PLACE_TOPIC", ssrf["id"], {"domain_id": web_domain, "map_branch": "vulnerabilities", "context_note": ""})
+    assert notes()[web_domain] is None and notes()[lambda_domain]
+
+    assert propose(client, "PLACE_TOPIC", ssrf["id"], {"domain_id": web_domain, "map_branch": "vulnerabilities", "context_note": "x" * 2001}).status_code == 422
+    assert propose(client, "PLACE_TOPIC", ssrf["id"], {"domain_id": web_domain, "map_branch": "vulnerabilities", "context_note": "<script>alert(1)</script>"}).status_code == 422
+
+
+def test_create_topic_can_place_a_shared_topic_in_several_domains_with_notes(client):
+    first, second = make_domain(), make_domain()
+    name = unique("Shared XXE")
+    created = propose(client, "CREATE_TOPIC", None, {"topic": {"name": name, "description": "XML external entities."}, "placements": [
+        {"domain_id": first, "map_branch": "vulnerabilities", "context_note": "Python runtime XML parsers."},
+        {"domain_id": second, "map_branch": "vulnerabilities"},
+    ]}, topic_name=name)
+    assert created.status_code == 201, created.text
+    assert created.json()["proposed_content"]["placements"][1] == {"domain_id": second, "map_branch": "vulnerabilities", "display_order": None}
+    publish(client, review(client, created.json(), "approve"))
+    with SessionLocal() as db:
+        topic = db.scalar(select(KnowledgeTopic).where(KnowledgeTopic.name == name))
+        assert {(link.domain_id, link.context_note) for link in db.scalars(select(KnowledgeTopicDomain).where(KnowledgeTopicDomain.topic_id == topic.id))} == {(first, "Python runtime XML parsers."), (second, None)}

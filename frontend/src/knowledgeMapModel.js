@@ -26,8 +26,9 @@ export function initialMapState() {
   return { nodes: {}, children: {}, parents: {}, expanded: {}, paging: {} };
 }
 
+// Topics expand only when they have child topics (nested under them in the same branch).
 export function isExpandable(node) {
-  return Boolean(node) && EXPANDABLE_TYPES.has(node.type);
+  return Boolean(node) && (EXPANDABLE_TYPES.has(node.type) || (node.type === "topic" && node.hasChildren));
 }
 
 function domainNode(domain, parent, index) {
@@ -36,7 +37,7 @@ function domainNode(domain, parent, index) {
 }
 
 function topicNode(branch, item) {
-  return { id: topicNodeId(branch.domainId, branch.branch, item.topic_key), type: "topic", label: item.name, topicKey: item.topic_key, topicId: item.id, description: item.short_description || "", placementCount: item.placement_count ?? item.placements?.length ?? 1, domainId: branch.domainId, branch: branch.branch, palette: branch.palette };
+  return { id: topicNodeId(branch.domainId, branch.branch, item.topic_key), type: "topic", label: item.name, topicKey: item.topic_key, topicId: item.id, description: item.short_description || "", placementCount: item.placement_count ?? item.placements?.length ?? 1, contextNote: item.context_note || "", hasChildren: Boolean(item.has_children), domainId: branch.domainId, branch: branch.branch, palette: branch.palette };
 }
 
 function withChildren(state, parentId, childNodes) {
@@ -86,6 +87,13 @@ export function applyTopicPage(state, branchId, page) {
 }
 
 // Lists a topic that search revealed but that lies beyond the loaded pages. Later pages skip it.
+// Child topics from GET /knowledge-map/domains/{id}/branches/{branch}/topics/{topicId}/children, nested under the topic.
+export function applyTopicChildren(state, topicId, data) {
+  const parent = state.nodes[topicId];
+  const childNodes = data.items.map((item) => topicNode(parent, item));
+  return withChildren(state, topicId, childNodes.length ? childNodes : [emptyNode(topicId)]);
+}
+
 export function ensureTopic(state, branchId, topic) {
   const branch = state.nodes[branchId];
   if (state.nodes[topicNodeId(branch.domainId, branch.branch, topic.topic_key)]) return state;

@@ -182,6 +182,45 @@ describe("Security Knowledge Map page", () => {
     expect(item("Cloud API Security").getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("expands a topic into its child topics, at any depth", async () => {
+    const children = { 1: [{ ...topic(11, "pkce", "PKCE"), has_children: true }], 11: [topic(12, "code-verifier", "Code Verifier")] };
+    mockApi((url) => {
+      const { pathname } = new URL(url);
+      const nested = pathname.match(/\/knowledge-map\/domains\/2\/branches\/foundations\/topics\/(\d+)\/children$/);
+      if (nested) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ topic_id: Number(nested[1]), domain_id: 2, branch: "foundations", items: children[nested[1]] }) });
+      if (pathname.endsWith("/domains/2/branches/foundations/topics")) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ domain_id: 2, branch: "foundations", label: "Foundations", items: [{ ...oauth, has_children: true }], total: 1, offset: 0, limit: 50 }) });
+      return null;
+    });
+    press(await renderMap(), "ArrowRight");
+    press(await findItem("Foundations"), "ArrowRight");
+    const parent = await findItem("OAuth 2.0");
+    expect(parent.getAttribute("aria-expanded")).toBe("false");
+    press(parent, "ArrowRight");
+    const pkce = await findItem("PKCE");
+    expect(pkce.getAttribute("aria-level")).toBe(String(Number(parent.getAttribute("aria-level")) + 1));
+    press(pkce, "ArrowRight");
+    expect((await findItem("Code Verifier")).getAttribute("aria-level")).toBe(String(Number(pkce.getAttribute("aria-level")) + 1));
+    expect(item("Code Verifier").getAttribute("aria-expanded")).toBeNull();
+  });
+
+  it("search opens a nested topic under its parent topics", async () => {
+    const pkcePlacement = { ...placement([[2, "Cloud API Security"]], "foundations", "Foundations"), ancestors: [{ id: 1, topic_key: "oauth-2", name: "OAuth 2.0" }] };
+    mockApi((url) => {
+      const { pathname, searchParams } = new URL(url);
+      const reply = (body) => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+      if (pathname.endsWith("/knowledge-map/search") && searchParams.get("q") === "pkce") return reply({ query: "pkce", items: [{ ...topic(11, "pkce", "PKCE"), placements: [pkcePlacement] }] });
+      if (pathname.endsWith("/domains/2/branches/foundations/topics/1/children")) return reply({ topic_id: 1, domain_id: 2, branch: "foundations", items: [topic(11, "pkce", "PKCE")] });
+      if (pathname.endsWith("/domains/2/branches/foundations/topics")) return reply({ domain_id: 2, branch: "foundations", label: "Foundations", items: [{ ...oauth, has_children: true }], total: 1, offset: 0, limit: 50 });
+      return null;
+    });
+    await renderMap();
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "pkce" } });
+    fireEvent.click(await screen.findByRole("button", { name: /PKCE/ }));
+    await waitFor(() => expect(item("PKCE").getAttribute("aria-selected")).toBe("true"));
+    expect(item("OAuth 2.0").getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getAllByRole("treeitem", { name: /^PKCE/ })).toHaveLength(1);
+  });
+
   it("opens a deep-linked topic", async () => {
     window.location.hash = "#knowledge-map?topic=oauth-2";
     mockApi();

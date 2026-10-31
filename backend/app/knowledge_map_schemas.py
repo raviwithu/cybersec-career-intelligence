@@ -48,6 +48,7 @@ class MapTopicNode(BaseModel):
     short_description: str
     placement_count: int
     has_children: bool
+    context_note: str | None = None
 
 
 class MapTopicPage(BaseModel):
@@ -65,10 +66,25 @@ class MapDomainRef(BaseModel):
     name: str
 
 
+class MapTopicRef(BaseModel):
+    id: int
+    topic_key: str
+    name: str
+
+
 class MapPlacement(BaseModel):
     domain_path: list[MapDomainRef]
     branch: MapBranch
     label: str
+    context_note: str | None = None
+    ancestors: list[MapTopicRef] = []  # parent topics it is nested under in this branch, outermost first
+
+
+class MapTopicChildren(BaseModel):
+    topic_id: int
+    domain_id: int
+    branch: MapBranch
+    items: list[MapTopicNode]
 
 
 class MapSearchResult(BaseModel):

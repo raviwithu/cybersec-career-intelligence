@@ -71,6 +71,7 @@ export function fetchKnowledgeContractCoverage(identifier) { return request(`/ap
 export function fetchKnowledgeMapRoot({ fresh = false } = {}) { return request("/api/v1/knowledge-map", fresh ? { cache: "no-cache" } : {}); }
 export function fetchKnowledgeMapChildren(domainId, { fresh = false } = {}) { return request(`/api/v1/knowledge-map/domains/${domainId}/children`, fresh ? { cache: "no-cache" } : {}); }
 export function fetchKnowledgeMapBranchTopics(domainId, branch, params = {}) { return request(`/api/v1/knowledge-map/domains/${domainId}/branches/${branch}/topics${queryString(params)}`); }
+export function fetchKnowledgeMapTopicChildren(domainId, branch, topicId, { fresh = false } = {}) { return request(`/api/v1/knowledge-map/domains/${domainId}/branches/${branch}/topics/${topicId}/children`, fresh ? { cache: "no-cache" } : {}); }
 export function fetchKnowledgeMapPlacements(identifier) { return request(`/api/v1/knowledge-map/topics/${encodeURIComponent(identifier)}/placements`); }
 export function searchKnowledgeMap(query, params = {}) { return request(`/api/v1/knowledge-map/search${queryString({ q: query, ...params })}`); }
 export function fetchKnowledgeAdminTopic(id, adminKey) { return request(`/api/v1/knowledge/admin/topics/${id}`, { headers: adminHeaders(adminKey) }); }

@@ -112,6 +112,38 @@ def test_sub_domains_nest_to_any_depth_before_the_branches(client):
     assert [item["id"] for item in placement["domain_path"]] == ids
 
 
+def test_child_topics_nest_under_their_parent_in_a_branch(client):
+    with SessionLocal() as db:
+        domain = _domain(db, "Nesting Domain")
+        overview = _topic(db, "IAM Overview Nest")
+        hierarchy = _topic(db, "Hierarchy Nest", parent=overview)
+        components = _topic(db, "Components Nest", parent=overview)
+        users = _topic(db, "Users Nest", parent=components)
+        unplaced = _topic(db, "Unplaced Child Nest", parent=overview)
+        _topic(db, "Draft Child Nest", parent=overview, status="draft")
+        elsewhere = _topic(db, "Security Child Nest", parent=overview)
+        standalone = _topic(db, "Standalone Nest")
+        for order, topic in enumerate((overview, components, hierarchy, users, standalone)):
+            _place(db, topic, domain, "foundations", order)
+        _place(db, elsewhere, domain, "security")
+        db.commit()
+        d, ids = domain.id, {t.name: (t.id, t.topic_key) for t in (overview, hierarchy, components, users, unplaced, elsewhere, standalone)}
+    branch = client.get(f"{MAP}/domains/{d}/branches/foundations/topics").json()
+    assert [(item["name"], item["has_children"]) for item in branch["items"]] == [("IAM Overview Nest", True), ("Standalone Nest", False)] and branch["total"] == 2
+    children = client.get(f"{MAP}/domains/{d}/branches/foundations/topics/{ids['IAM Overview Nest'][0]}/children").json()
+    assert [(item["name"], item["has_children"]) for item in children["items"]] == [("Components Nest", True), ("Hierarchy Nest", False), ("Security Child Nest", False), ("Unplaced Child Nest", False)]
+    grandchildren = client.get(f"{MAP}/domains/{d}/branches/foundations/topics/{ids['Components Nest'][0]}/children").json()
+    assert [item["name"] for item in grandchildren["items"]] == ["Users Nest"]
+    # Its parent is not placed in Security, so the child stays at the top of that branch.
+    assert [item["name"] for item in client.get(f"{MAP}/domains/{d}/branches/security/topics").json()["items"]] == ["Security Child Nest"]
+    placements = client.get(f"{MAP}/topics/{ids['Users Nest'][1]}/placements").json()
+    assert [item["name"] for item in placements[0]["ancestors"]] == ["IAM Overview Nest", "Components Nest"]
+    assert client.get(f"{MAP}/topics/{ids['Security Child Nest'][1]}/placements").json()[0]["ancestors"] == []
+    assert client.get(f"{MAP}/domains/{d}/branches/foundations/topics/999999/children").status_code == 404
+    flat = client.get(f"{MAP}/domains/{d}/branches/foundations/topics", params={"include_nested": "true"}).json()
+    assert [item["name"] for item in flat["items"]] == ["IAM Overview Nest", "Components Nest", "Hierarchy Nest", "Users Nest", "Standalone Nest"] and flat["total"] == 5
+
+
 def test_branches_appear_only_with_a_published_placement_and_stay_in_their_domain(client):
     with SessionLocal() as db:
         domain_a, domain_b = _domain(db, "Domain A"), _domain(db, "Domain B")
@@ -193,7 +225,7 @@ def test_search_matches_aliases_and_returns_placement_paths(client):
         parent_id, child_id = parent.id, child.id
     body = client.get(f"{MAP}/search", params={"q": "quokkachain"}).json()
     assert [item["name"] for item in body["items"]] == ["Return Oriented Programming"]
-    assert body["items"][0]["placements"] == [{"domain_path": [{"id": parent_id, "name": body["items"][0]["placements"][0]["domain_path"][0]["name"]}, {"id": child_id, "name": body["items"][0]["placements"][0]["domain_path"][1]["name"]}], "branch": "vulnerabilities", "label": "Common Vulnerabilities"}]
+    assert body["items"][0]["placements"] == [{"domain_path": [{"id": parent_id, "name": body["items"][0]["placements"][0]["domain_path"][0]["name"]}, {"id": child_id, "name": body["items"][0]["placements"][0]["domain_path"][1]["name"]}], "branch": "vulnerabilities", "label": "Common Vulnerabilities", "context_note": None, "ancestors": []}]
     assert client.get(f"{MAP}/search", params={"q": "q"}).status_code == 422
     assert client.get(f"{MAP}/search", params={"q": " q "}).status_code == 422
     assert client.get(f"{MAP}/search", params={"q": "x" * 101}).status_code == 422
@@ -269,7 +301,9 @@ def test_placement_migration_upgrades_and_downgrades_on_sqlite():
     try:
         alembic("upgrade", "head")
         names, indexes = columns()
-        assert {"map_branch", "display_order"} <= names and "ix_knowledge_topic_domains_map_placement" in indexes
+        assert {"map_branch", "display_order", "context_note"} <= names and "ix_knowledge_topic_domains_map_placement" in indexes
+        alembic("downgrade", "ph13mapplacement")
+        assert "context_note" not in columns()[0]
         alembic("downgrade", "ph12dunblockresolved")
         names, indexes = columns()
         assert {"map_branch", "display_order"}.isdisjoint(names) and "ix_knowledge_topic_domains_map_placement" not in indexes

@@ -4,11 +4,11 @@ import re
 from typing import Any, Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .knowledge_contract_schemas import RELATIONSHIP_TYPES, SECTION_TYPES
+from .knowledge_contract_schemas import RELATIONSHIP_TYPES, SECTION_TYPES, _clean_text
 from .knowledge_map_service import _reachable_domains
 from .knowledge_topic_service import snapshot
 from .models import (
@@ -43,6 +43,13 @@ class Placement(_Strict):
     domain_id: int = Field(ge=1)
     map_branch: Branch
     display_order: int | None = Field(default=None, ge=0, le=100_000)
+    # How this shared topic applies in this domain. Omitted or null keeps the current note; "" clears it.
+    context_note: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("context_note")
+    @classmethod
+    def clean_note(cls, value: str | None) -> str | None:
+        return None if value is None else _clean_text(value)
 
 
 class DomainRef(_Strict):
@@ -127,14 +134,24 @@ PAYLOADS: dict[str, type[BaseModel]] = {
 }
 
 
+def _without_empty_note(placement: dict[str, Any]) -> dict[str, Any]:
+    # A missing context note means "keep the current note"; leave the key out so stored proposals stay unchanged.
+    return {key: value for key, value in placement.items() if key != "context_note" or value is not None}
+
+
 def validate_map_payload(action: str, content: dict[str, Any]) -> dict[str, Any]:
     """Checks the shape of a map action payload (or CREATE_TOPIC placements). Raises HTTP 422; returns normalised content."""
     try:
         if action == "CREATE_TOPIC":
             if "placements" not in content:
                 return content
-            return {**content, "placements": CreatePlacements.model_validate({"placements": content["placements"]}).model_dump()["placements"]}
-        return PAYLOADS[action].model_validate(content).model_dump(by_alias=True)
+            return {**content, "placements": [_without_empty_note(item) for item in CreatePlacements.model_validate({"placements": content["placements"]}).model_dump()["placements"]]}
+        normalised = PAYLOADS[action].model_validate(content).model_dump(by_alias=True)
+        if action == "PLACE_TOPIC":
+            return _without_empty_note(normalised)
+        if action == "MOVE_TOPIC":
+            return {**normalised, "to": _without_empty_note(normalised["to"])}
+        return normalised
     except ValidationError as error:
         first = error.errors()[0]
         location = ".".join(str(part) for part in first["loc"])
@@ -151,7 +168,7 @@ def _link(db: Session, topic_id: int, domain_id: int, *, lock: bool = False) -> 
 def _placement_state(link: KnowledgeTopicDomain | None) -> dict[str, Any] | None:
     if link is None or link.map_branch is None:
         return None
-    return {"domain_id": link.domain_id, "map_branch": link.map_branch, "display_order": link.display_order}
+    return {"domain_id": link.domain_id, "map_branch": link.map_branch, "display_order": link.display_order, "context_note": link.context_note}
 
 
 def _placements(db: Session, topic_id: int) -> list[dict[str, Any]]:
@@ -339,7 +356,7 @@ def _next_order(db: Session, domain_id: int, branch: str) -> int:
     return 0 if current is None else current + 1
 
 
-def place(db: Session, topic: KnowledgeTopic, domain_id: int, branch: str, display_order: int | None) -> None:
+def place(db: Session, topic: KnowledgeTopic, domain_id: int, branch: str, display_order: int | None, context_note: str | None = None) -> None:
     link = _link(db, topic.id, domain_id, lock=True)
     order = display_order if display_order is not None else (link.display_order if link is not None and link.map_branch == branch else _next_order(db, domain_id, branch))
     if link is None:
@@ -348,6 +365,8 @@ def place(db: Session, topic: KnowledgeTopic, domain_id: int, branch: str, displ
         topic.domains.append(link)
     link.map_branch = branch
     link.display_order = order
+    if context_note is not None:
+        link.context_note = context_note or None
     db.flush()
 
 
@@ -380,7 +399,8 @@ def _restore_topic(db: Session, topic: KnowledgeTopic, stored: dict[str, Any]) -
             if current["domain_id"] not in wanted:
                 unplace(db, topic, current["domain_id"])
         for item in wanted.values():
-            place(db, topic, item["domain_id"], item["map_branch"], item.get("display_order"))
+            # Snapshots taken before context notes existed have no key: leave the current note alone.
+            place(db, topic, item["domain_id"], item["map_branch"], item.get("display_order"), (item["context_note"] or "") if "context_note" in item else None)
     if "level_expectations" in stored:
         keep = {(row["career_level_id"], row.get("industry_id")) for row in stored["level_expectations"]}
         for item in list(topic.level_expectations):
@@ -393,12 +413,12 @@ def apply_map_change(db: Session, action: str, topic: KnowledgeTopic, content: d
     """Writes one map change to the live tables. The caller owns the transaction."""
     db.refresh(topic, with_for_update=True)
     if action == "PLACE_TOPIC":
-        place(db, topic, content["domain_id"], content["map_branch"], content.get("display_order"))
+        place(db, topic, content["domain_id"], content["map_branch"], content.get("display_order"), content.get("context_note"))
     elif action == "UNPLACE_TOPIC":
         unplace(db, topic, content["domain_id"])
     elif action == "MOVE_TOPIC":
         unplace(db, topic, content["from"]["domain_id"])
-        place(db, topic, content["to"]["domain_id"], content["to"]["map_branch"], content["to"].get("display_order"))
+        place(db, topic, content["to"]["domain_id"], content["to"]["map_branch"], content["to"].get("display_order"), content["to"].get("context_note"))
     elif action == "REORDER_TOPICS":
         for index, topic_id in enumerate(content["ordered_topic_ids"]):
             link = _link(db, topic_id, content["domain_id"], lock=True)
@@ -418,7 +438,7 @@ def apply_map_change(db: Session, action: str, topic: KnowledgeTopic, content: d
 
 def apply_create_placements(db: Session, topic: KnowledgeTopic, content: dict[str, Any]) -> None:
     for item in content.get("placements") or []:
-        place(db, topic, item["domain_id"], item["map_branch"], item.get("display_order"))
+        place(db, topic, item["domain_id"], item["map_branch"], item.get("display_order"), item.get("context_note"))
 
 
 # ---- preview -------------------------------------------------------------------------------------------------------
