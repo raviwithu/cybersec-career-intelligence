@@ -21,7 +21,7 @@ import { useApi } from "./useApi";
 const KnowledgeMapPage = lazy(() => import("./KnowledgeMapPage"));
 const KnowledgeMapAdminPage = lazy(() => import("./KnowledgeMapAdminPage"));
 
-function flattenDomains(domains) { return domains.flatMap((domain) => [domain, ...(domain.children || [])]); }
+function flattenDomains(domains) { return domains.flatMap((domain) => [domain, ...flattenDomains(domain.children || [])]); }
 
 function ProfilePage() {
   const [form, setForm] = useState({ full_name: "", target_role: "", skills: "" });

@@ -67,8 +67,9 @@ export function fetchKnowledgeTopics(params = {}) { return request(`/api/v1/know
 export function fetchKnowledgeContractTopics(params = {}) { return request(`/api/v1/knowledge/topics${queryString(params)}`); }
 export function fetchKnowledgeContractTopic(identifier) { return request(`/api/v1/knowledge/topics/${encodeURIComponent(identifier)}`); }
 export function fetchKnowledgeContractCoverage(identifier) { return request(`/api/v1/knowledge/topics/${encodeURIComponent(identifier)}/coverage`); }
-export function fetchKnowledgeMapRoot() { return request("/api/v1/knowledge-map"); }
-export function fetchKnowledgeMapChildren(domainId) { return request(`/api/v1/knowledge-map/domains/${domainId}/children`); }
+// fresh: revalidate with the server instead of using the 60-second browser cache (admin, after a domain change).
+export function fetchKnowledgeMapRoot({ fresh = false } = {}) { return request("/api/v1/knowledge-map", fresh ? { cache: "no-cache" } : {}); }
+export function fetchKnowledgeMapChildren(domainId, { fresh = false } = {}) { return request(`/api/v1/knowledge-map/domains/${domainId}/children`, fresh ? { cache: "no-cache" } : {}); }
 export function fetchKnowledgeMapBranchTopics(domainId, branch, params = {}) { return request(`/api/v1/knowledge-map/domains/${domainId}/branches/${branch}/topics${queryString(params)}`); }
 export function fetchKnowledgeMapPlacements(identifier) { return request(`/api/v1/knowledge-map/topics/${encodeURIComponent(identifier)}/placements`); }
 export function searchKnowledgeMap(query, params = {}) { return request(`/api/v1/knowledge-map/search${queryString({ q: query, ...params })}`); }

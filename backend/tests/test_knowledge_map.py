@@ -89,6 +89,29 @@ def test_embedded_systems_security_lists_child_domains_before_branches(client):
     assert root_node["child_domain_count"] == len(child_names)
 
 
+def test_sub_domains_nest_to_any_depth_before_the_branches(client):
+    # Domain > sub-domain > sub-sub-domain, created through Taxonomy Management, then Foundations/Security/Vulnerabilities.
+    admin = {"X-Admin-API-Key": "test-admin-key"}
+    ids = []
+    for name in ("Depth Root", "Depth Child", "Depth Grandchild"):
+        response = client.post("/api/v1/research/taxonomy/domain", headers=admin, json={"name": _unique(name), "parent_id": ids[-1] if ids else None})
+        assert response.status_code == 201, response.text
+        ids.append(response.json()["id"])
+    root_id, child_id, grandchild_id = ids
+    with SessionLocal() as db:
+        grandchild = db.get(SecurityDomain, grandchild_id)
+        _place(db, _topic(db, "Deep Foundations"), grandchild, "foundations")
+        _place(db, _topic(db, "Deep Vulnerability"), grandchild, "vulnerabilities")
+        db.commit()
+    assert [(item["node_type"], item["id"]) for item in _children(client, root_id)] == [("domain", child_id)]
+    assert [(item["node_type"], item["id"]) for item in _children(client, child_id)] == [("domain", grandchild_id)]
+    assert [item["branch"] for item in _children(client, grandchild_id)] == ["foundations", "vulnerabilities"]
+    root_node = next(item for item in client.get(MAP).json()["domains"] if item["id"] == root_id)
+    assert (root_node["child_domain_count"], root_node["placed_topic_count"]) == (1, 2)
+    placement = client.get(f"{MAP}/search", params={"q": "Deep Vulnerability"}).json()["items"][0]["placements"][0]
+    assert [item["id"] for item in placement["domain_path"]] == ids
+
+
 def test_branches_appear_only_with_a_published_placement_and_stay_in_their_domain(client):
     with SessionLocal() as db:
         domain_a, domain_b = _domain(db, "Domain A"), _domain(db, "Domain B")

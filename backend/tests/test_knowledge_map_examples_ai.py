@@ -196,6 +196,20 @@ def test_map_suggestions_validate_model_output_and_write_nothing(client, model):
         assert db.scalar(select(func.count()).select_from(KnowledgeTopicProposal)) == before[0]
 
 
+def test_provider_failures_show_the_provider_reason(client, monkeypatch):
+    import app.knowledge_map_suggestions as suggestions
+    from app.provider_common import ProviderError
+
+    def out_of_credits(*args, **kwargs):
+        raise ProviderError("openwebui", "OpenWebUI request failed with HTTP 429: You have no credits remaining.")
+
+    monkeypatch.setattr(suggestions.providers, "complete_selected", out_of_credits)
+    monkeypatch.setattr(suggestions.model_selection, "active_selection", lambda db: ("openwebui", "test-model", "test-model"))
+    response = client.post(f"/api/v1/knowledge/admin/findings/{make_finding()}/map-suggestions", headers=ADMIN)
+    assert response.status_code == 503
+    assert "HTTP 429: You have no credits remaining." in response.json()["detail"]
+
+
 def test_suggestions_need_an_approved_finding(client, model):
     pending = make_finding(status="pending")
     assert client.post(f"/api/v1/knowledge/admin/findings/{pending}/map-suggestions", headers=ADMIN).status_code == 409
