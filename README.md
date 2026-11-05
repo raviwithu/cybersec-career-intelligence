@@ -4,6 +4,12 @@ CyberSec Career Intelligence is a competency intelligence platform for analyzing
 
 ![Security Knowledge Map in List view, with Secure Boot selected and its topic panel open on the How It Works tab](image.png)
 
+![Research Review queue with imported job sources on the left, and the selected source's Accept and merge all button and domain impact cards on the right](image-1.png)
+
+![Research Review findings, each with its source evidence and View comparison, Edit decision, Accept and merge, and Reject actions](image-2.png)
+
+![Career matrix of security domains against career levels, showing the expectation and competency counts in each cell](image-3.png)
+
 It is **not** a job board, job tracker, job aggregator, applicant-tracking system, or company-research platform. The application turns research inputs into reviewable, taxonomy-aware competency expectations.
 
 > **Development status:** Phases 1–7 are implemented. The seeded competency and expectation records are explicitly illustrative development data, not verified market research; intelligence analytics use only published source-linked evidence.
