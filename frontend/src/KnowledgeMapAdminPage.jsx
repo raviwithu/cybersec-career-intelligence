@@ -6,7 +6,7 @@ import KnowledgeMapPage from "./KnowledgeMapPage";
 import KnowledgeMapSuggestions from "./KnowledgeMapSuggestions";
 import KnowledgeSectionEditor from "./KnowledgeSectionEditor";
 import { MAP_ACTION_LABELS } from "./knowledgeMapActions";
-import { BRANCHES, ROOT_ID, domainNodeId } from "./knowledgeMapModel";
+import { BRANCHES, PLAYBOOK_SECTIONS, ROOT_ID, domainNodeId } from "./knowledgeMapModel";
 
 // Knowledge Map Management: administrators propose map changes here. Every topic form creates a knowledge-contract
 // proposal that is reviewed and published in Knowledge Review; only "Add sub-domain" saves taxonomy directly.
@@ -267,6 +267,8 @@ function RestoreForm({ topic, adminKey, onSubmitted }) {
   </ProposalForm>;
 }
 
+const COVERAGE_LABELS = { published: "Published", pending_review: "In review", draft: "Draft", missing: "Missing" };
+
 function TopicActions({ node, topic, topics, domains, levels, industries, adminKey, onSubmitted, onEditSections }) {
   const [action, setAction] = useState("PLACE_TOPIC");
   const [domainId, setDomainId] = useState(String(node.domainId));
@@ -322,6 +324,14 @@ function TopicActions({ node, topic, topics, domains, levels, industries, adminK
     RESTORE_VERSION: <RestoreForm topic={{ id: topicId }} adminKey={adminKey} onSubmitted={onSubmitted} />,
   };
   return <section className="kma-actions" aria-label={`Propose changes to ${node.label}`}>
+    {topic?.coverage?.playbook_items?.length > 0 && <div className="kma-coverage" role="group" aria-label={`Playbook coverage of ${node.label}`}>
+      <p className="eyebrow">PLAYBOOK COVERAGE</p>
+      {topic.coverage.playbook_items.map((item) => <div className="kma-coverage-row" key={item.section_type}>
+        <span>{PLAYBOOK_SECTIONS[item.section_type]?.label || item.section_type}</span>
+        <small className={`kma-coverage-${item.status}`}>{COVERAGE_LABELS[item.status]}</small>
+        <button type="button" className="kc-copy" aria-label={`${item.status === "missing" ? "Add" : "Edit"} ${PLAYBOOK_SECTIONS[item.section_type]?.label || item.section_type}`} onClick={() => onEditSections({ id: topicId, name: node.label, section: item.section_type })}>{item.status === "missing" ? "Add" : "Edit"}</button>
+      </div>)}
+    </div>}
     <div className="kma-actions-header"><p className="eyebrow">PROPOSE A CHANGE</p><button type="button" className="button button-secondary" onClick={() => onEditSections({ id: topicId, name: node.label })}>Edit sections</button></div>
     <div className="kma-action-picker" role="group" aria-label="Change type">{Object.keys(forms).map((id) => <button type="button" key={id} aria-pressed={action === id} className={action === id ? "active" : ""} onClick={() => setAction(id)}>{MAP_ACTION_LABELS[id]}</button>)}</div>
     {forms[action]}
@@ -491,6 +501,6 @@ export default function KnowledgeMapAdminPage({ onNavigate }) {
       <p className="muted-copy kma-hint">Select a domain, topic or branch on the map to propose a change for it. “Pending” marks items with open proposals; the public map never shows these badges.</p>
       <KnowledgeMapPage onNavigate={onNavigate} admin={admin} />
     </>}
-    {editing && <KnowledgeSectionEditor topic={editing} adminKey={adminKey} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
+    {editing && <KnowledgeSectionEditor topic={editing} initialSection={editing.section} adminKey={adminKey} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
   </div>;
 }

@@ -4,7 +4,7 @@ import { fetchKnowledgeContractTopic, fetchKnowledgeMapChildren, fetchKnowledgeM
 import { EmptyState, ErrorState, Loading, PageHeader } from "./components";
 import KnowledgeMapTopicPanel from "./KnowledgeMapTopicPanel";
 import KnowledgeMapTree from "./KnowledgeMapTree";
-import { BRANCHES, ROOT_ID, applyDomainChildren, applyRoot, applyTopicChildren, branchNodeId, collapse, collapseAll, domainNodeId, expand, initialMapState, isExpandable, layoutTree, pathTo, placementLabel, topicNodeId, visibleAncestor, visibleRows, visibleTree } from "./knowledgeMapModel";
+import { BRANCHES, PLAYBOOK_SECTIONS, ROOT_ID, applyDomainChildren, applyRoot, applyTopicChildren, branchNodeId, collapse, collapseAll, domainNodeId, expand, facetNodeId, initialMapState, isExpandable, layoutTree, opensTopicPanel, pathTo, playbookNodeId, placementLabel, topicNodeId, visibleAncestor, visibleRows, visibleTree } from "./knowledgeMapModel";
 
 // The graph library is only downloaded when the graph view is shown.
 const KnowledgeMapGraph = lazy(() => import("./KnowledgeMapGraph"));
@@ -25,28 +25,44 @@ function readViewMode() {
   return mediaMatches("(max-width: 800px)") ? "list" : "graph";
 }
 
-function topicFromHash() {
+function hashParam(name) {
   const query = window.location.hash.split("?")[1];
-  return query ? new URLSearchParams(query).get("topic") || "" : "";
+  return query ? new URLSearchParams(query).get(name) || "" : "";
 }
 
-// Deep links take the form #knowledge-map?topic=<topic_key>. replaceState keeps history clean and fires no hashchange.
-function writeTopicToHash(topicKey) {
+const topicFromHash = () => hashParam("topic");
+const sectionFromHash = () => hashParam("section");
+
+// Deep links take the form #knowledge-map?topic=<topic_key>, with &section=<section_type> for a playbook section.
+// replaceState keeps history clean and fires no hashchange.
+function writeTopicToHash(topicKey, section) {
   if (window.location.hash.split("?")[0] !== "#knowledge-map") return;
-  const next = `#knowledge-map${topicKey ? `?topic=${encodeURIComponent(topicKey)}` : ""}`;
+  const next = `#knowledge-map${topicKey ? `?topic=${encodeURIComponent(topicKey)}${section ? `&section=${encodeURIComponent(section)}` : ""}` : ""}`;
   if (window.location.hash !== next) window.history.replaceState(window.history.state, "", next);
 }
 
-function NodeDetails({ node, state, placements, onReveal, onSelectTopic, onNavigate }) {
+function NodeDetails({ node, state, placements, onReveal, onSelectTopic, onSelectNode, onSectionChange, onNavigate }) {
   if (!node) return null;
-  if (node.type === "topic") return <KnowledgeMapTopicPanel
-    node={node}
-    breadcrumb={pathTo(state, node.id).map((id) => state.nodes[id].label)}
-    placements={placements}
-    isCurrentPlacement={(placement) => topicNodeId(placement.domain_path[placement.domain_path.length - 1].id, node.topicKey) === node.id}
-    onReveal={(placement) => onReveal({ id: node.topicId, topic_key: node.topicKey, name: node.label, short_description: node.description }, placement)}
-    onSelectTopic={onSelectTopic}
-    onNavigate={onNavigate} />;
+  if (opensTopicPanel(node)) {
+    // A facet shows its topic's panel on that section, so placements and breadcrumbs stay the topic's.
+    const topic = node.type === "facet" ? state.nodes[node.topicNodeId] : node;
+    return <KnowledgeMapTopicPanel
+      node={topic}
+      activeSection={node.section}
+      breadcrumb={pathTo(state, topic.id).map((id) => state.nodes[id].label)}
+      placements={placements}
+      isCurrentPlacement={(placement) => topicNodeId(placement.domain_path[placement.domain_path.length - 1].id, topic.topicKey) === topic.id}
+      onReveal={(placement) => onReveal({ id: topic.topicId, topic_key: topic.topicKey, name: topic.label, short_description: topic.description }, placement)}
+      onSelectTopic={onSelectTopic}
+      onSectionChange={(section) => onSectionChange(topic, section)}
+      onNavigate={onNavigate} />;
+  }
+  if (node.type === "playbook") return <>
+    <p className="eyebrow">PLAYBOOK OF {state.nodes[node.topicNodeId]?.label}</p>
+    <h2><span aria-hidden="true">▣ </span>{node.label}</h2>
+    <p className="km-details-copy">{node.sectionCount} published {node.sectionCount === 1 ? "section" : "sections"} for reviewing this vulnerability.</p>
+    <ul className="km-placement-list">{(state.children[node.id] || []).map((id) => <li key={id}><button type="button" className="text-link" onClick={() => onSelectNode(id)}>{PLAYBOOK_SECTIONS[state.nodes[id].section]?.label}</button></li>)}</ul>
+  </>;
   if (node.type === "branch") return <>
     <p className="eyebrow">BRANCH OF {state.nodes[state.parents[node.id]]?.label}</p>
     <h2><span aria-hidden="true">{BRANCHES[node.branch]?.icon} </span>{node.label}</h2>
@@ -104,8 +120,8 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
     if (fresh && id !== ROOT_ID && !isExpandable(node)) return Promise.resolve(false);
     if (inflight.current[id]) return inflight.current[id];
     setNodeStatus(id, "loading");
-    // A branch's topics arrive with its topic's branches, so a branch reloads through its topic.
-    if (node?.type === "branch") return loadChildren(topicNodeId(node.domainId, node.parentTopicKey), { fresh });
+    // A branch's topics and a playbook's sections arrive with their topic, so both reload through it.
+    if (node?.type === "branch" || node?.type === "playbook") return loadChildren(topicNodeId(node.domainId, node.parentTopicKey), { fresh });
     const request = id === ROOT_ID ? fetchKnowledgeMapRoot({ fresh }).then((data) => update((value) => applyRoot(value, data)))
       : node.type === "topic" ? fetchKnowledgeMapTopicChildren(node.domainId, node.topicId, { fresh }).then((data) => update((value) => applyTopicChildren(value, id, data)))
         : fetchKnowledgeMapChildren(node.domainId, { fresh }).then((data) => update((value) => applyDomainChildren(value, id, data)));
@@ -117,7 +133,7 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
 
   const selectNode = useCallback((id, centre = false) => {
     setSelectedId(id);
-    if (stateRef.current.nodes[id]?.type === "topic") setPanelOpen(true);
+    if (opensTopicPanel(stateRef.current.nodes[id])) setPanelOpen(true);
     if (centre) setFocusRequest({ id });
   }, []);
 
@@ -141,7 +157,7 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
   }, [loadChildren, selectNode]);
 
   // Expands only the nodes on one placement path, then selects the topic there. Other expanded nodes stay as they are.
-  const reveal = useCallback(async (topic, placement) => {
+  const reveal = useCallback(async (topic, placement, section = "") => {
     const fail = () => setNotice(`${topic.name} could not be shown under ${placementLabel(placement)}.`);
     const domainIds = placement.domain_path.map((domain) => domainNodeId(domain.id));
     const leaf = placement.domain_path[placement.domain_path.length - 1];
@@ -157,13 +173,24 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
     if (!stateRef.current.nodes[targetId]) { fail(); return; }
     update((value) => expand(value, [ROOT_ID, ...domainIds, ...ancestorIds, ...branchIds]));
     setNotice("");
-    selectNode(targetId, true);
+    const facetId = facetNodeId(leaf.id, topic.topic_key, section);
+    if (section && (await loadChildren(targetId)) && stateRef.current.nodes[facetId]) {
+      update((value) => expand(value, [targetId, playbookNodeId(leaf.id, topic.topic_key)]));
+      selectNode(facetId, true);
+    } else selectNode(targetId, true);
   }, [loadChildren, update, selectNode]);
 
-  const openTopicKey = useCallback(async (topicKey) => {
+  // A panel tab follows the map: its facet when the Playbook is open, otherwise the topic.
+  const showSection = useCallback((topic, section) => {
+    const { nodes, expanded } = stateRef.current;
+    const facetId = facetNodeId(topic.domainId, topic.topicKey, section);
+    selectNode(nodes[facetId] && expanded[topic.id] && expanded[playbookNodeId(topic.domainId, topic.topicKey)] ? facetId : topic.id);
+  }, [selectNode]);
+
+  const openTopicKey = useCallback(async (topicKey, section = "") => {
     try {
       const [topicPlacements, topic] = await Promise.all([fetchKnowledgeMapPlacements(topicKey), fetchKnowledgeContractTopic(topicKey)]);
-      if (topicPlacements.length) await reveal({ id: topic.id, topic_key: topic.topic_key, name: topic.name, short_description: topic.description || "" }, topicPlacements[0]);
+      if (topicPlacements.length) await reveal({ id: topic.id, topic_key: topic.topic_key, name: topic.name, short_description: topic.description || "" }, topicPlacements[0], section);
       else setNotice(`${topic.name} is not on the published map yet.`);
     } catch (error) {
       setNotice(`The linked topic could not be opened: ${error.message}`);
@@ -173,18 +200,22 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
   }, [reveal]);
 
   useEffect(() => {
-    loadChildren(ROOT_ID).then((loaded) => { const topicKey = topicFromHash(); if (loaded && topicKey) openTopicKey(topicKey); else deepLinkPending.current = false; });
+    loadChildren(ROOT_ID).then((loaded) => { const topicKey = topicFromHash(); if (loaded && topicKey) openTopicKey(topicKey, sectionFromHash()); else deepLinkPending.current = false; });
   }, []);
 
   const selectedNode = state.nodes[selectedId] || null;
 
   useEffect(() => {
-    const onHashChange = () => { const topicKey = topicFromHash(); if (topicKey && topicKey !== stateRef.current.nodes[selectedId]?.topicKey) openTopicKey(topicKey); };
+    const onHashChange = () => {
+      const topicKey = topicFromHash();
+      const selected = stateRef.current.nodes[selectedId];
+      if (topicKey && (topicKey !== selected?.topicKey || sectionFromHash() !== (selected?.section || ""))) openTopicKey(topicKey, sectionFromHash());
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, [selectedId, openTopicKey]);
 
-  useEffect(() => { if (!deepLinkPending.current) writeTopicToHash(selectedNode?.topicKey || ""); }, [selectedNode?.topicKey]);
+  useEffect(() => { if (!deepLinkPending.current) writeTopicToHash(selectedNode?.topicKey || "", selectedNode?.section); }, [selectedNode?.topicKey, selectedNode?.section]);
 
   useEffect(() => {
     if (!selectedNode?.topicKey) return undefined;
@@ -295,7 +326,7 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
     </section>
     <nav className="km-breadcrumb" aria-label="Selected path"><ol>{breadcrumb.map((id, index) => <li key={id}>{index === breadcrumb.length - 1 ? <span aria-current="location">{state.nodes[id].label}</span> : <button type="button" className="text-link" onClick={() => selectNode(id, true)}>{state.nodes[id].label}</button>}</li>)}</ol></nav>
     <p className="km-status" role="status" aria-live="polite">{notice || (loadingCount ? "Loading…" : "")}</p>
-    <div className={`km-workspace ${selectedNode?.type === "topic" ? "topic-open" : ""}`}>
+    <div className={`km-workspace ${opensTopicPanel(selectedNode) ? "topic-open" : ""}`}>
       <section className="panel km-canvas" aria-label={graph ? "Map graph" : "Map list"}>
         {graph
           ? <Suspense fallback={<Loading label="Loading the graph view" />}><KnowledgeMapGraph layout={layout} expanded={state.expanded} selectedId={selectedId} focusRequest={focusRequest} onActivate={activateNode} onToggle={toggleNode} commandRef={commandRef} reduceMotion={reduceMotion} badgeFor={admin?.badgeFor} /></Suspense>
@@ -305,7 +336,7 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
       <aside className={`panel km-details ${panelOpen ? "open" : ""}`} aria-label="Selected node details">
         <button type="button" className="km-details-close" aria-label="Close details" onClick={() => setPanelOpen(false)}>×</button>
         {admin && selectedNode && admin.renderDetails(selectedNode, { state, placements, loadChildren, reloadChildren })}
-        <NodeDetails node={selectedNode} state={state} placements={placements} onReveal={reveal} onSelectTopic={openTopicKey} onNavigate={onNavigate} />
+        <NodeDetails node={selectedNode} state={state} placements={placements} onReveal={reveal} onSelectTopic={openTopicKey} onSelectNode={selectNode} onSectionChange={showSection} onNavigate={onNavigate} />
       </aside>
     </div>
   </div>;

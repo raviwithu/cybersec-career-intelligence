@@ -13,6 +13,11 @@ const TABS = [
   ["code_examples", "Example Code"],
   ["attack_surfaces", "Attack Surface"],
   ["mitigations", "Mitigations"],
+  ["source_review", "Source Review"],
+  ["dynamic_review", "Dynamic Review"],
+  ["information_gathering", "Info Gathering"],
+  ["ai_cicd_skill", "AI CI/CD Scan"],
+  ["ai_dynamic_skill", "AI Dynamic Analysis"],
   ["real_world_examples", "Real-World CVEs"],
   ["architecture", "Architecture"],
   ["career_levels", "Career Levels"],
@@ -70,12 +75,20 @@ function RelatedTopics({ related, onSelectTopic }) {
 }
 
 
-export default function KnowledgeMapTopicPanel({ node, breadcrumb, placements, isCurrentPlacement, onReveal, onSelectTopic, onNavigate }) {
+export default function KnowledgeMapTopicPanel({ node, activeSection, onSectionChange, breadcrumb, placements, isCurrentPlacement, onReveal, onSelectTopic, onNavigate }) {
   const [detail, setDetail] = useState({ loading: true, error: null, topic: null });
   const [tab, setTab] = useState("overview");
   const [attempt, setAttempt] = useState(0);
   const tabRefs = useRef({});
   const baseId = useId();
+
+  // A playbook facet selected on the map opens its section here.
+  useEffect(() => { if (activeSection) setTab(activeSection); }, [activeSection]);
+
+  function chooseTab(id) {
+    setTab(id);
+    onSectionChange?.(id);
+  }
 
   useEffect(() => {
     let active = true;
@@ -95,7 +108,7 @@ export default function KnowledgeMapTopicPanel({ node, breadcrumb, placements, i
     if (!(event.key in moves)) return;
     event.preventDefault();
     const next = tabs[(moves[event.key] + tabs.length) % tabs.length][0];
-    setTab(next);
+    chooseTab(next);
     tabRefs.current[next]?.focus();
   }
 
@@ -128,7 +141,7 @@ export default function KnowledgeMapTopicPanel({ node, breadcrumb, placements, i
         : !tabs.length ? <p className="km-details-copy">{detail.topic.description || node.description || "No learning content has been published for this topic yet."}</p>
           : <>
             <div className="km-topic-tabs" role="tablist" aria-label={`${node.label} sections`}>
-              {tabs.map(([id, label], index) => <button type="button" role="tab" key={id} id={`${baseId}-tab-${id}`} ref={(element) => { tabRefs.current[id] = element; }} aria-selected={activeTab === id} aria-controls={`${baseId}-panel`} tabIndex={activeTab === id ? 0 : -1} className={activeTab === id ? "active" : ""} onClick={() => setTab(id)} onKeyDown={(event) => onTabKeyDown(event, index)}>{label}</button>)}
+              {tabs.map(([id, label], index) => <button type="button" role="tab" key={id} id={`${baseId}-tab-${id}`} ref={(element) => { tabRefs.current[id] = element; }} aria-selected={activeTab === id} aria-controls={`${baseId}-panel`} tabIndex={activeTab === id ? 0 : -1} className={activeTab === id ? "active" : ""} onClick={() => chooseTab(id)} onKeyDown={(event) => onTabKeyDown(event, index)}>{label}</button>)}
             </div>
             <div className="km-topic-tabpanel knowledge-rich" role="tabpanel" id={`${baseId}-panel`} aria-labelledby={`${baseId}-tab-${activeTab}`} tabIndex={0}>{renderTab(activeTab)}</div>
           </>}

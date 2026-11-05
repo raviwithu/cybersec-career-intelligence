@@ -39,6 +39,9 @@ NIST_147 = _ref("NIST SP 800-147: BIOS Protection Guidelines", "https://csrc.nis
 UEFI_SPECS = _ref("UEFI Specifications", "https://uefi.org/specifications", "UEFI Forum")
 RFC_9019 = _ref("RFC 9019: A Firmware Update Architecture for Internet of Things", "https://www.rfc-editor.org/rfc/rfc9019", "IETF")
 RFC_9124 = _ref("RFC 9124: A Manifest Information Model for Firmware Updates in IoT Devices", "https://www.rfc-editor.org/rfc/rfc9124", "IETF")
+CWE_89 = _ref("CWE-89: Improper Neutralization of Special Elements used in an SQL Command", "https://cwe.mitre.org/data/definitions/89.html", "MITRE")
+OWASP_SQLI = _ref("OWASP SQL Injection Prevention Cheat Sheet", "https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html", "OWASP", "technical_article")
+OWASP_WSTG_SQLI = _ref("OWASP Web Security Testing Guide: Testing for SQL Injection (WSTG-INPV-05)", "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05-Testing_for_SQL_Injection", "OWASP", "technical_article")
 NVD_BOOTHOLE = _ref("NVD: CVE-2020-10713", "https://nvd.nist.gov/vuln/detail/CVE-2020-10713", "NIST NVD", "vulnerability_database")
 
 
@@ -323,10 +326,128 @@ EXAMPLE_TOPICS: list[dict] = [
 ]
 
 # Recorded in the change reason of the relevant proposals.
+# A vulnerability with a full playbook (KM-6). The AI skills are content to copy: ./ci/ai-scan is a placeholder for your own runner.
+EXAMPLE_TOPICS.append({
+    "topic_key": "sql-injection",
+    "name": "SQL Injection",
+    "aliases": ["SQLi"],
+    "description": "User input reaches a database query as part of the SQL text, so the input can change what the query does.",
+    "placements": [("web-application-security", "vulnerabilities"), ("cloud-api-security", "vulnerabilities")],
+    "relationships": [],
+    "references": [CWE_89, OWASP_SQLI, OWASP_WSTG_SQLI],
+    "sections": {
+        "overview": {
+            "short_description": "User input reaches a database query as part of the SQL text, so the input can change what the query does.",
+            "technical_explanation": "The flaw appears when an application builds query text from untrusted values. The database cannot tell the intended query from the added input, so the input can change which rows are read or what the statement does.",
+            "key_concepts": ["Parameterized queries", "Untrusted input and dangerous sinks", "Second-order injection", "Least-privilege database accounts"],
+            "related_technologies": ["Relational databases", "ORMs", "Stored procedures"],
+        },
+        "code_examples": {"items": [
+            {
+                "title": "Order lookup by status", "language": "python", "security_control": "Parameterized queries",
+                "vulnerable": "@app.get(\"/orders\")\ndef orders():\n    status = request.args[\"status\"]\n    sql = f\"SELECT id, total FROM orders WHERE status = '{status}'\"\n    return jsonify(db.execute(sql).fetchall())",
+                "secure": "@app.get(\"/orders\")\ndef orders():\n    status = request.args[\"status\"]\n    sql = \"SELECT id, total FROM orders WHERE status = ?\"\n    return jsonify(db.execute(sql, (status,)).fetchall())",
+                "explanation": "The f-string puts the request value inside the SQL text before the database sees it. With a placeholder, the query is fixed and the value travels separately.",
+            },
+            {
+                "title": "Order lookup by status", "language": "java", "security_control": "Parameterized queries",
+                "vulnerable": "String status = req.getParameter(\"status\");\nString sql = \"SELECT id, total FROM orders WHERE status = '\" + status + \"'\";\nResultSet rows = conn.createStatement().executeQuery(sql);",
+                "secure": "String status = req.getParameter(\"status\");\nPreparedStatement stmt = conn.prepareStatement(\"SELECT id, total FROM orders WHERE status = ?\");\nstmt.setString(1, status);\nResultSet rows = stmt.executeQuery();",
+                "explanation": "Concatenation builds the SQL text from the request value. PreparedStatement compiles the query first and binds the value afterwards.",
+            },
+            {
+                "title": "Order lookup by status (Node.js)", "language": "javascript", "security_control": "Parameterized queries",
+                "vulnerable": "app.get(\"/orders\", async (req, res) => {\n  const sql = `SELECT id, total FROM orders WHERE status = '${req.query.status}'`;\n  const [rows] = await db.query(sql);\n  res.json(rows);\n});",
+                "secure": "app.get(\"/orders\", async (req, res) => {\n  const sql = \"SELECT id, total FROM orders WHERE status = ?\";\n  const [rows] = await db.execute(sql, [String(req.query.status)]);\n  res.json(rows);\n});",
+                "explanation": "The template literal merges the value into the SQL. db.execute sends a prepared statement with the value bound.",
+            },
+            {
+                "title": "Order lookup by status", "language": "php", "security_control": "Parameterized queries",
+                "vulnerable": "$status = $_GET[\"status\"];\n$sql = \"SELECT id, total FROM orders WHERE status = '$status'\";\n$rows = $pdo->query($sql)->fetchAll();",
+                "secure": "$status = $_GET[\"status\"];\n$stmt = $pdo->prepare(\"SELECT id, total FROM orders WHERE status = ?\");\n$stmt->execute([$status]);\n$rows = $stmt->fetchAll();",
+                "explanation": "PHP interpolates $status into the string, so the input becomes SQL. PDO prepare and execute keep the value out of the query text.",
+            },
+        ]},
+        "mitigations": {"items": [
+            {"control": "Parameterized queries", "control_type": "fixes", "description": "The query text is fixed and values are bound separately, so input cannot change the query.", "does_not_cover": "Table names, column names and sort direction, which cannot be bound."},
+            {"control": "Allow-list for dynamic identifiers", "control_type": "fixes", "description": "Map a sort or column choice to a fixed list in code. Never pass the raw value through.", "does_not_cover": "Values. Use bound parameters for those."},
+            {"control": "ORM query APIs", "control_type": "fixes", "description": "Standard ORM methods bind values for you.", "does_not_cover": "Raw query helpers inside the ORM, which need the same review as hand-written SQL."},
+            {"control": "Least-privilege database account", "control_type": "limits", "description": "The application account can reach only the tables and actions it needs.", "does_not_cover": "Data the account is allowed to read. The flaw itself stays."},
+            {"control": "Input validation", "control_type": "limits", "description": "Reject values that do not match the expected type or format.", "does_not_cover": "Free-text fields. It is not a fix on its own."},
+            {"control": "Generic errors, query logging and WAF rules", "control_type": "detects", "description": "Hide database errors from users and alert on unusual query failures.", "does_not_cover": "The flaw. WAF rules can be bypassed and must not be counted as the fix."},
+        ]},
+        "source_review": {
+            "entry_points": ["Query strings, form fields, JSON bodies and path parameters", "Headers and cookies", "Queue messages, webhooks and file imports", "Values read back from the database (second-order)"],
+            "dangerous_sinks": ["Queries built by concatenation, f-strings or templates", "Raw query helpers in an ORM", "Stored procedures that build dynamic SQL", "Shared helpers that build WHERE or ORDER BY clauses"],
+            "search_patterns": [
+                {"language": "Python", "pattern": "execute(f\"   |   .format(   |   text(f\""},
+                {"language": "Java", "pattern": "createStatement(   |   nativeQuery"},
+                {"language": "Node.js", "pattern": ".query(`   |   sequelize.literal("},
+                {"language": "PHP", "pattern": "->query(\"   |   mysqli_query(   |   DB::raw("},
+            ],
+            "easy_to_miss": ["ORDER BY and table names, which placeholders cannot protect", "LIKE searches built around the bound value", "Manual escaping used in place of binding", "Stored data that was safe on write but is reused in a later query"],
+        },
+        "dynamic_review": {
+            "steps": [
+                {"title": "Map the inputs", "action": "List every route and parameter that reaches a data store, including headers, JSON fields and sort options.", "look_for": "Parameters that filter, sort or look up records."},
+                {"title": "Record a baseline", "action": "Send normal requests and note the status, body size and response time.", "look_for": "A stable result to compare against."},
+                {"title": "Compare responses", "action": "Change the input in ways that are harmless as data but would alter SQL syntax, following OWASP WSTG-INPV-05.", "look_for": "Differences in status, content or row count that track the syntax change."},
+                {"title": "Check for blind behaviour", "action": "When responses look identical, test for consistent true/false or timing differences at a low request rate.", "look_for": "A repeatable difference, not a one-off."},
+                {"title": "Confirm in logs", "action": "With server access, match the request to the query that reached the database.", "look_for": "Input visible in the SQL text instead of as a bound value."},
+            ],
+            "evidence": ["Request and response pairs for baseline and test", "Route, parameter and account used", "Database or application log line, when available", "Proof stopped at confirmation, with no real data extracted"],
+        },
+        "information_gathering": {
+            "issue_checks": [
+                {"what": "Entry points", "how": "API spec, proxy history and client-side routes", "tells": "Which inputs to test."},
+                {"what": "Database engine and version", "how": "Deployment config, error pages and response headers", "tells": "Which syntax and behaviour apply."},
+                {"what": "Error behaviour", "how": "Compare a normal request with a malformed one", "tells": "Whether database errors reach the client."},
+                {"what": "Query as received", "how": "Database query log or APM trace in a test environment", "tells": "Whether input appears inside the SQL text."},
+            ],
+            "mitigation_checks": [
+                {"what": "Prepared statements", "how": "Database log or APM trace, showing placeholders and bind values", "tells": "Whether binding really happens at runtime."},
+                {"what": "Account privileges", "how": "Role and grant listing for the application account", "tells": "How far a successful injection could reach."},
+                {"what": "WAF in the path", "how": "Response headers, block pages and infrastructure config", "tells": "A filter exists. It does not show the flaw is fixed."},
+                {"what": "Monitoring", "how": "Alert rules and a test query failure in staging", "tells": "Whether attempts would be seen."},
+            ],
+        },
+        "ai_cicd_skill": {
+            "skill_id": "sqli-source-review",
+            "summary": "A skill you add to the pipeline. It scans changed code on every pull request, using the sources and sinks in Source Review. ./ci/ai-scan is a placeholder for your own runner.",
+            "inputs": ["The pull request diff and the code it calls", "Source, sink and search lists from this playbook", "Your approved model, with secrets excluded from the prompt"],
+            "outputs": ["SARIF report for the security dashboard", "A comment on each affected line", "File, line and input-to-query path", "Severity, confidence and a suggested fix"],
+            "gate_policy": ["High severity and high confidence: merge blocked", "Everything else: comment only", "A person confirms or dismisses each block", "Dismissals need a reason and are recorded"],
+            "pipelines": [
+                {"system": "GitHub Actions", "file_name": ".github/workflows/ai-security-scan.yml", "content": "name: ai-security-scan\non: pull_request\npermissions:\n  contents: read\n  security-events: write\njobs:\n  scan:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n        with: { fetch-depth: 0 }\n      - name: Run AI skill on changed files\n        run: ./ci/ai-scan --skill sqli-source-review --diff \"origin/$GITHUB_BASE_REF\" --out findings.sarif\n      - uses: github/codeql-action/upload-sarif@v3\n        with:\n          sarif_file: findings.sarif"},
+                {"system": "GitLab CI", "file_name": ".gitlab-ci.yml", "content": "ai_security_scan:\n  stage: test\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"merge_request_event\"\n  script:\n    - ./ci/ai-scan --skill sqli-source-review --diff \"origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME\" --format gitlab --out gl-sast-report.json\n  artifacts:\n    reports:\n      sast: gl-sast-report.json"},
+            ],
+            "example_finding": {"location": "orders.py:4, request.args[\"status\"] to db.execute(sql)", "explanation": "The status parameter is placed into the query with an f-string and no binding. Confidence is high, because nothing checks the value between the request and the query.", "suggested_fix": "Use a ? placeholder and pass status as a bound parameter."},
+        },
+        "ai_dynamic_skill": {
+            "skill_id": "sqli-dynamic-analysis",
+            "summary": "Choose the access you have. The skill changes what it does, and says what that access can and cannot prove.",
+            "guardrails": ["Authorised targets only", "No writes and no data extraction", "Stop at the first confirmed signal", "Log every action for audit"],
+            "access_levels": [
+                {"access": "binary", "needs": ["The binary or container image", "An isolated sandbox with no production access", "A test database with query logging on"], "steps": ["List embedded SQL strings and database driver libraries", "Flag query text with format markers or joined fragments", "Run the build in the sandbox with database calls traced", "Match test input to the queries that arrive"], "can_prove": ["Query text is assembled at runtime", "Input arrives in the SQL text, not as a bound value"], "cannot_see": ["Paths the sandbox run never reached", "Strings that are encrypted or obfuscated", "How production is configured"]},
+                {"access": "system", "needs": ["Read-only access to the host or environment", "Database query logs or an APM trace", "A test account for the application"], "steps": ["Read the query log while normal requests run", "Check for placeholders and bind values", "List the application account grants", "Review config for error handling and logging"], "can_prove": ["Whether binding really happens at runtime", "How far a successful injection could reach", "Whether attempts would be logged"], "cannot_see": ["Routes that receive no traffic during the run", "Other environments with different config"]},
+                {"access": "remote", "needs": ["Written permission for the host", "A test account", "API spec or proxy history"], "steps": ["Map inputs on the in-scope routes", "Record a baseline for each one", "Send read-only comparison requests at a low rate", "Summarise the differences as evidence"], "can_prove": ["Behaviour that changes with SQL syntax", "Whether database errors reach the client"], "cannot_see": ["The cause inside the application", "Flaws hidden behind a WAF or identical responses", "A clean result does not prove the app is safe"]},
+            ],
+        },
+    },
+    "levels": {
+        "junior": ("Explain why building SQL from input is unsafe and what a bound parameter does.", "Rewrite a concatenated query with placeholders."),
+        "intermediate": ("Describe second-order injection and why identifiers cannot be bound.", "Review a pull request for injectable queries, including ORM raw helpers."),
+        "senior": ("Assess injection risk across services and data access layers.", "Lead dynamic testing and confirm findings with database logs."),
+        "architect": ("Design data access layers that make parameterized access the default.", "Define shared query helpers, account privileges and CI scanning policy."),
+        "manager": ("Understand injection as a path to data exposure and how scanning gates reduce it.", "Prioritise remediation and agree merge gate policy with teams."),
+    },
+})
+
 EXAMPLE_NOTES = {
     "idor-bola": "No real-world example included: no specific CVE was selected with a citable advisory; add one after verification.",
     "oauth-2-0": "No real-world example included: add a verified advisory if one is needed.",
     "ssrf": "No real-world example included: add a verified advisory or CISA KEV entry if one is needed.",
+    "sql-injection": "No real-world example included: add a verified advisory if one is needed.",
     "firmware-signature-verification": "No real-world example included: add a verified advisory if one is needed.",
     "secure-boot": "The CVE-2020-10713 example cites NVD and needs a verified source before publication.",
 }

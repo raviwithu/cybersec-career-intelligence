@@ -27,7 +27,7 @@ from .knowledge_map_proposals import find_duplicate_topic
 from .models import CareerLevel, KnowledgeTopic, KnowledgeTopicDomain, KnowledgeTopicProposal, KnowledgeTopicRelationship, SecurityDomain
 
 ACTOR = "administrator"
-SECTION_ORDER = ("overview", "how_it_works", "code_examples", "attack_surfaces", "mitigations", "real_world_examples", "architecture", "references")
+SECTION_ORDER = ("overview", "how_it_works", "code_examples", "attack_surfaces", "mitigations", "source_review", "dynamic_review", "information_gathering", "ai_cicd_skill", "ai_dynamic_skill", "real_world_examples", "architecture", "references")
 
 
 class Runner:

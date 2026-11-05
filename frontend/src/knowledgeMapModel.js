@@ -3,7 +3,8 @@ import { hierarchy, tree } from "d3-hierarchy";
 // Pure state helpers for the Security Knowledge Map. The page keeps one immutable state object:
 // nodes by id, loaded child ids per node, parent links and the expanded set.
 // Domains hold sub-domains and topics; every topic holds the Foundations, Security and Common Vulnerabilities branches,
-// and each branch holds smaller topics, to any depth.
+// and each branch holds smaller topics, to any depth. A topic with published review sections also holds a Playbook node,
+// whose facet nodes each open one section in the topic panel.
 
 export const ROOT_ID = "root";
 export const DOMAIN_PALETTE_SIZE = 6;
@@ -12,15 +13,27 @@ export const BRANCHES = {
   security: { label: "Security", icon: "◆" },
   vulnerabilities: { label: "Common Vulnerabilities", icon: "⚠" },
 };
+// The Playbook node's sections, in display order; the keys are section types.
+export const PLAYBOOK_SECTIONS = {
+  code_examples: { label: "Example Code", icon: "‹›" },
+  mitigations: { label: "Mitigations", icon: "✓" },
+  source_review: { label: "Source Review", icon: "⌕" },
+  dynamic_review: { label: "Dynamic Review", icon: "⇄" },
+  information_gathering: { label: "Information Gathering", icon: "◇" },
+  ai_cicd_skill: { label: "AI CI/CD Scan", icon: "⚙" },
+  ai_dynamic_skill: { label: "AI Dynamic Analysis", icon: "◉" },
+};
 export const NODE_WIDTH = 260;
 const NODE_ROW_GAP = 52;
 const NODE_COLUMN_GAP = 310;
-const EXPANDABLE_TYPES = new Set(["root", "domain", "child-domain", "topic", "branch"]);
+const EXPANDABLE_TYPES = new Set(["root", "domain", "child-domain", "topic", "branch", "playbook"]);
 
 export const domainNodeId = (domainId) => `domain:${domainId}`;
 // A topic appears at most once per domain, so the domain and topic key identify its node.
 export const topicNodeId = (domainId, topicKey) => `topic:${domainId}:${topicKey}`;
 export const branchNodeId = (domainId, topicKey, branch) => `branch:${domainId}:${topicKey}:${branch}`;
+export const playbookNodeId = (domainId, topicKey) => `playbook:${domainId}:${topicKey}`;
+export const facetNodeId = (domainId, topicKey, section) => `facet:${domainId}:${topicKey}:${section}`;
 const emptyNodeId = (parentId) => `empty:${parentId}`;
 
 // Where a topic sits: its domains, then each parent topic followed by the branch of it the next one sits in.
@@ -36,6 +49,11 @@ export function initialMapState() {
 
 export function isExpandable(node) {
   return Boolean(node) && EXPANDABLE_TYPES.has(node.type);
+}
+
+// Topics and their playbook facets both open the wide topic panel.
+export function opensTopicPanel(node) {
+  return node?.type === "topic" || node?.type === "facet";
 }
 
 function domainNode(domain, parent, index) {
@@ -76,12 +94,15 @@ export function applyDomainChildren(state, domainId, data) {
 export function applyTopicChildren(state, topicId, data) {
   const topic = state.nodes[topicId];
   const branches = data.branches.map((item) => ({ id: branchNodeId(topic.domainId, topic.topicKey, item.branch), type: "branch", label: item.label, branch: item.branch, domainId: topic.domainId, parentTopicId: topic.topicId, parentTopicKey: topic.topicKey, topicCount: item.topic_count, palette: topic.palette }));
-  let next = withChildren(state, topicId, branches);
+  const sections = (data.playbook_sections || []).filter((section) => PLAYBOOK_SECTIONS[section]);
+  const playbook = sections.length ? { id: playbookNodeId(topic.domainId, topic.topicKey), type: "playbook", label: "Playbook", domainId: topic.domainId, topicKey: topic.topicKey, parentTopicKey: topic.topicKey, topicNodeId: topicId, sectionCount: sections.length } : null;
+  let next = withChildren(state, topicId, playbook ? [...branches, playbook] : branches);
   data.branches.forEach((item, index) => {
     const branch = branches[index];
     const topics = item.items.map((child) => topicNode(branch, child));
     next = withChildren(next, branch.id, topics.length ? topics : [emptyNode(branch.id)]);
   });
+  if (playbook) next = withChildren(next, playbook.id, sections.map((section) => ({ id: facetNodeId(topic.domainId, topic.topicKey, section), type: "facet", label: PLAYBOOK_SECTIONS[section].label, section, domainId: topic.domainId, topicKey: topic.topicKey, topicNodeId: topicId })));
   return next;
 }
 

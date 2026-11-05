@@ -21,6 +21,9 @@ Each step ends with a completion report; review it before starting the next step
 | KM-3 | `km-step-3-topic-detail.md` | Detail panel, code examples, diagram renderer, career levels | KM-2 |
 | KM-4 | `km-step-4-admin-and-review.md` | Map management, proposal actions, review tab, publish, rollback | KM-3 |
 | KM-5 | `km-step-5-content-and-ai.md` | Initial example topics (as proposals), AI decomposition proposals | KM-4 |
+| KM-6 | `km-step-6-vulnerability-playbook.md` | Vulnerability playbook sections and AI skills inside the existing mind map and tree | KM-5, topic branches (`ph15topicbranches`) |
+
+Sample design for KM-6, a clickable prototype of the Playbook inside the existing map: [Knowledge Map Vulnerability Playbook](https://claude.ai/artifact/7dE3RAfxL6TuzgCj8vSbn8#play-15dd8cd198dd). It uses sample content. The link opens only for people it has been shared with.
 
 Steps KM-1 to KM-3 are read-only for public users and change no existing write path.
 Step KM-4 is the riskiest (it touches the publication workflow); review it most carefully.

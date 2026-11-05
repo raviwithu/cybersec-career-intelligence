@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import String, case, cast, func, select
 from sqlalchemy.orm import Session
 
+from .knowledge_contract_schemas import PLAYBOOK_ONLY_SECTION_TYPES, PLAYBOOK_SECTION_TYPES
 from .models import MAP_BRANCHES, KnowledgeTopic, KnowledgeTopicDomain, KnowledgeTopicSection, KnowledgeTopicSectionVersion, SecurityDomain
 
 ROOT_NAME = "CyberSec Career Intelligence"
@@ -160,6 +161,16 @@ def _topic_items(db: Session, reachable: dict[int, SecurityDomain], layout: dict
     } for topic, item in zip(topics, members)]
 
 
+def _playbook_sections(db: Session, topic_id: int) -> list[str]:
+    # Content decides, not the branch: vulnerabilities can sit directly under a domain, where placements have no branch.
+    published = set(db.scalars(select(KnowledgeTopicSection.section_type).where(
+        KnowledgeTopicSection.topic_id == topic_id, KnowledgeTopicSection.section_type.in_(PLAYBOOK_SECTION_TYPES), KnowledgeTopicSection.status == "published",
+    )).all())
+    if published.isdisjoint(PLAYBOOK_ONLY_SECTION_TYPES):
+        return []
+    return [section_type for section_type in PLAYBOOK_SECTION_TYPES if section_type in published]
+
+
 def topic_children(db: Session, domain_id: int, topic_id: int) -> dict[str, Any]:
     """A topic's Foundations, Security and Common Vulnerabilities branches in one domain, each with the topics placed in it.
     Every topic on the map shows all three branches, even before a topic is placed in one."""
@@ -172,7 +183,7 @@ def topic_children(db: Session, domain_id: int, topic_id: int) -> dict[str, Any]
     for branch, label in MAP_BRANCHES.items():
         members = slot_members(layout, topic_id, branch)
         branches.append({"branch": branch, "label": label, "topic_count": len(members), "items": _topic_items(db, reachable, layout, members)})
-    return {"topic_id": topic_id, "domain_id": domain_id, "branches": branches}
+    return {"topic_id": topic_id, "domain_id": domain_id, "branches": branches, "playbook_sections": _playbook_sections(db, topic_id)}
 
 
 def _domain_path(domain: SecurityDomain, reachable: dict[int, SecurityDomain]) -> list[dict[str, Any]]:

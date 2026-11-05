@@ -79,6 +79,8 @@ class MapTopicChildren(BaseModel):
     topic_id: int
     domain_id: int
     branches: list[MapTopicBranch]  # always all three, in Foundations, Security, Common Vulnerabilities order
+    # Published sections for the topic's Playbook node, in display order. Empty: the topic has no Playbook node.
+    playbook_sections: list[str] = []
 
 
 class MapSearchResult(BaseModel):
