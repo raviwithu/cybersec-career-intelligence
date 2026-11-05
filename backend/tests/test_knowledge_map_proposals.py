@@ -49,16 +49,25 @@ def make_topic(name: str | None = None, *, aliases=(), placements=()) -> dict:
         topic = KnowledgeTopic(name=name or key, slug=key, topic_key=key, description="", aliases=list(aliases), publication_status="published", is_active=True, version=1, published_at=datetime.now(timezone.utc))
         db.add(topic)
         db.flush()
-        for domain_id, branch, *order in placements:
-            db.add(KnowledgeTopicDomain(topic_id=topic.id, domain_id=domain_id, map_branch=branch, display_order=order[0] if order else 0))
+        # (domain_id, branch[, order[, parent_topic_id]]): without a parent the topic sits directly under the domain.
+        for domain_id, branch, *rest in placements:
+            db.add(KnowledgeTopicDomain(topic_id=topic.id, domain_id=domain_id, map_branch=branch, display_order=rest[0] if rest else 0, parent_topic_id=rest[1] if len(rest) > 1 else None))
         db.commit()
         return {"id": topic.id, "topic_key": key, "name": topic.name}
 
 
-def branch_keys(client, domain_id: int, branch: str) -> list[str]:
-    response = client.get(f"{MAP}/domains/{domain_id}/branches/{branch}/topics", params={"limit": 100})
+def root_keys(client, domain_id: int) -> list[str]:
+    # Topics shown directly under a domain.
+    response = client.get(f"{MAP}/domains/{domain_id}/children")
     assert response.status_code in (200, 404), response.text
-    return [item["topic_key"] for item in response.json().get("items", [])] if response.status_code == 200 else []
+    return [item["topic_key"] for item in response.json()["nodes"] if item["node_type"] == "topic"] if response.status_code == 200 else []
+
+
+def branch_keys(client, domain_id: int, parent_id: int, branch: str) -> list[str]:
+    # Topics shown in one branch of a parent topic.
+    response = client.get(f"{MAP}/domains/{domain_id}/topics/{parent_id}/children")
+    assert response.status_code in (200, 404), response.text
+    return [item["topic_key"] for row in response.json()["branches"] if row["branch"] == branch for item in row["items"]] if response.status_code == 200 else []
 
 
 def placement(topic_id: int, domain_id: int):
@@ -98,19 +107,19 @@ def test_place_unplace_and_reorder_publish_only_after_explicit_publication(clien
     second = make_topic(placements=[(domain, "foundations", 1)])
     newcomer = make_topic()
 
-    created = propose(client, "PLACE_TOPIC", newcomer["id"], {"domain_id": domain, "map_branch": "foundations"})
+    created = propose(client, "PLACE_TOPIC", newcomer["id"], {"domain_id": domain})
     assert created.status_code == 201, created.text
     assert created.json()["original_content"] == {"placement": None}
     approved = review(client, created.json(), "approve")
-    assert branch_keys(client, domain, "foundations") == [first["topic_key"], second["topic_key"]]
+    assert root_keys(client, domain) == [first["topic_key"], second["topic_key"]]
     publish(client, approved)
-    assert branch_keys(client, domain, "foundations") == [first["topic_key"], second["topic_key"], newcomer["topic_key"]]
+    assert root_keys(client, domain) == [first["topic_key"], second["topic_key"], newcomer["topic_key"]]
 
-    create_and_publish(client, "REORDER_TOPICS", first["id"], {"domain_id": domain, "map_branch": "foundations", "ordered_topic_ids": [newcomer["id"], first["id"], second["id"]]})
-    assert branch_keys(client, domain, "foundations") == [newcomer["topic_key"], first["topic_key"], second["topic_key"]]
+    create_and_publish(client, "REORDER_TOPICS", first["id"], {"domain_id": domain, "ordered_topic_ids": [newcomer["id"], first["id"], second["id"]]})
+    assert root_keys(client, domain) == [newcomer["topic_key"], first["topic_key"], second["topic_key"]]
 
     create_and_publish(client, "UNPLACE_TOPIC", second["id"], {"domain_id": domain})
-    assert branch_keys(client, domain, "foundations") == [newcomer["topic_key"], first["topic_key"]]
+    assert root_keys(client, domain) == [newcomer["topic_key"], first["topic_key"]]
     with SessionLocal() as db:
         link = db.get(KnowledgeTopicDomain, (second["id"], domain))
         assert link is not None and link.map_branch is None  # the domain link stays
@@ -129,9 +138,9 @@ def test_move_topic_and_cross_domain_placement_keep_one_topic_row(client):
     topic = make_topic(placements=[(source, "security")])
     create_and_publish(client, "PLACE_TOPIC", topic["id"], {"domain_id": other, "map_branch": "vulnerabilities"})
     create_and_publish(client, "MOVE_TOPIC", topic["id"], {"from": {"domain_id": source}, "to": {"domain_id": target, "map_branch": "foundations"}})
-    assert topic["topic_key"] not in branch_keys(client, source, "security")
-    assert branch_keys(client, target, "foundations") == [topic["topic_key"]]
-    assert branch_keys(client, other, "vulnerabilities") == [topic["topic_key"]]
+    assert topic["topic_key"] not in root_keys(client, source)
+    assert root_keys(client, target) == [topic["topic_key"]]
+    assert root_keys(client, other) == [topic["topic_key"]]
     with SessionLocal() as db:
         assert db.scalar(select(func.count()).select_from(KnowledgeTopic).where(KnowledgeTopic.topic_key == topic["topic_key"])) == 1
     placements = client.get(f"{MAP}/topics/{topic['topic_key']}/placements").json()
@@ -165,7 +174,7 @@ def test_reject_and_defer_leave_live_data_unchanged(client):
     deferred = propose(client, "PLACE_TOPIC", topic["id"], {"domain_id": domain, "map_branch": "foundations"}).json()
     review(client, deferred, "defer")
     assert placement(topic["id"], domain) is None
-    assert branch_keys(client, domain, "security") == [] and branch_keys(client, domain, "foundations") == []
+    assert root_keys(client, domain) == []
 
 
 def test_modify_bumps_version_and_stale_review_or_publish_is_refused(client):
@@ -174,23 +183,24 @@ def test_modify_bumps_version_and_stale_review_or_publish_is_refused(client):
     created = propose(client, "PLACE_TOPIC", topic["id"], {"domain_id": domain, "map_branch": "security"}).json()
     modified = review(client, created, "modify", proposed_content={"domain_id": other, "map_branch": "foundations"})
     assert modified["version"] == created["version"] + 1
-    assert modified["proposed_content"] == {"domain_id": other, "map_branch": "foundations", "display_order": None}
+    # Directly under a domain there is no branch: it belongs to topics, so it is dropped.
+    assert modified["proposed_content"] == {"domain_id": other, "display_order": None}
     stale_review = client.post(f"/api/v1/knowledge/admin/proposals/{created['id']}/review", headers=ADMIN, json={"expected_version": created["version"], "action": "approve"})
     assert stale_review.status_code == 409
     approved = review(client, modified, "approve")
     publish(client, {**approved, "version": modified["version"]}, expected=409)
     publish(client, approved)
-    assert branch_keys(client, other, "foundations") == [topic["topic_key"]]
+    assert root_keys(client, other) == [topic["topic_key"]]
 
 
 def test_publish_refuses_a_proposal_whose_placement_changed_since_creation(client):
     domain = make_domain()
     topic = make_topic()
-    first = review(client, propose(client, "PLACE_TOPIC", topic["id"], {"domain_id": domain, "map_branch": "security"}).json(), "approve")
-    second = review(client, propose(client, "PLACE_TOPIC", topic["id"], {"domain_id": domain, "map_branch": "foundations"}).json(), "approve")
+    first = review(client, propose(client, "PLACE_TOPIC", topic["id"], {"domain_id": domain, "context_note": "First."}).json(), "approve")
+    second = review(client, propose(client, "PLACE_TOPIC", topic["id"], {"domain_id": domain, "context_note": "Second."}).json(), "approve")
     publish(client, first)
     publish(client, second, expected=409)
-    assert placement(topic["id"], domain)[0] == "security"
+    assert client.get(f"{MAP}/topics/{topic['topic_key']}/placements").json()[0]["context_note"] == "First."
 
 
 def test_set_parent_prevents_cycles_at_create_and_at_publish(client):
@@ -232,7 +242,7 @@ def test_remove_relationship_deactivate_and_career_levels(client):
 
     assert propose(client, "DEACTIVATE_TOPIC", topic["id"], {"reason": ""}).status_code == 422
     create_and_publish(client, "DEACTIVATE_TOPIC", topic["id"], {"reason": "Superseded by a broader topic."})
-    assert branch_keys(client, domain, "security") == []
+    assert root_keys(client, domain) == []
     assert client.get(f"/api/v1/knowledge/topics/{topic['topic_key']}").status_code == 404
     assert propose(client, "PLACE_TOPIC", topic["id"], {"domain_id": domain, "map_branch": "foundations"}).status_code == 409
 
@@ -262,11 +272,11 @@ def test_create_topic_with_placements_publishes_together(client):
     name = unique("Placed New Topic")
     created = propose(client, "CREATE_TOPIC", None, {"topic": {"name": name, "description": "New."}, "placements": [{"domain_id": domain, "map_branch": "foundations"}]}, topic_name=name)
     assert created.status_code == 201, created.text
-    assert branch_keys(client, domain, "foundations") == []
+    assert root_keys(client, domain) == []
     published = publish(client, review(client, created.json(), "approve"))
     with SessionLocal() as db:
         key = db.get(KnowledgeTopic, published["topic_id"]).topic_key
-    assert branch_keys(client, domain, "foundations") == [key]
+    assert root_keys(client, domain) == [key]
 
 
 def test_restore_section_version_publishes_old_content_as_a_new_version(client):
@@ -289,9 +299,9 @@ def test_restore_topic_version_brings_back_placements_and_history_lists_changes(
     history = client.get(f"/api/v1/knowledge/admin/topics/{topic['id']}/history", headers=ADMIN).json()["items"]
     placed_version = next(item["version"] for item in history if item["kind"] == "version" and item["snapshot"]["placements"])
     create_and_publish(client, "UNPLACE_TOPIC", topic["id"], {"domain_id": domain})
-    assert branch_keys(client, domain, "security") == []
+    assert root_keys(client, domain) == []
     create_and_publish(client, "RESTORE_VERSION", topic["id"], {"target": "topic", "version": placed_version})
-    assert branch_keys(client, domain, "security") == [topic["topic_key"]]
+    assert root_keys(client, domain) == [topic["topic_key"]]
     history = client.get(f"/api/v1/knowledge/admin/topics/{topic['id']}/history", headers=ADMIN).json()["items"]
     assert len([item for item in history if item["kind"] == "version"]) == 3
     assert {"map_place_topic", "map_unplace_topic", "map_restore_version"} <= {item["action"] for item in history if item["kind"] == "audit"}
@@ -305,7 +315,7 @@ def test_preview_shows_branches_before_and_after_without_writing(client):
     preview = client.get(f"/api/v1/knowledge/admin/proposals/{created['id']}/map-preview", headers=ADMIN)
     assert preview.status_code == 200, preview.text
     branch = preview.json()["branches"][0]
-    assert branch["domain_id"] == domain and branch["label"] == "Security"
+    assert (branch["domain_id"], branch["parent_topic_id"], branch["map_branch"], branch["label"]) == (domain, None, None, "Topics")
     assert [item["topic_id"] for item in branch["before"]] == [resident["id"]]
     assert [item["topic_id"] for item in branch["after"]] == [resident["id"], topic["id"]]
     assert placement(topic["id"], domain) is None
@@ -322,62 +332,105 @@ def test_map_group_filter_and_admin_only_publication(client):
     approved = review(client, created, "approve")
     unauthorised = client.post(f"/api/v1/knowledge/admin/proposals/{approved['id']}/publish", json={"confirm": True, "expected_version": approved["version"]})
     assert unauthorised.status_code in (401, 403)
-    assert branch_keys(client, domain, "security") == []
+    assert root_keys(client, domain) == []
 
 
 def test_end_to_end_propose_modify_approve_publish_and_reject(client):
     domain = make_domain()
     topic = make_topic()
-    created = propose(client, "PLACE_TOPIC", topic["id"], {"domain_id": domain, "map_branch": "vulnerabilities"}).json()
-    modified = review(client, created, "modify", proposed_content={"domain_id": domain, "map_branch": "security"})
+    parent = make_topic(placements=[(domain, "foundations")])
+    created = propose(client, "PLACE_TOPIC", topic["id"], {"domain_id": domain, "parent_topic_id": parent["id"], "map_branch": "vulnerabilities"}).json()
+    modified = review(client, created, "modify", proposed_content={"domain_id": domain, "parent_topic_id": parent["id"], "map_branch": "security"})
     publish(client, review(client, modified, "approve"))
-    assert branch_keys(client, domain, "security") == [topic["topic_key"]]
-    children = client.get(f"{MAP}/domains/{domain}/children").json()["nodes"]
-    assert [item["branch"] for item in children if item["node_type"] == "branch"] == ["security"]
+    assert branch_keys(client, domain, parent["id"], "security") == [topic["topic_key"]]
+    branches = client.get(f"{MAP}/domains/{domain}/topics/{parent['id']}/children").json()["branches"]
+    assert {item["branch"]: item["topic_count"] for item in branches} == {"foundations": 0, "security": 1, "vulnerabilities": 0}
 
     rejected = propose(client, "UNPLACE_TOPIC", topic["id"], {"domain_id": domain}).json()
     review(client, rejected, "reject")
-    assert branch_keys(client, domain, "security") == [topic["topic_key"]]
+    assert branch_keys(client, domain, parent["id"], "security") == [topic["topic_key"]]
 
 
-def test_one_shared_topic_reused_across_domains_with_a_context_note_per_domain(client):
-    # One SSRF topic, placed under two domains' Common Vulnerabilities, each with its own "how it applies here" note.
+def test_topics_are_placed_moved_and_reordered_inside_a_parent_topics_branches(client):
+    domain, other = make_domain(), make_domain()
+    a, b = make_topic("Parent A", placements=[(domain, "foundations", 0)]), make_topic("Parent B", placements=[(domain, "foundations", 1)])
+    c, d = make_topic("Child C"), make_topic("Child D")
+
+    assert propose(client, "PLACE_TOPIC", c["id"], {"domain_id": domain, "parent_topic_id": a["id"]}).status_code == 422  # a branch of A is needed
+    assert propose(client, "PLACE_TOPIC", c["id"], {"domain_id": other, "parent_topic_id": a["id"], "map_branch": "security"}).status_code == 409  # A is not in other
+    create_and_publish(client, "PLACE_TOPIC", c["id"], {"domain_id": domain, "parent_topic_id": a["id"], "map_branch": "security"})
+    assert branch_keys(client, domain, a["id"], "security") == [c["topic_key"]] and c["topic_key"] not in root_keys(client, domain)
+
+    # Moving within one domain changes the parent topic and branch.
+    create_and_publish(client, "MOVE_TOPIC", c["id"], {"from": {"domain_id": domain}, "to": {"domain_id": domain, "parent_topic_id": b["id"], "map_branch": "foundations"}})
+    assert branch_keys(client, domain, a["id"], "security") == [] and branch_keys(client, domain, b["id"], "foundations") == [c["topic_key"]]
+    assert propose(client, "MOVE_TOPIC", c["id"], {"from": {"domain_id": domain}, "to": {"domain_id": domain, "parent_topic_id": b["id"], "map_branch": "foundations"}}).status_code == 422
+
+    # No topic may end up under itself or under one of its own children.
+    assert propose(client, "PLACE_TOPIC", c["id"], {"domain_id": domain, "parent_topic_id": c["id"], "map_branch": "security"}).status_code == 409
+    assert propose(client, "PLACE_TOPIC", b["id"], {"domain_id": domain, "parent_topic_id": c["id"], "map_branch": "security"}).status_code == 409
+
+    create_and_publish(client, "PLACE_TOPIC", d["id"], {"domain_id": domain, "parent_topic_id": b["id"], "map_branch": "foundations"})
+    assert branch_keys(client, domain, b["id"], "foundations") == [c["topic_key"], d["topic_key"]]
+    reorder = propose(client, "REORDER_TOPICS", d["id"], {"domain_id": domain, "parent_topic_id": b["id"], "map_branch": "foundations", "ordered_topic_ids": [d["id"], c["id"]]}).json()
+    preview = client.get(f"/api/v1/knowledge/admin/proposals/{reorder['id']}/map-preview", headers=ADMIN).json()["branches"][0]
+    assert (preview["parent_topic_id"], preview["map_branch"], preview["label"]) == (b["id"], "foundations", "Parent B › Foundations")
+    publish(client, review(client, reorder, "approve"))
+    assert branch_keys(client, domain, b["id"], "foundations") == [d["topic_key"], c["topic_key"]]
+    placements = client.get(f"{MAP}/topics/{c['topic_key']}/placements").json()
+    assert [(item["name"], item["branch"]) for item in placements[0]["ancestors"]] == [("Parent B", None)] and placements[0]["branch"] == "foundations"
+
+    # Removing the parent from the domain leaves its children directly under the domain.
+    create_and_publish(client, "UNPLACE_TOPIC", b["id"], {"domain_id": domain})
+    assert set(root_keys(client, domain)) == {a["topic_key"], c["topic_key"], d["topic_key"]}
+
+
+def test_one_shared_topic_reused_under_topics_in_several_domains_with_a_context_note_per_domain(client):
+    # One SSRF topic, placed in the Common Vulnerabilities of a topic in each of two domains, each with its own note.
     lambda_domain, web_domain = make_domain(), make_domain()
+    runtime = make_topic("Lambda Runtime", placements=[(lambda_domain, "foundations")])
+    server = make_topic("Web Server", placements=[(web_domain, "foundations")])
     ssrf = make_topic("Shared SSRF")
-    for domain, note in ((lambda_domain, "Reads local files and environment through file:// in Lambda."), (web_domain, "Reaches internal services from the web server.")):
-        create_and_publish(client, "PLACE_TOPIC", ssrf["id"], {"domain_id": domain, "map_branch": "vulnerabilities", "context_note": f"  {note}  "})
+    for domain, parent, note in ((lambda_domain, runtime, "Reads local files and environment through file:// in Lambda."), (web_domain, server, "Reaches internal services from the web server.")):
+        create_and_publish(client, "PLACE_TOPIC", ssrf["id"], {"domain_id": domain, "parent_topic_id": parent["id"], "map_branch": "vulnerabilities", "context_note": f"  {note}  "})
     with SessionLocal() as db:
         assert db.scalar(select(func.count()).select_from(KnowledgeTopic).where(KnowledgeTopic.name == "Shared SSRF")) == 1
     placements = client.get(f"{MAP}/topics/{ssrf['topic_key']}/placements").json()
-    assert sorted((item["domain_path"][-1]["id"], item["context_note"]) for item in placements) == sorted([(lambda_domain, "Reads local files and environment through file:// in Lambda."), (web_domain, "Reaches internal services from the web server.")])
-    item = client.get(f"{MAP}/domains/{web_domain}/branches/vulnerabilities/topics").json()["items"][0]
+    assert sorted((item["domain_path"][-1]["id"], item["ancestors"][0]["name"], item["branch"], item["context_note"]) for item in placements) == sorted([
+        (lambda_domain, "Lambda Runtime", "vulnerabilities", "Reads local files and environment through file:// in Lambda."),
+        (web_domain, "Web Server", "vulnerabilities", "Reaches internal services from the web server."),
+    ])
+    item = client.get(f"{MAP}/domains/{web_domain}/topics/{server['id']}/children").json()["branches"][2]["items"][0]
     assert (item["topic_key"], item["placement_count"], item["context_note"]) == (ssrf["topic_key"], 2, "Reaches internal services from the web server.")
 
     # Re-placing without a note keeps it; a new note replaces it; "" clears it. Other domains are untouched.
-    created = propose(client, "PLACE_TOPIC", ssrf["id"], {"domain_id": web_domain, "map_branch": "vulnerabilities"})
+    place_web = {"domain_id": web_domain, "parent_topic_id": server["id"], "map_branch": "vulnerabilities"}
+    created = propose(client, "PLACE_TOPIC", ssrf["id"], place_web)
     assert "context_note" not in created.json()["proposed_content"]
     publish(client, review(client, created.json(), "approve"))
     notes = lambda: {item["domain_path"][-1]["id"]: item["context_note"] for item in client.get(f"{MAP}/topics/{ssrf['topic_key']}/placements").json()}
     assert notes()[web_domain] == "Reaches internal services from the web server."
-    create_and_publish(client, "PLACE_TOPIC", ssrf["id"], {"domain_id": web_domain, "map_branch": "vulnerabilities", "context_note": "Server-side URL fetchers."})
+    create_and_publish(client, "PLACE_TOPIC", ssrf["id"], {**place_web, "context_note": "Server-side URL fetchers."})
     assert notes() == {lambda_domain: "Reads local files and environment through file:// in Lambda.", web_domain: "Server-side URL fetchers."}
-    create_and_publish(client, "PLACE_TOPIC", ssrf["id"], {"domain_id": web_domain, "map_branch": "vulnerabilities", "context_note": ""})
+    create_and_publish(client, "PLACE_TOPIC", ssrf["id"], {**place_web, "context_note": ""})
     assert notes()[web_domain] is None and notes()[lambda_domain]
 
-    assert propose(client, "PLACE_TOPIC", ssrf["id"], {"domain_id": web_domain, "map_branch": "vulnerabilities", "context_note": "x" * 2001}).status_code == 422
-    assert propose(client, "PLACE_TOPIC", ssrf["id"], {"domain_id": web_domain, "map_branch": "vulnerabilities", "context_note": "<script>alert(1)</script>"}).status_code == 422
+    assert propose(client, "PLACE_TOPIC", ssrf["id"], {**place_web, "context_note": "x" * 2001}).status_code == 422
+    assert propose(client, "PLACE_TOPIC", ssrf["id"], {**place_web, "context_note": "<script>alert(1)</script>"}).status_code == 422
 
 
 def test_create_topic_can_place_a_shared_topic_in_several_domains_with_notes(client):
     first, second = make_domain(), make_domain()
+    parser = make_topic("XML Parsing", placements=[(first, "foundations")])
     name = unique("Shared XXE")
     created = propose(client, "CREATE_TOPIC", None, {"topic": {"name": name, "description": "XML external entities."}, "placements": [
-        {"domain_id": first, "map_branch": "vulnerabilities", "context_note": "Python runtime XML parsers."},
+        {"domain_id": first, "parent_topic_id": parser["id"], "map_branch": "vulnerabilities", "context_note": "Python runtime XML parsers."},
         {"domain_id": second, "map_branch": "vulnerabilities"},
     ]}, topic_name=name)
     assert created.status_code == 201, created.text
-    assert created.json()["proposed_content"]["placements"][1] == {"domain_id": second, "map_branch": "vulnerabilities", "display_order": None}
+    assert created.json()["proposed_content"]["placements"][1] == {"domain_id": second, "display_order": None}
     publish(client, review(client, created.json(), "approve"))
     with SessionLocal() as db:
         topic = db.scalar(select(KnowledgeTopic).where(KnowledgeTopic.name == name))
-        assert {(link.domain_id, link.context_note) for link in db.scalars(select(KnowledgeTopicDomain).where(KnowledgeTopicDomain.topic_id == topic.id))} == {(first, "Python runtime XML parsers."), (second, None)}
+        assert {(link.domain_id, link.parent_topic_id, link.context_note) for link in db.scalars(select(KnowledgeTopicDomain).where(KnowledgeTopicDomain.topic_id == topic.id))} == {(first, parser["id"], "Python runtime XML parsers."), (second, None, None)}
+    assert branch_keys(client, first, parser["id"], "vulnerabilities") and root_keys(client, second)

@@ -6,7 +6,7 @@ const INERT_TYPES = new Set(["empty", "loading"]);
 
 export function nodeIcon(node) {
   if (node.type === "branch") return BRANCHES[node.branch]?.icon;
-  return { root: "◎", domain: "◈", "child-domain": "↳", topic: "•", more: "+", error: "!", empty: "◌", loading: "…" }[node.type];
+  return { root: "◎", domain: "◈", "child-domain": "↳", topic: "•", error: "!", empty: "◌", loading: "…" }[node.type];
 }
 
 export function nodeClassName(node, selected) {

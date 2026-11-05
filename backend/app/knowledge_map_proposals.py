@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .knowledge_contract_schemas import RELATIONSHIP_TYPES, SECTION_TYPES, _clean_text
-from .knowledge_map_service import _reachable_domains
+from .knowledge_map_service import _reachable_domains, domain_layout, slot_members
 from .knowledge_topic_service import snapshot
 from .models import (
     MAP_BRANCHES,
@@ -39,9 +39,23 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
-class Placement(_Strict):
+class _Slot(_Strict):
+    # Where a topic sits in a domain: directly under the domain (no parent topic), or in one branch of a parent topic
+    # placed in the same domain. Branches belong to topics, so a branch without a parent topic is ignored.
     domain_id: int = Field(ge=1)
-    map_branch: Branch
+    parent_topic_id: int | None = Field(default=None, ge=1)
+    map_branch: Branch | None = None
+
+    @model_validator(mode="after")
+    def branch_needs_parent(self):
+        if self.parent_topic_id is None:
+            self.map_branch = None
+        elif self.map_branch is None:
+            raise ValueError("map_branch is required when the topic sits under a parent topic")
+        return self
+
+
+class Placement(_Slot):
     display_order: int | None = Field(default=None, ge=0, le=100_000)
     # How this shared topic applies in this domain. Omitted or null keeps the current note; "" clears it.
     context_note: str | None = Field(default=None, max_length=2000)
@@ -61,9 +75,7 @@ class MoveTopic(_Strict):
     target: Placement = Field(alias="to")
 
 
-class ReorderTopics(_Strict):
-    domain_id: int = Field(ge=1)
-    map_branch: Branch
+class ReorderTopics(_Slot):
     ordered_topic_ids: list[int] = Field(min_length=1, max_length=1000)
 
     @model_validator(mode="after")
@@ -123,7 +135,7 @@ class CreatePlacements(BaseModel):
     def one_per_domain(self):
         domains = [item.domain_id for item in self.placements]
         if len(set(domains)) != len(domains):
-            raise ValueError("A topic has at most one branch per domain")
+            raise ValueError("A topic has at most one place per domain")
         return self
 
 
@@ -135,8 +147,9 @@ PAYLOADS: dict[str, type[BaseModel]] = {
 
 
 def _without_empty_note(placement: dict[str, Any]) -> dict[str, Any]:
-    # A missing context note means "keep the current note"; leave the key out so stored proposals stay unchanged.
-    return {key: value for key, value in placement.items() if key != "context_note" or value is not None}
+    # A missing context note means "keep the current note"; a missing parent topic and branch mean "directly under the
+    # domain". Leave those keys out so stored proposals stay unchanged.
+    return {key: value for key, value in placement.items() if key not in {"context_note", "parent_topic_id", "map_branch"} or value is not None}
 
 
 def validate_map_payload(action: str, content: dict[str, Any]) -> dict[str, Any]:
@@ -147,7 +160,7 @@ def validate_map_payload(action: str, content: dict[str, Any]) -> dict[str, Any]
                 return content
             return {**content, "placements": [_without_empty_note(item) for item in CreatePlacements.model_validate({"placements": content["placements"]}).model_dump()["placements"]]}
         normalised = PAYLOADS[action].model_validate(content).model_dump(by_alias=True)
-        if action == "PLACE_TOPIC":
+        if action in {"PLACE_TOPIC", "REORDER_TOPICS"}:
             return _without_empty_note(normalised)
         if action == "MOVE_TOPIC":
             return {**normalised, "to": _without_empty_note(normalised["to"])}
@@ -168,7 +181,12 @@ def _link(db: Session, topic_id: int, domain_id: int, *, lock: bool = False) -> 
 def _placement_state(link: KnowledgeTopicDomain | None) -> dict[str, Any] | None:
     if link is None or link.map_branch is None:
         return None
-    return {"domain_id": link.domain_id, "map_branch": link.map_branch, "display_order": link.display_order, "context_note": link.context_note}
+    parent_id = link.parent_topic_id
+    return {"domain_id": link.domain_id, "parent_topic_id": parent_id, "map_branch": link.map_branch if parent_id else None, "display_order": link.display_order, "context_note": link.context_note}
+
+
+def _slot(state: dict[str, Any] | None) -> tuple[int | None, str | None]:
+    return (None, None) if not state or state.get("parent_topic_id") is None else (state["parent_topic_id"], state.get("map_branch"))
 
 
 def _placements(db: Session, topic_id: int) -> list[dict[str, Any]]:
@@ -176,16 +194,11 @@ def _placements(db: Session, topic_id: int) -> list[dict[str, Any]]:
     return [_placement_state(row) for row in rows]
 
 
-def branch_members(db: Session, domain_id: int, branch: str, *, include_topic_id: int | None = None) -> list[dict[str, Any]]:
-    """Topics the public map shows in one branch, in order. include_topic_id also lists a topic that publishing would publish."""
-    visible = (KnowledgeTopic.publication_status == "published") if include_topic_id is None else ((KnowledgeTopic.publication_status == "published") | (KnowledgeTopic.id == include_topic_id))
-    rows = db.execute(
-        select(KnowledgeTopic.id, KnowledgeTopic.name)
-        .join(KnowledgeTopicDomain, KnowledgeTopicDomain.topic_id == KnowledgeTopic.id)
-        .where(KnowledgeTopicDomain.domain_id == domain_id, KnowledgeTopicDomain.map_branch == branch, KnowledgeTopic.is_active.is_(True), visible)
-        .order_by(KnowledgeTopicDomain.display_order, func.lower(KnowledgeTopic.name))
-    ).all()
-    return [{"topic_id": topic_id, "name": name} for topic_id, name in rows]
+def branch_members(db: Session, domain_id: int, parent_id: int | None, branch: str | None, *, include_topic_id: int | None = None) -> list[dict[str, Any]]:
+    """Topics the public map shows in one place, in order: directly under the domain, or in one branch of a parent topic.
+    include_topic_id also lists a topic that publishing would publish."""
+    members = slot_members(domain_layout(db, domain_id, include_topic_id=include_topic_id), parent_id, branch)
+    return [{"topic_id": item["topic"].id, "name": item["topic"].name} for item in members]
 
 
 def map_snapshot(db: Session, topic: KnowledgeTopic) -> dict[str, Any]:
@@ -209,7 +222,7 @@ def current_state(db: Session, action: str, topic: KnowledgeTopic | None, conten
     if action == "MOVE_TOPIC":
         return {"from": _placement_state(_link(db, topic.id, content["from"]["domain_id"])), "to": _placement_state(_link(db, topic.id, content["to"]["domain_id"]))}
     if action == "REORDER_TOPICS":
-        return {"members": [item["topic_id"] for item in branch_members(db, content["domain_id"], content["map_branch"])]}
+        return {"members": [item["topic_id"] for item in branch_members(db, content["domain_id"], *_slot(content))]}
     if action == "SET_PARENT_TOPIC":
         return {"parent_topic_id": topic.parent_topic_id}
     if action == "REMOVE_TOPIC_RELATIONSHIP":
@@ -268,12 +281,39 @@ def _require_parent_allowed(db: Session, topic_id: int, parent_id: int | None) -
         current = db.get(KnowledgeTopic, current.parent_topic_id) if current.parent_topic_id else None
 
 
+def _map_parent_problem(db: Session, topic_id: int | None, domain_id: int, parent_id: int | None) -> str | None:
+    # Why a topic cannot sit under parent_id in this domain, or None. The parent must be placed in the same domain, and
+    # following its own parents there must never lead back to the topic.
+    if parent_id is None:
+        return None
+    if parent_id == topic_id:
+        return "A topic cannot sit under itself"
+    parent = db.get(KnowledgeTopic, parent_id)
+    link = _link(db, parent_id, domain_id)
+    if parent is None or not parent.is_active or _placement_state(link) is None:
+        return "The parent topic must be active and placed in the same domain"
+    seen: set[int] = set()
+    while link is not None and link.topic_id not in seen:
+        if link.topic_id == topic_id:
+            return "This parent topic would create a cycle on the map"
+        seen.add(link.topic_id)
+        link = _link(db, link.parent_topic_id, domain_id) if link.parent_topic_id else None
+    return None
+
+
+def _require_map_parent(db: Session, topic_id: int | None, content: dict[str, Any]) -> None:
+    problem = _map_parent_problem(db, topic_id, content["domain_id"], content.get("parent_topic_id"))
+    if problem:
+        raise HTTPException(status_code=409, detail=problem)
+
+
 def validate_map_change(db: Session, action: str, topic: KnowledgeTopic, content: dict[str, Any]) -> None:
     """Rules checked when a proposal is created, modified and again at publish, because the map may have changed."""
     if action != "RESTORE_VERSION" and not topic.is_active:
         raise HTTPException(status_code=409, detail="The knowledge topic is inactive")
     if action == "PLACE_TOPIC":
         _require_domain(db, content["domain_id"])
+        _require_map_parent(db, topic.id, content)
     elif action == "UNPLACE_TOPIC":
         if _placement_state(_link(db, topic.id, content["domain_id"])) is None:
             raise HTTPException(status_code=409, detail="The topic is not placed in this domain")
@@ -282,13 +322,14 @@ def validate_map_change(db: Session, action: str, topic: KnowledgeTopic, content
         if source is None:
             raise HTTPException(status_code=409, detail="The topic is not placed in the source domain")
         _require_domain(db, content["to"]["domain_id"])
-        if content["from"]["domain_id"] == content["to"]["domain_id"] and source["map_branch"] == content["to"]["map_branch"]:
+        if content["from"]["domain_id"] == content["to"]["domain_id"] and _slot(source) == _slot(content["to"]):
             raise HTTPException(status_code=422, detail="The move does not change the placement")
+        _require_map_parent(db, topic.id, content["to"])
     elif action == "REORDER_TOPICS":
         _require_domain(db, content["domain_id"])
-        members = [item["topic_id"] for item in branch_members(db, content["domain_id"], content["map_branch"])]
+        members = [item["topic_id"] for item in branch_members(db, content["domain_id"], *_slot(content))]
         if sorted(members) != sorted(content["ordered_topic_ids"]):
-            raise HTTPException(status_code=409, detail="The order must list exactly the topics currently in this branch")
+            raise HTTPException(status_code=409, detail="The order must list exactly the topics currently in this place on the map")
     elif action == "SET_PARENT_TOPIC":
         _require_parent_allowed(db, topic.id, content["parent_topic_id"])
     elif action == "REMOVE_TOPIC_RELATIONSHIP":
@@ -319,6 +360,7 @@ def validate_map_change(db: Session, action: str, topic: KnowledgeTopic, content
 def validate_create_placements(db: Session, content: dict[str, Any]) -> None:
     for placement in content.get("placements") or []:
         _require_domain(db, placement["domain_id"])
+        _require_map_parent(db, None, placement)
 
 
 # Duplicate detection for CREATE_TOPIC: normalised name, slug, topic_key and aliases of every existing topic.
@@ -351,19 +393,24 @@ def require_no_duplicate(db: Session, name: str, topic_key: str, content: dict[s
 
 # ---- applying (inside the publish transaction; never commits) -----------------------------------------------------
 
-def _next_order(db: Session, domain_id: int, branch: str) -> int:
-    current = db.scalar(select(func.max(KnowledgeTopicDomain.display_order)).where(KnowledgeTopicDomain.domain_id == domain_id, KnowledgeTopicDomain.map_branch == branch))
+def _next_order(db: Session, domain_id: int, parent_id: int | None, branch: str | None) -> int:
+    query = select(func.max(KnowledgeTopicDomain.display_order)).where(KnowledgeTopicDomain.domain_id == domain_id, KnowledgeTopicDomain.map_branch.is_not(None))
+    query = query.where(KnowledgeTopicDomain.parent_topic_id.is_(None)) if parent_id is None else query.where(KnowledgeTopicDomain.parent_topic_id == parent_id, KnowledgeTopicDomain.map_branch == branch)
+    current = db.scalar(query)
     return 0 if current is None else current + 1
 
 
-def place(db: Session, topic: KnowledgeTopic, domain_id: int, branch: str, display_order: int | None, context_note: str | None = None) -> None:
+def place(db: Session, topic: KnowledgeTopic, domain_id: int, branch: str | None, display_order: int | None, context_note: str | None = None, parent_topic_id: int | None = None) -> None:
     link = _link(db, topic.id, domain_id, lock=True)
-    order = display_order if display_order is not None else (link.display_order if link is not None and link.map_branch == branch else _next_order(db, domain_id, branch))
+    same_place = _placement_state(link) is not None and _slot(_placement_state(link)) == _slot({"parent_topic_id": parent_topic_id, "map_branch": branch})
+    order = display_order if display_order is not None else (link.display_order if same_place else _next_order(db, domain_id, parent_topic_id, branch))
     if link is None:
         # Placing in a new domain creates the domain link, which also lists the topic for that domain in Career Readiness (D2).
         link = KnowledgeTopicDomain(topic_id=topic.id, domain_id=domain_id)
         topic.domains.append(link)
-    link.map_branch = branch
+    link.parent_topic_id = parent_topic_id
+    # Directly under a domain the branch only marks the topic as placed; keep the one it had.
+    link.map_branch = branch if parent_topic_id is not None else (link.map_branch or "foundations")
     link.display_order = order
     if context_note is not None:
         link.context_note = context_note or None
@@ -373,7 +420,9 @@ def place(db: Session, topic: KnowledgeTopic, domain_id: int, branch: str, displ
 def unplace(db: Session, topic: KnowledgeTopic, domain_id: int) -> None:
     link = _link(db, topic.id, domain_id, lock=True)
     if link is not None:
-        link.map_branch = None  # The domain link stays (D2).
+        # The domain link stays (D2). Topics that sat under this one in the domain now sit directly under the domain.
+        link.map_branch = None
+        link.parent_topic_id = None
     db.flush()
 
 
@@ -399,8 +448,10 @@ def _restore_topic(db: Session, topic: KnowledgeTopic, stored: dict[str, Any]) -
             if current["domain_id"] not in wanted:
                 unplace(db, topic, current["domain_id"])
         for item in wanted.values():
-            # Snapshots taken before context notes existed have no key: leave the current note alone.
-            place(db, topic, item["domain_id"], item["map_branch"], item.get("display_order"), (item["context_note"] or "") if "context_note" in item else None)
+            # Snapshots taken before context notes existed have no key: leave the current note alone. A parent topic that
+            # can no longer hold this one (moved or removed since) is dropped, so the topic sits directly under the domain.
+            parent_id = None if _map_parent_problem(db, topic.id, item["domain_id"], item.get("parent_topic_id")) else item.get("parent_topic_id")
+            place(db, topic, item["domain_id"], item.get("map_branch") if parent_id else None, item.get("display_order"), (item["context_note"] or "") if "context_note" in item else None, parent_id)
     if "level_expectations" in stored:
         keep = {(row["career_level_id"], row.get("industry_id")) for row in stored["level_expectations"]}
         for item in list(topic.level_expectations):
@@ -413,12 +464,14 @@ def apply_map_change(db: Session, action: str, topic: KnowledgeTopic, content: d
     """Writes one map change to the live tables. The caller owns the transaction."""
     db.refresh(topic, with_for_update=True)
     if action == "PLACE_TOPIC":
-        place(db, topic, content["domain_id"], content["map_branch"], content.get("display_order"), content.get("context_note"))
+        place(db, topic, content["domain_id"], content.get("map_branch"), content.get("display_order"), content.get("context_note"), content.get("parent_topic_id"))
     elif action == "UNPLACE_TOPIC":
         unplace(db, topic, content["domain_id"])
     elif action == "MOVE_TOPIC":
-        unplace(db, topic, content["from"]["domain_id"])
-        place(db, topic, content["to"]["domain_id"], content["to"]["map_branch"], content["to"].get("display_order"), content["to"].get("context_note"))
+        target = content["to"]
+        if content["from"]["domain_id"] != target["domain_id"]:
+            unplace(db, topic, content["from"]["domain_id"])
+        place(db, topic, target["domain_id"], target.get("map_branch"), target.get("display_order"), target.get("context_note"), target.get("parent_topic_id"))
     elif action == "REORDER_TOPICS":
         for index, topic_id in enumerate(content["ordered_topic_ids"]):
             link = _link(db, topic_id, content["domain_id"], lock=True)
@@ -438,52 +491,56 @@ def apply_map_change(db: Session, action: str, topic: KnowledgeTopic, content: d
 
 def apply_create_placements(db: Session, topic: KnowledgeTopic, content: dict[str, Any]) -> None:
     for item in content.get("placements") or []:
-        place(db, topic, item["domain_id"], item["map_branch"], item.get("display_order"), item.get("context_note"))
+        place(db, topic, item["domain_id"], item.get("map_branch"), item.get("display_order"), item.get("context_note"), item.get("parent_topic_id"))
 
 
 # ---- preview -------------------------------------------------------------------------------------------------------
 
-def affected_branches(db: Session, action: str, topic: KnowledgeTopic | None, content: dict[str, Any]) -> list[tuple[int, str]]:
-    pairs: list[tuple[int, str]] = []
+Slot = tuple[int, int | None, str | None]  # (domain_id, parent_topic_id, map_branch); (domain_id, None, None) is directly under the domain
 
-    def add(domain_id: int, branch: str | None) -> None:
-        if branch and (domain_id, branch) not in pairs:
-            pairs.append((domain_id, branch))
 
-    def existing(domain_id: int) -> str | None:
-        state = _placement_state(_link(db, topic.id, domain_id)) if topic is not None else None
-        return state["map_branch"] if state else None
+def affected_branches(db: Session, action: str, topic: KnowledgeTopic | None, content: dict[str, Any]) -> list[Slot]:
+    slots: list[Slot] = []
+
+    def add(state: dict[str, Any] | None) -> None:
+        if state and (slot := (state["domain_id"], *_slot(state))) not in slots:
+            slots.append(slot)
+
+    def existing(domain_id: int) -> dict[str, Any] | None:
+        return _placement_state(_link(db, topic.id, domain_id)) if topic is not None else None
 
     if action == "CREATE_TOPIC":
         for item in content.get("placements") or []:
-            add(item["domain_id"], item["map_branch"])
+            add(item)
     elif action == "PLACE_TOPIC":
-        add(content["domain_id"], existing(content["domain_id"]))
-        add(content["domain_id"], content["map_branch"])
+        add(existing(content["domain_id"]))
+        add(content)
     elif action == "UNPLACE_TOPIC":
-        add(content["domain_id"], existing(content["domain_id"]))
+        add(existing(content["domain_id"]))
     elif action == "MOVE_TOPIC":
-        add(content["from"]["domain_id"], existing(content["from"]["domain_id"]))
-        add(content["to"]["domain_id"], existing(content["to"]["domain_id"]))
-        add(content["to"]["domain_id"], content["to"]["map_branch"])
+        add(existing(content["from"]["domain_id"]))
+        add(existing(content["to"]["domain_id"]))
+        add(content["to"])
     elif action == "REORDER_TOPICS":
-        add(content["domain_id"], content["map_branch"])
+        add(content)
     elif action == "DEACTIVATE_TOPIC" and topic is not None:
         for item in _placements(db, topic.id):
-            add(item["domain_id"], item["map_branch"])
+            add(item)
     elif action == "RESTORE_VERSION" and content.get("target") == "topic" and topic is not None:
         for item in _placements(db, topic.id):
-            add(item["domain_id"], item["map_branch"])
+            add(item)
         stored = _stored_topic_version(db, topic.id, content["version"])
         for item in (stored.snapshot.get("placements") if stored else None) or []:
-            add(item["domain_id"], item["map_branch"])
-    return pairs
+            add(item)
+    return slots
 
 
-def describe_branches(db: Session, pairs: list[tuple[int, str]], *, include_topic_id: int | None = None) -> dict[tuple[int, str], list[dict[str, Any]]]:
-    return {pair: branch_members(db, pair[0], pair[1], include_topic_id=include_topic_id) for pair in pairs}
+def describe_branches(db: Session, slots: list[Slot], *, include_topic_id: int | None = None) -> dict[Slot, list[dict[str, Any]]]:
+    return {slot: branch_members(db, *slot, include_topic_id=include_topic_id) for slot in slots}
 
 
-def branch_label(db: Session, domain_id: int, branch: str) -> dict[str, Any]:
+def branch_label(db: Session, domain_id: int, parent_id: int | None, branch: str | None) -> dict[str, Any]:
     domain = db.get(SecurityDomain, domain_id)
-    return {"domain_id": domain_id, "domain_name": domain.name if domain else f"Domain {domain_id}", "map_branch": branch, "label": MAP_BRANCHES.get(branch, branch)}
+    parent = db.get(KnowledgeTopic, parent_id) if parent_id else None
+    label = f"{parent.name if parent else f'Topic {parent_id}'} › {MAP_BRANCHES.get(branch, branch)}" if parent_id else "Topics"
+    return {"domain_id": domain_id, "domain_name": domain.name if domain else f"Domain {domain_id}", "parent_topic_id": parent_id, "map_branch": branch, "label": label}

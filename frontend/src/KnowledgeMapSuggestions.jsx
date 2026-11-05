@@ -7,7 +7,7 @@ import { BRANCHES } from "./knowledgeMapModel";
 // AI suggestions for an approved research finding. The model's output is shown for selection only; nothing is stored
 // until the administrator submits the selected suggestions, which become "ai" proposals for normal review.
 
-const SCHEMA_KEYS = ["action", "existing_topic_id", "name", "domain_id", "map_branch", "rationale", "related_topic_id", "relationship_type"];
+const SCHEMA_KEYS = ["action", "existing_topic_id", "name", "domain_id", "parent_topic_id", "map_branch", "rationale", "related_topic_id", "relationship_type"];
 const ACTIONS = { PLACE_TOPIC: "Place existing topic", CREATE_TOPIC: "Create topic (name and placement only)", ADD_TOPIC_RELATIONSHIP: "Add relationship" };
 
 function describe(item) {
@@ -62,7 +62,7 @@ export default function KnowledgeMapSuggestions({ adminKey, onSubmitted }) {
       <p className="muted-copy">Model: {result.provider} / {result.model_id}</p>
       {result.suggestions.length ? <ul>{result.suggestions.map((item, index) => <li key={index}><label className="kma-suggestion">
         <input type="checkbox" checked={selected.includes(index)} onChange={() => toggle(index)} aria-label={`Select ${ACTIONS[item.action]}: ${describe(item)}`} />
-        <span><strong>{describe(item)}</strong> <Badge tone="violet">{ACTIONS[item.action]}</Badge><small>{item.domain_name} › {BRANCHES[item.map_branch]?.label || item.map_branch}</small><small>{item.rationale}</small>{item.note && <small className="kma-note">{item.note}</small>}</span>
+        <span><strong>{describe(item)}</strong> <Badge tone="violet">{ACTIONS[item.action]}</Badge><small>{item.domain_name}{item.parent_topic_name ? ` › ${item.parent_topic_name} › ${BRANCHES[item.map_branch]?.label || item.map_branch}` : ""}</small><small>{item.rationale}</small>{item.note && <small className="kma-note">{item.note}</small>}</span>
       </label></li>)}</ul> : <p className="muted-copy">The model returned no usable suggestions.</p>}
       {result.warnings.length > 0 && <details><summary>{result.warnings.length} suggestions were dropped</summary><ul>{result.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></details>}
       {result.suggestions.length > 0 && <button type="button" className="button" disabled={!selected.length || Boolean(busy)} onClick={submit}>{busy === "submit" ? "Submitting…" : `Submit ${selected.length || ""} selected as proposals`}</button>}

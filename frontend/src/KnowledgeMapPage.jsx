@@ -1,10 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { fetchKnowledgeContractTopic, fetchKnowledgeMapBranchTopics, fetchKnowledgeMapChildren, fetchKnowledgeMapPlacements, fetchKnowledgeMapRoot, fetchKnowledgeMapTopicChildren, searchKnowledgeMap } from "./api";
+import { fetchKnowledgeContractTopic, fetchKnowledgeMapChildren, fetchKnowledgeMapPlacements, fetchKnowledgeMapRoot, fetchKnowledgeMapTopicChildren, searchKnowledgeMap } from "./api";
 import { EmptyState, ErrorState, Loading, PageHeader } from "./components";
 import KnowledgeMapTopicPanel from "./KnowledgeMapTopicPanel";
 import KnowledgeMapTree from "./KnowledgeMapTree";
-import { BRANCHES, ROOT_ID, TOPIC_PAGE_SIZE, applyDomainChildren, applyRoot, applyTopicChildren, applyTopicPage, branchNodeId, collapse, collapseAll, domainNodeId, ensureTopic, expand, initialMapState, isExpandable, layoutTree, nextTopicOffset, pathTo, topicNodeId, visibleAncestor, visibleRows, visibleTree } from "./knowledgeMapModel";
+import { BRANCHES, ROOT_ID, applyDomainChildren, applyRoot, applyTopicChildren, branchNodeId, collapse, collapseAll, domainNodeId, expand, initialMapState, isExpandable, layoutTree, pathTo, placementLabel, topicNodeId, visibleAncestor, visibleRows, visibleTree } from "./knowledgeMapModel";
 
 // The graph library is only downloaded when the graph view is shown.
 const KnowledgeMapGraph = lazy(() => import("./KnowledgeMapGraph"));
@@ -37,22 +37,18 @@ function writeTopicToHash(topicKey) {
   if (window.location.hash !== next) window.history.replaceState(window.history.state, "", next);
 }
 
-function placementLabel(placement) {
-  return [...placement.domain_path.map((domain) => domain.name), placement.label, ...(placement.ancestors || []).map((topic) => topic.name)].join(" › ");
-}
-
 function NodeDetails({ node, state, placements, onReveal, onSelectTopic, onNavigate }) {
   if (!node) return null;
   if (node.type === "topic") return <KnowledgeMapTopicPanel
     node={node}
     breadcrumb={pathTo(state, node.id).map((id) => state.nodes[id].label)}
     placements={placements}
-    isCurrentPlacement={(placement) => topicNodeId(placement.domain_path[placement.domain_path.length - 1].id, placement.branch, node.topicKey) === node.id}
+    isCurrentPlacement={(placement) => topicNodeId(placement.domain_path[placement.domain_path.length - 1].id, node.topicKey) === node.id}
     onReveal={(placement) => onReveal({ id: node.topicId, topic_key: node.topicKey, name: node.label, short_description: node.description }, placement)}
     onSelectTopic={onSelectTopic}
     onNavigate={onNavigate} />;
   if (node.type === "branch") return <>
-    <p className="eyebrow">BRANCH · {state.nodes[state.parents[node.id]]?.label}</p>
+    <p className="eyebrow">BRANCH OF {state.nodes[state.parents[node.id]]?.label}</p>
     <h2><span aria-hidden="true">{BRANCHES[node.branch]?.icon} </span>{node.label}</h2>
     <p className="km-details-copy">{node.topicCount} published {node.topicCount === 1 ? "topic" : "topics"} in this branch.</p>
   </>;
@@ -61,14 +57,14 @@ function NodeDetails({ node, state, placements, onReveal, onSelectTopic, onNavig
     return <>
       <p className="eyebrow">{node.type === "domain" ? "SECURITY DOMAIN" : "CHILD DOMAIN"}</p>
       <h2>{node.label}</h2>
-      <p className="km-details-copy">{node.topicCount} published {node.topicCount === 1 ? "topic" : "topics"}{node.childDomainCount ? ` across ${node.childDomainCount} child ${node.childDomainCount === 1 ? "domain" : "domains"} and its branches` : ""}.</p>
+      <p className="km-details-copy">{node.topicCount} published {node.topicCount === 1 ? "topic" : "topics"}{node.childDomainCount ? ` here and across ${node.childDomainCount} ${node.childDomainCount === 1 ? "sub-domain" : "sub-domains"}` : ""}.</p>
       {childIds && state.nodes[childIds[0]]?.type === "empty" && <EmptyState title="No published topics yet" message="Topics appear here once a reviewed placement is published for this domain." />}
     </>;
   }
   return <>
     <p className="eyebrow">KNOWLEDGE MAP</p>
     <h2>{node.label}</h2>
-    <p className="km-details-copy">{state.children[ROOT_ID]?.length || 0} security domains. Expand a domain to see its Foundations, Security and Common Vulnerabilities branches.</p>
+    <p className="km-details-copy">{state.children[ROOT_ID]?.length || 0} security domains. Expand a domain to see its sub-domains and topics; every topic opens into Foundations, Security and Common Vulnerabilities.</p>
   </>;
 }
 
@@ -108,25 +104,15 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
     if (fresh && id !== ROOT_ID && !isExpandable(node)) return Promise.resolve(false);
     if (inflight.current[id]) return inflight.current[id];
     setNodeStatus(id, "loading");
+    // A branch's topics arrive with its topic's branches, so a branch reloads through its topic.
+    if (node?.type === "branch") return loadChildren(topicNodeId(node.domainId, node.parentTopicKey), { fresh });
     const request = id === ROOT_ID ? fetchKnowledgeMapRoot({ fresh }).then((data) => update((value) => applyRoot(value, data)))
-      : node.type === "branch" ? fetchKnowledgeMapBranchTopics(node.domainId, node.branch, { offset: 0, limit: TOPIC_PAGE_SIZE }).then((page) => update((value) => applyTopicPage(value, id, page)))
-        : node.type === "topic" ? fetchKnowledgeMapTopicChildren(node.domainId, node.branch, node.topicId, { fresh }).then((data) => update((value) => applyTopicChildren(value, id, data)))
+      : node.type === "topic" ? fetchKnowledgeMapTopicChildren(node.domainId, node.topicId, { fresh }).then((data) => update((value) => applyTopicChildren(value, id, data)))
         : fetchKnowledgeMapChildren(node.domainId, { fresh }).then((data) => update((value) => applyDomainChildren(value, id, data)));
     inflight.current[id] = request
       .then(() => { setNodeStatus(id, null); return true; }, (error) => { setNodeStatus(id, error); return false; })
       .finally(() => { delete inflight.current[id]; });
     return inflight.current[id];
-  }, [update, setNodeStatus]);
-
-  const loadMore = useCallback(async (branchId) => {
-    const key = `more:${branchId}`;
-    if (inflight.current[key]) return;
-    const node = stateRef.current.nodes[branchId];
-    setNodeStatus(key, "loading");
-    inflight.current[key] = fetchKnowledgeMapBranchTopics(node.domainId, node.branch, { offset: nextTopicOffset(stateRef.current, branchId), limit: TOPIC_PAGE_SIZE })
-      .then((page) => { update((value) => applyTopicPage(value, branchId, page)); setNodeStatus(key, null); })
-      .catch((error) => { setNodeStatus(key, error); setNotice(`More topics could not be loaded: ${error.message}`); })
-      .finally(() => { delete inflight.current[key]; });
   }, [update, setNodeStatus]);
 
   const selectNode = useCallback((id, centre = false) => {
@@ -150,29 +136,28 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
   const toggleNode = useCallback((id) => (stateRef.current.expanded[id] ? collapseNode(id) : expandNode(id)), [collapseNode, expandNode]);
 
   const activateNode = useCallback((node) => {
-    if (node.type === "more") loadMore(node.branchId);
-    else if (node.type === "error") loadChildren(node.targetId);
+    if (node.type === "error") loadChildren(node.targetId);
     else if (node.type !== "empty" && node.type !== "loading") selectNode(node.id);
-  }, [loadMore, loadChildren, selectNode]);
+  }, [loadChildren, selectNode]);
 
   // Expands only the nodes on one placement path, then selects the topic there. Other expanded nodes stay as they are.
   const reveal = useCallback(async (topic, placement) => {
+    const fail = () => setNotice(`${topic.name} could not be shown under ${placementLabel(placement)}.`);
     const domainIds = placement.domain_path.map((domain) => domainNodeId(domain.id));
     const leaf = placement.domain_path[placement.domain_path.length - 1];
-    const branchId = branchNodeId(leaf.id, placement.branch);
+    const ancestors = placement.ancestors || [];
+    // Each parent topic in turn, outermost first; loading a topic also loads its branches and their topics.
+    const ancestorIds = ancestors.map((ancestor) => topicNodeId(leaf.id, ancestor.topic_key));
+    const branchIds = ancestors.map((ancestor, index) => branchNodeId(leaf.id, ancestor.topic_key, index + 1 < ancestors.length ? ancestors[index + 1].branch : placement.branch));
     if (!(await loadChildren(ROOT_ID))) return;
-    for (const id of [...domainIds, branchId]) {
-      if (!stateRef.current.nodes[id] || !(await loadChildren(id))) { setNotice(`${topic.name} could not be shown under ${placementLabel(placement)}.`); return; }
+    for (const id of [...domainIds, ...ancestorIds]) {
+      if (!stateRef.current.nodes[id] || !(await loadChildren(id))) { fail(); return; }
     }
-    // A child topic sits under its parent topics in this branch: open each one in turn, outermost first.
-    const ancestorIds = (placement.ancestors || []).map((ancestor) => topicNodeId(leaf.id, placement.branch, ancestor.topic_key));
-    if (placement.ancestors?.length) update((value) => ensureTopic(value, branchId, { ...placement.ancestors[0], has_children: true }));
-    for (const id of ancestorIds) {
-      if (!stateRef.current.nodes[id] || !(await loadChildren(id))) { setNotice(`${topic.name} could not be shown under ${placementLabel(placement)}.`); return; }
-    }
-    update((value) => expand(ancestorIds.length ? value : ensureTopic(value, branchId, topic), [ROOT_ID, ...domainIds, branchId, ...ancestorIds]));
+    const targetId = topicNodeId(leaf.id, topic.topic_key);
+    if (!stateRef.current.nodes[targetId]) { fail(); return; }
+    update((value) => expand(value, [ROOT_ID, ...domainIds, ...ancestorIds, ...branchIds]));
     setNotice("");
-    selectNode(topicNodeId(leaf.id, placement.branch, topic.topic_key), true);
+    selectNode(targetId, true);
   }, [loadChildren, update, selectNode]);
 
   const openTopicKey = useCallback(async (topicKey) => {
@@ -264,7 +249,7 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
   const loadingCount = Object.values(status).filter((value) => value === "loading").length;
 
   const rootStatus = status[ROOT_ID];
-  const header = admin ? null : <PageHeader eyebrow="EXPLORE" title="Security Knowledge Map" description="Expand security domains into Foundations, Security and Common Vulnerabilities, one level at a time. Only published, reviewed topics appear." />;
+  const header = admin ? null : <PageHeader eyebrow="EXPLORE" title="Security Knowledge Map" description="Expand security domains into sub-domains and topics, and each topic into Foundations, Security and Common Vulnerabilities, one level at a time. Only published, reviewed topics appear." />;
   if (!state.nodes[ROOT_ID]) return <>
     {header}
     {rootStatus instanceof Error ? <ErrorState error={rootStatus} onRetry={() => loadChildren(ROOT_ID)} /> : <Loading label="Loading the knowledge map" />}

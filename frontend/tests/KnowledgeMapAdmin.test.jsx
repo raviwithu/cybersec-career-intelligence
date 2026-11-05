@@ -14,6 +14,13 @@ const cloud = { node_type: "domain", id: 2, slug: "cloud-api-security", name: "C
 const embedded = { node_type: "domain", id: 5, slug: "embedded", name: "Embedded Systems Security", child_domain_count: 1, placed_topic_count: 0 };
 const oauth = { id: 1, topic_key: "oauth-2", name: "OAuth 2.0", short_description: "", placement_count: 1 };
 const jwt = { id: 7, topic_key: "jwt", name: "JSON Web Tokens", short_description: "", placement_count: 1 };
+const pkce = { id: 9, topic_key: "pkce", name: "PKCE", short_description: "", placement_count: 1, has_children: false };
+const authCode = { id: 10, topic_key: "auth-code", name: "Authorization Code", short_description: "", placement_count: 1, has_children: false };
+const branches = (topicId, domainId, foundations = []) => ({ topic_id: topicId, domain_id: domainId, branches: [
+  { branch: "foundations", label: "Foundations", topic_count: foundations.length, items: foundations },
+  { branch: "security", label: "Security", topic_count: 0, items: [] },
+  { branch: "vulnerabilities", label: "Common Vulnerabilities", topic_count: 0, items: [] },
+] });
 const adminTopic = (topic, extra = {}) => ({ id: topic.id, topic_key: topic.topic_key, name: topic.name, slug: topic.topic_key, description: "", sections: [], coverage: { topic_id: topic.id, topic_key: topic.topic_key, items: [], complete: false }, related_topics: [], level_expectations: [], last_updated: null, is_active: true, publication_status: "published", parent_topic_id: null, aliases: [], ...extra });
 const DOMAINS = [{ id: 2, name: "Cloud API Security", parent_id: null, is_active: true, display_order: 1 }, { id: 5, name: "Embedded Systems Security", parent_id: null, is_active: true, display_order: 2 }, { id: 6, name: "Secure Boot", parent_id: 5, is_active: true, display_order: 0 }];
 // GET /domains returns top-level domains with their sub-domains nested under children, like the real API.
@@ -72,13 +79,15 @@ function mockApi() {
       const items = proposals.filter((item) => searchParams.get("group") !== "map" || item.map);
       return json({ items, total: items.length, counts: {} });
     }
-    if (path.endsWith("/map-preview")) return json({ proposal_id: 50, action: "PLACE_TOPIC", status: "review", message: null, branches: [{ domain_id: 2, domain_name: "Cloud API Security", map_branch: "security", label: "Security", before: [{ topic_id: 7, name: "JSON Web Tokens" }], after: [{ topic_id: 7, name: "JSON Web Tokens" }, { topic_id: 1, name: "OAuth 2.0" }] }] });
+    if (path.endsWith("/map-preview")) return json({ proposal_id: 50, action: "PLACE_TOPIC", status: "review", message: null, branches: [{ domain_id: 2, domain_name: "Cloud API Security", parent_topic_id: 1, map_branch: "security", label: "OAuth 2.0 › Security", before: [{ topic_id: 7, name: "JSON Web Tokens" }], after: [{ topic_id: 7, name: "JSON Web Tokens" }, { topic_id: 1, name: "OAuth 2.0" }] }] });
     if (path === "/knowledge-map") return json({ root: { id: "root", name: "CyberSec Career Intelligence" }, domains: nest(domains).map(mapDomain) });
-    if (path === "/knowledge-map/domains/2/children") return json({ domain: cloud, nodes: [{ node_type: "branch", domain_id: 2, branch: "foundations", label: "Foundations", topic_count: 2 }] });
+    if (path === "/knowledge-map/domains/2/children") return json({ domain: cloud, nodes: [{ node_type: "topic", domain_id: 2, ...oauth, has_children: true }, { node_type: "topic", domain_id: 2, ...jwt }] });
+    if (path === "/knowledge-map/domains/2/topics/1/children") return json(branches(1, 2, [pkce, authCode]));
+    const topicChildren = path.match(/^\/knowledge-map\/domains\/(\d+)\/topics\/(\d+)\/children$/);
+    if (topicChildren) return json(branches(Number(topicChildren[2]), Number(topicChildren[1])));
     const children = path.match(/^\/knowledge-map\/domains\/(5|6|6\d)\/children$/);
     if (children) return json({ domain: mapDomain(domains.find((item) => item.id === Number(children[1]))), nodes: nest(domains, Number(children[1])).map(mapDomain) });
-    if (path === "/knowledge-map/domains/2/branches/foundations/topics") return json({ domain_id: 2, branch: "foundations", label: "Foundations", items: [oauth, jwt], total: 2, offset: 0, limit: Number(searchParams.get("limit")) });
-    if (path.startsWith("/knowledge-map/topics/")) return json([{ domain_path: [{ id: 2, name: "Cloud API Security" }], branch: "foundations", label: "Foundations", context_note: "Delegated access for cloud APIs." }, { domain_path: [{ id: 5, name: "Embedded Systems Security" }], branch: "security", label: "Security", context_note: "Device-to-cloud authorization." }]);
+    if (path.startsWith("/knowledge-map/topics/")) return json([{ domain_path: [{ id: 2, name: "Cloud API Security" }], branch: null, label: null, context_note: "Delegated access for cloud APIs.", ancestors: [] }, { domain_path: [{ id: 5, name: "Embedded Systems Security" }], branch: null, label: null, context_note: "Device-to-cloud authorization.", ancestors: [] }]);
     if (path.startsWith("/knowledge/topics/")) return json({ ...adminTopic(oauth), description: "Delegated authorization." });
     throw new Error(`Unexpected request ${url}`);
   });
@@ -89,7 +98,6 @@ const treeItem = (name) => screen.findByRole("treeitem", { name: new RegExp(`^${
 async function openTopicActions() {
   render(<KnowledgeMapAdminPage onNavigate={() => {}} />);
   fireEvent.keyDown(await treeItem("Cloud API Security"), { key: "ArrowRight" });
-  fireEvent.keyDown(await treeItem("Foundations"), { key: "ArrowRight" });
   fireEvent.keyDown(await treeItem("OAuth 2.0"), { key: "Enter" });
   return screen.findByRole("region", { name: "Propose changes to OAuth 2.0" });
 }
@@ -115,9 +123,13 @@ describe("Knowledge Map Management", () => {
   it("submits a move proposal with the right payload and change reason", async () => {
     const actions = await openTopicActions();
     fireEvent.click(within(actions).getByRole("button", { name: "Move topic" }));
-    const form = within(actions).getByRole("form", { name: /Move out of/ });
+    const form = within(actions).getByRole("form", { name: "Move from Cloud API Security" });
+    expect(within(form).getByRole("combobox", { name: "Destination domain" }).value).toBe("2");
     fireEvent.change(within(form).getByRole("combobox", { name: "Destination domain" }), { target: { value: "5" } });
     expect(within(form).getByRole("note").textContent).toContain("Secure Boot");
+    // A branch is chosen only inside a parent topic: domains have none.
+    expect(within(form).queryByRole("combobox", { name: "Branch" })).toBeNull();
+    fireEvent.change(within(form).getByRole("combobox", { name: "Under topic" }), { target: { value: "7" } });
     fireEvent.change(within(form).getByRole("combobox", { name: "Branch" }), { target: { value: "security" } });
     fireEvent.click(within(form).getByRole("button", { name: "Submit for review" }));
     expect(await within(form).findByRole("alert")).toBeTruthy();
@@ -125,26 +137,20 @@ describe("Knowledge Map Management", () => {
     reason(form);
     fireEvent.click(within(form).getByRole("button", { name: "Submit for review" }));
     await within(form).findByText(/Proposal #901 submitted for review/);
-    expect(posted[0]).toMatchObject({ action: "MOVE_TOPIC", topic_id: 1, source_type: "manual", change_reason: "Better fit for this domain.", proposed_content: { from: { domain_id: 2 }, to: { domain_id: 5, map_branch: "security" } } });
+    expect(posted[0]).toMatchObject({ action: "MOVE_TOPIC", topic_id: 1, source_type: "manual", change_reason: "Better fit for this domain.", proposed_content: { from: { domain_id: 2 }, to: { domain_id: 5, parent_topic_id: 7, map_branch: "security" } } });
   });
 
-  it("submits parent, relationship removal, career level and deactivation proposals", async () => {
+  it("submits relationship removal, career level and deactivation proposals", async () => {
     const actions = await openTopicActions();
-    fireEvent.click(within(actions).getByRole("button", { name: "Set parent topic" }));
-    let form = within(actions).getByRole("form", { name: "Set parent topic" });
-    fireEvent.change(within(form).getByRole("combobox", { name: "Parent topic" }), { target: { value: "7" } });
-    reason(form);
-    fireEvent.click(within(form).getByRole("button", { name: "Submit for review" }));
-    await waitFor(() => expect(posted).toHaveLength(1));
-    expect(posted[0]).toMatchObject({ action: "SET_PARENT_TOPIC", topic_id: 1, proposed_content: { parent_topic_id: 7 } });
-
+    // Nesting on the map is part of a placement (Place or Move under a topic), not a separate parent setting.
+    expect(within(actions).queryByRole("button", { name: "Set parent topic" })).toBeNull();
     fireEvent.click(within(actions).getByRole("button", { name: "Remove relationship" }));
-    form = within(actions).getByRole("form", { name: "Remove relationship" });
+    let form = within(actions).getByRole("form", { name: "Remove relationship" });
     fireEvent.change(within(form).getByRole("combobox", { name: "Relationship" }), { target: { value: "dependency:7" } });
     reason(form);
     fireEvent.click(within(form).getByRole("button", { name: "Submit for review" }));
-    await waitFor(() => expect(posted).toHaveLength(2));
-    expect(posted[1]).toMatchObject({ action: "REMOVE_TOPIC_RELATIONSHIP", proposed_content: { target_topic_id: 7, relationship_type: "dependency" } });
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toMatchObject({ action: "REMOVE_TOPIC_RELATIONSHIP", proposed_content: { target_topic_id: 7, relationship_type: "dependency" } });
 
     fireEvent.click(within(actions).getByRole("button", { name: "Career levels" }));
     form = within(actions).getByRole("form", { name: "Career level expectations" });
@@ -153,28 +159,39 @@ describe("Knowledge Map Management", () => {
     fireEvent.change(within(form).getByRole("textbox", { name: "Practical skills" }), { target: { value: "Configure PKCE." } });
     reason(form);
     fireEvent.click(within(form).getByRole("button", { name: "Submit for review" }));
-    await waitFor(() => expect(posted).toHaveLength(3));
-    expect(posted[2]).toMatchObject({ action: "UPDATE_CAREER_LEVELS", proposed_content: { levels: [{ career_level_id: 1, industry_id: null, expectation: "Explain grants.", practical_capability: "Configure PKCE." }] } });
+    await waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted[1]).toMatchObject({ action: "UPDATE_CAREER_LEVELS", proposed_content: { levels: [{ career_level_id: 1, industry_id: null, expectation: "Explain grants.", practical_capability: "Configure PKCE." }] } });
 
     fireEvent.click(within(actions).getByRole("button", { name: "Deactivate topic" }));
     form = within(actions).getByRole("form", { name: "Deactivate topic" });
     fireEvent.change(within(form).getByRole("combobox", { name: "Duplicate of (optional)" }), { target: { value: "7" } });
     reason(form);
     fireEvent.click(within(form).getByRole("button", { name: "Propose deactivation" }));
-    await waitFor(() => expect(posted).toHaveLength(4));
-    expect(posted[3]).toMatchObject({ action: "DEACTIVATE_TOPIC", proposed_content: { reason: "Duplicate of JSON Web Tokens (topic 7)." } });
+    await waitFor(() => expect(posted).toHaveLength(3));
+    expect(posted[2]).toMatchObject({ action: "DEACTIVATE_TOPIC", proposed_content: { reason: "Duplicate of JSON Web Tokens (topic 7)." } });
   });
 
-  it("reorders a branch with up and down buttons", async () => {
+  it("reorders a domain's topics and a topic's branch with up and down buttons", async () => {
     render(<KnowledgeMapAdminPage onNavigate={() => {}} />);
-    fireEvent.keyDown(await treeItem("Cloud API Security"), { key: "ArrowRight" });
-    fireEvent.keyDown(await treeItem("Foundations"), { key: "Enter" });
-    const form = await screen.findByRole("form", { name: "Reorder Foundations" });
+    fireEvent.keyDown(await treeItem("Cloud API Security"), { key: "Enter" });
+    let form = await screen.findByRole("form", { name: "Reorder topics in Cloud API Security" });
     fireEvent.click(await within(form).findByRole("button", { name: "Move JSON Web Tokens up" }));
     reason(form);
     fireEvent.click(within(form).getByRole("button", { name: "Submit for review" }));
     await waitFor(() => expect(posted).toHaveLength(1));
-    expect(posted[0]).toMatchObject({ action: "REORDER_TOPICS", proposed_content: { domain_id: 2, map_branch: "foundations", ordered_topic_ids: [7, 1] } });
+    expect(posted[0]).toMatchObject({ action: "REORDER_TOPICS", proposed_content: { domain_id: 2, ordered_topic_ids: [7, 1] } });
+    expect(posted[0].proposed_content).not.toHaveProperty("map_branch");
+
+    fireEvent.keyDown(await treeItem("Cloud API Security"), { key: "ArrowRight" });
+    fireEvent.keyDown(await treeItem("OAuth 2.0"), { key: "ArrowRight" });
+    fireEvent.keyDown(await treeItem("Foundations"), { key: "Enter" });
+    form = await screen.findByRole("form", { name: "Reorder Foundations" });
+    expect(screen.getByRole("form", { name: "Add a topic to OAuth 2.0 › Foundations" })).toBeTruthy();
+    fireEvent.click(await within(form).findByRole("button", { name: "Move Authorization Code up" }));
+    reason(form);
+    fireEvent.click(within(form).getByRole("button", { name: "Submit for review" }));
+    await waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted[1]).toMatchObject({ action: "REORDER_TOPICS", proposed_content: { domain_id: 2, parent_topic_id: 1, map_branch: "foundations", ordered_topic_ids: [10, 9] } });
   });
 
   it("warns about duplicates before creating a topic and sends placements with it", async () => {
@@ -188,10 +205,11 @@ describe("Knowledge Map Management", () => {
     expect(posted).toHaveLength(0);
     fireEvent.change(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "Token Binding" } });
     fireEvent.change(within(form).getByRole("combobox", { name: "Place in domain (optional)" }), { target: { value: "2" } });
+    fireEvent.change(within(form).getByRole("combobox", { name: "Under topic" }), { target: { value: "1" } });
     fireEvent.change(within(form).getByRole("combobox", { name: "Branch" }), { target: { value: "security" } });
     fireEvent.click(within(form).getByRole("button", { name: "Submit for review" }));
     await waitFor(() => expect(posted).toHaveLength(1));
-    expect(posted[0]).toMatchObject({ action: "CREATE_TOPIC", topic_name: "Token Binding", proposed_content: { topic: { name: "Token Binding" }, placements: [{ domain_id: 2, map_branch: "security" }] } });
+    expect(posted[0]).toMatchObject({ action: "CREATE_TOPIC", topic_name: "Token Binding", proposed_content: { topic: { name: "Token Binding" }, placements: [{ domain_id: 2, parent_topic_id: 1, map_branch: "security" }] } });
   });
 
   it("reuses one topic in several domains with a context note, one proposal per domain", async () => {
@@ -201,14 +219,14 @@ describe("Knowledge Map Management", () => {
     [...domainsList.options].forEach((option) => { option.selected = ["5", "6"].includes(option.value); });
     fireEvent.change(domainsList);
     expect(form.textContent).toContain("One shared topic, placed in 2 domains");
-    fireEvent.change(within(form).getByRole("combobox", { name: "Branch" }), { target: { value: "vulnerabilities" } });
+    expect(within(form).queryByRole("combobox", { name: "Branch" })).toBeNull();
     fireEvent.change(within(form).getByRole("textbox", { name: "How it applies in these domains (optional, same note for each)" }), { target: { value: " Device tokens. " } });
     reason(form, "Reuse in embedded.");
     fireEvent.click(within(form).getByRole("button", { name: "Submit for review" }));
     expect((await within(form).findByRole("status")).textContent).toContain("Proposals #901, #902 submitted for review");
     expect(posted.map((item) => [item.action, item.topic_id, item.proposed_content])).toEqual([
-      ["PLACE_TOPIC", 1, { domain_id: 5, map_branch: "vulnerabilities", context_note: "Device tokens." }],
-      ["PLACE_TOPIC", 1, { domain_id: 6, map_branch: "vulnerabilities", context_note: "Device tokens." }],
+      ["PLACE_TOPIC", 1, { domain_id: 5, context_note: "Device tokens." }],
+      ["PLACE_TOPIC", 1, { domain_id: 6, context_note: "Device tokens." }],
     ]);
   });
 
@@ -225,7 +243,9 @@ describe("Knowledge Map Management", () => {
     reason(form, "Note no longer needed.");
     fireEvent.click(within(form).getByRole("button", { name: "Submit for review" }));
     await waitFor(() => expect(posted).toHaveLength(1));
-    expect(posted[0]).toMatchObject({ action: "PLACE_TOPIC", topic_id: 1, proposed_content: { domain_id: 2, map_branch: "foundations", context_note: "" } });
+    // Only the note changes: the topic stays directly under the domain.
+    expect(posted[0]).toMatchObject({ action: "PLACE_TOPIC", topic_id: 1 });
+    expect(posted[0].proposed_content).toEqual({ domain_id: 2, context_note: "" });
   });
 
   it("adds a sub-domain under a child domain and shows it on the map", async () => {
@@ -292,19 +312,24 @@ describe("Knowledge Map Management", () => {
   });
 
   it("shows Pending badges in the admin view only", async () => {
-    proposals = [{ id: 50, map: true, action: "PLACE_TOPIC", status: "review", topic_id: 1, topic_key: "oauth-2", proposed_content: { domain_id: 2, map_branch: "foundations" } }];
+    proposals = [
+      { id: 50, map: true, action: "PLACE_TOPIC", status: "review", topic_id: 1, topic_key: "oauth-2", proposed_content: { domain_id: 2 } },
+      { id: 51, map: true, action: "PLACE_TOPIC", status: "review", topic_id: 30, topic_key: "token-exchange", proposed_content: { domain_id: 2, parent_topic_id: 1, map_branch: "security" } },
+    ];
     const { unmount } = render(<KnowledgeMapAdminPage onNavigate={() => {}} />);
     fireEvent.keyDown(await treeItem("Cloud API Security"), { key: "ArrowRight" });
-    fireEvent.keyDown(await treeItem("Foundations"), { key: "ArrowRight" });
     expect(within(await treeItem("OAuth 2.0")).getAllByText("Pending")).toHaveLength(1);
-    expect(within(await treeItem("Foundations")).getAllByText("Pending").length).toBeGreaterThan(0);
+    expect(within(await treeItem("JSON Web Tokens")).queryByText("Pending")).toBeNull();
+    fireEvent.keyDown(await treeItem("OAuth 2.0"), { key: "ArrowRight" });
+    expect(within(await treeItem("Security")).getAllByText("Pending")).toHaveLength(1);
+    expect(within(await treeItem("Foundations")).queryByText("Pending")).toBeNull();
     unmount();
 
     window.location.hash = "#knowledge-map";
     render(<KnowledgeMapPage />);
     fireEvent.keyDown(await treeItem("Cloud API Security"), { key: "ArrowRight" });
-    fireEvent.keyDown(await treeItem("Foundations"), { key: "ArrowRight" });
-    await treeItem("OAuth 2.0");
+    fireEvent.keyDown(await treeItem("OAuth 2.0"), { key: "ArrowRight" });
+    await treeItem("Foundations");
     expect(screen.queryByText("Pending")).toBeNull();
   });
 });
@@ -322,7 +347,7 @@ describe("AI map suggestions", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "Submit 1 selected as proposals" }));
     expect(await within(panel).findByText(/1 proposal submitted for review \(#700\)/)).toBeTruthy();
     expect(posted[0].path).toBe("/knowledge/admin/findings/31/map-suggestions/submit");
-    expect(posted[0].suggestions).toEqual([{ action: "CREATE_TOPIC", existing_topic_id: null, name: "API Gateway Security", domain_id: 2, map_branch: "security", rationale: "Gateways appear in the finding.", related_topic_id: null, relationship_type: null }]);
+    expect(posted[0].suggestions).toEqual([{ action: "CREATE_TOPIC", existing_topic_id: null, name: "API Gateway Security", domain_id: 2, parent_topic_id: null, map_branch: "security", rationale: "Gateways appear in the finding.", related_topic_id: null, relationship_type: null }]);
   });
 });
 
@@ -341,7 +366,7 @@ describe("Knowledge Review mind map tab", () => {
     expect(screen.getByText(/by administrator/)).toBeTruthy();
     const diff = screen.getByLabelText("Before and after differences");
     expect(diff.querySelector(".kr-diff-added").textContent).toContain("+ ");
-    const branch = await screen.findByText("Cloud API Security › Security");
+    const branch = await screen.findByText("Cloud API Security › OAuth 2.0 › Security");
     expect(within(branch.closest("article")).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["JSON Web Tokens", "JSON Web Tokens", "OAuth 2.0"]);
 
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
@@ -363,14 +388,15 @@ describe("Knowledge Review mind map tab", () => {
 });
 
 describe("knowledge map admin helpers", () => {
-  it("indexes pending topics and branches from open proposals only", () => {
-    const { topics, branches } = pendingIndex([
-      { id: 1, status: "review", topic_id: 4, action: "MOVE_TOPIC", proposed_content: { from: { domain_id: 2 }, to: { domain_id: 5, map_branch: "security" } } },
-      { id: 2, status: "published", topic_id: 9, action: "PLACE_TOPIC", proposed_content: { domain_id: 2, map_branch: "foundations" } },
-      { id: 3, status: "approved", topic_id: null, action: "CREATE_TOPIC", proposed_content: { placements: [{ domain_id: 6, map_branch: "vulnerabilities" }] } },
+  it("indexes pending topics, domains and topic branches from open proposals only", () => {
+    const { topics, domains, branches: pendingBranches } = pendingIndex([
+      { id: 1, status: "review", topic_id: 4, action: "MOVE_TOPIC", proposed_content: { from: { domain_id: 2 }, to: { domain_id: 5, parent_topic_id: 3, map_branch: "security" } } },
+      { id: 2, status: "published", topic_id: 9, action: "PLACE_TOPIC", proposed_content: { domain_id: 2 } },
+      { id: 3, status: "approved", topic_id: null, action: "CREATE_TOPIC", proposed_content: { placements: [{ domain_id: 6 }, { domain_id: 7, parent_topic_id: 8, map_branch: "vulnerabilities" }] } },
     ]);
     expect([...topics.keys()]).toEqual([4]);
-    expect([...branches]).toEqual(["branch:5:security", "branch:6:vulnerabilities"]);
+    expect([...domains]).toEqual([6]);
+    expect([...pendingBranches]).toEqual(["5:3:security", "7:8:vulnerabilities"]);
   });
 
   it("orders domains as a tree of any depth", () => {

@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { clearAdminSessionKey, createKnowledgeProposal, createTaxonomyEntry, deleteTaxonomyEntry, fetchDomains, fetchIndustries, fetchKnowledgeAdminTopics, fetchKnowledgeContractHistory, fetchKnowledgeMapBranchTopics, fetchKnowledgeReviewQueue, fetchLevels, getAdminSessionKey, setAdminSessionKey, setTaxonomyActive, updateTaxonomyEntry } from "./api";
+import { clearAdminSessionKey, createKnowledgeProposal, createTaxonomyEntry, deleteTaxonomyEntry, fetchDomains, fetchIndustries, fetchKnowledgeAdminTopics, fetchKnowledgeContractHistory, fetchKnowledgeMapChildren, fetchKnowledgeMapTopicChildren, fetchKnowledgeReviewQueue, fetchLevels, getAdminSessionKey, setAdminSessionKey, setTaxonomyActive, updateTaxonomyEntry } from "./api";
 import { Badge, EmptyState, ErrorState, Loading, PageHeader } from "./components";
 import KnowledgeMapPage from "./KnowledgeMapPage";
 import KnowledgeMapSuggestions from "./KnowledgeMapSuggestions";
 import KnowledgeSectionEditor from "./KnowledgeSectionEditor";
 import { MAP_ACTION_LABELS } from "./knowledgeMapActions";
-import { BRANCHES, ROOT_ID, branchNodeId, domainNodeId } from "./knowledgeMapModel";
+import { BRANCHES, ROOT_ID, domainNodeId } from "./knowledgeMapModel";
 
 // Knowledge Map Management: administrators propose map changes here. Every topic form creates a knowledge-contract
 // proposal that is reviewed and published in Knowledge Review; only "Add sub-domain" saves taxonomy directly.
@@ -29,17 +29,26 @@ export function possibleDuplicates(topics, name) {
   }).filter(Boolean).sort((a, b) => Number(b.exact) - Number(a.exact)).slice(0, 6);
 }
 
-// Which topics and branches have open map proposals. Read from proposals, never from live data.
+// A topic's branch in one domain, as a key for pending badges.
+export const slotKey = (domainId, parentTopicId, branch) => `${domainId}:${parentTopicId}:${branch}`;
+
+// Where a placement goes: directly under the domain (no parent topic), or in one branch of a parent topic there.
+function slotContent(parentTopicId, branch) {
+  return parentTopicId ? { parent_topic_id: Number(parentTopicId), map_branch: branch } : {};
+}
+
+// Which topics, domains and topic branches have open map proposals. Read from proposals, never from live data.
 export function pendingIndex(proposals) {
   const topics = new Map();
+  const domains = new Set();
   const branches = new Set();
   proposals.filter((item) => OPEN_STATUSES.has(item.status)).forEach((item) => {
     if (item.topic_id) topics.set(item.topic_id, [...(topics.get(item.topic_id) || []), item]);
     const content = item.proposed_content || {};
-    const targets = [content, content.to, ...(content.placements || [])].filter((target) => target?.domain_id && target.map_branch);
-    targets.forEach((target) => branches.add(branchNodeId(target.domain_id, target.map_branch)));
+    const targets = item.action === "MOVE_TOPIC" ? [content.to] : [content, ...(content.placements || [])];
+    targets.filter((target) => target?.domain_id).forEach((target) => (target.parent_topic_id ? branches.add(slotKey(target.domain_id, target.parent_topic_id, target.map_branch)) : domains.add(target.domain_id)));
   });
-  return { topics, branches };
+  return { topics, domains, branches };
 }
 
 // GET /domains nests children under their parents; the page works with one flat list of every level.
@@ -94,7 +103,7 @@ function SubDomainForm({ parent = null, domains, adminKey, onCreated }) {
     setBusy(true);
     try {
       const created = await createTaxonomyEntry("domain", { name: name.trim(), description: description.trim(), parent_id: chosenId }, adminKey);
-      setNotice(`${created.name} was added under ${path.join(" › ")}. Place topics in its Foundations, Security or Common Vulnerabilities branch, or add another level under it.`);
+      setNotice(`${created.name} was added under ${path.join(" › ")}. Place topics in it, or add another level under it.`);
       setName(""); setDescription("");
       await onCreated?.(created);
     } catch (requestError) { setError(requestError); } finally { setBusy(false); }
@@ -123,13 +132,21 @@ function BranchSelect({ value, onChange }) {
   return <label>Branch<select value={value} onChange={(event) => onChange(event.target.value)}>{BRANCH_OPTIONS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>;
 }
 
-function TopicSelect({ topics, value, onChange, exclude, label = "Topic", allowNone = false }) {
+function TopicSelect({ topics, value, onChange, exclude, label = "Topic", noneLabel = "Choose a topic" }) {
   const [filter, setFilter] = useState("");
   const options = topics.filter((topic) => topic.id !== exclude && (!filter || normal(topic.name).includes(normal(filter)) || topic.id === Number(value)));
   return <div className="kma-topic-select">
     <label>{label} filter<input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Type to narrow the list" /></label>
-    <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)}><option value="">{allowNone ? "No parent (top level)" : "Choose a topic"}</option>{options.map((topic) => <option key={topic.id} value={topic.id}>{topic.name}</option>)}</select></label>
+    <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)}><option value="">{noneLabel}</option>{options.map((topic) => <option key={topic.id} value={topic.id}>{topic.name}</option>)}</select></label>
   </div>;
+}
+
+// Optionally puts the topic inside another topic in the same domain, in one of that topic's three branches.
+function ParentTopicFields({ topics, exclude, parentId, onParentChange, branch, onBranchChange }) {
+  return <>
+    <TopicSelect topics={topics} value={parentId} onChange={onParentChange} exclude={exclude} label="Under topic" noneLabel="Directly under the domain" />
+    {parentId && <BranchSelect value={branch} onChange={onBranchChange} />}
+  </>;
 }
 
 function ChildDomainWarning({ domains, domainId }) {
@@ -174,16 +191,18 @@ function ProposalForm({ title, adminKey, build, onSubmitted, children, submitLab
 }
 
 // Places one shared topic (e.g. SSRF) in one or more domains: the same topic is reused, never copied. Each domain
-// becomes its own PLACE_TOPIC proposal; the optional note says how the topic applies in that domain.
-function PlaceForm({ topics, domains, adminKey, onSubmitted, fixedTopicId, fixedDomainId, fixedBranch }) {
+// becomes its own PLACE_TOPIC proposal; the optional note says how the topic applies in that domain. The topic sits
+// directly under the domain, or inside a parent topic there (in its Foundations, Security or Common Vulnerabilities).
+function PlaceForm({ topics, domains, adminKey, onSubmitted, fixedTopicId, fixedDomainId, fixedParentTopicId, fixedBranch, title = "Place topic" }) {
   const [topicId, setTopicId] = useState(fixedTopicId ? String(fixedTopicId) : "");
   const [domainIds, setDomainIds] = useState(fixedDomainId ? [String(fixedDomainId)] : []);
+  const [parentId, setParentId] = useState(fixedParentTopicId ? String(fixedParentTopicId) : "");
   const [branch, setBranch] = useState(fixedBranch || "foundations");
   const [note, setNote] = useState("");
-  return <ProposalForm title="Place topic" adminKey={adminKey} onSubmitted={onSubmitted} build={() => (!topicId || !domainIds.length ? "Choose a topic and at least one domain." : domainIds.map((domainId) => ({ action: "PLACE_TOPIC", topic_id: Number(topicId), proposed_content: { domain_id: Number(domainId), map_branch: branch, ...(note.trim() ? { context_note: note.trim() } : {}) } })))}>
-    {!fixedTopicId && <TopicSelect topics={topics} value={topicId} onChange={setTopicId} />}
+  return <ProposalForm title={title} adminKey={adminKey} onSubmitted={onSubmitted} build={() => (!topicId || !domainIds.length ? "Choose a topic and at least one domain." : domainIds.map((domainId) => ({ action: "PLACE_TOPIC", topic_id: Number(topicId), proposed_content: { domain_id: Number(domainId), ...slotContent(parentId, branch), ...(note.trim() ? { context_note: note.trim() } : {}) } })))}>
+    {!fixedTopicId && <TopicSelect topics={topics} value={topicId} onChange={setTopicId} exclude={fixedParentTopicId} />}
     {!fixedDomainId && <><DomainMultiSelect domains={domains} value={domainIds} onChange={setDomainIds} label="Domains (select one or more to reuse the topic)" />{domainIds.length > 1 && <p className="muted-copy">One shared topic, placed in {domainIds.length} domains: each placement is a separate proposal.</p>}</>}
-    {!fixedBranch && <BranchSelect value={branch} onChange={setBranch} />}
+    {!fixedParentTopicId && <ParentTopicFields topics={topics} exclude={Number(topicId) || undefined} parentId={parentId} onParentChange={setParentId} branch={branch} onBranchChange={setBranch} />}
     <ContextNoteField value={note} onChange={setNote} label={domainIds.length > 1 ? "How it applies in these domains (optional, same note for each)" : undefined} />
     {domainIds.map((domainId) => <ChildDomainWarning key={domainId} domains={domains} domainId={domainId} />)}
   </ProposalForm>;
@@ -193,28 +212,25 @@ function PlaceForm({ topics, domains, adminKey, onSubmitted, fixedTopicId, fixed
 function PlacementContextForm({ node, adminKey, onSubmitted }) {
   const [note, setNote] = useState(node.contextNote || "");
   useEffect(() => { setNote(node.contextNote || ""); }, [node.id, node.contextNote]);
-  return <ProposalForm title={`How ${node.label} applies in ${node.domainLabel || "this domain"}`} adminKey={adminKey} onSubmitted={onSubmitted} build={() => ({ action: "PLACE_TOPIC", topic_id: node.topicId, proposed_content: { domain_id: node.domainId, map_branch: node.branch, context_note: note.trim() } })}>
+  return <ProposalForm title={`How ${node.label} applies in ${node.domainLabel || "this domain"}`} adminKey={adminKey} onSubmitted={onSubmitted} build={() => ({ action: "PLACE_TOPIC", topic_id: node.topicId, proposed_content: { domain_id: node.domainId, ...slotContent(node.parentTopicId, node.branch), context_note: note.trim() } })}>
     <p className="muted-copy">This note appears only for this domain. Leave it empty to remove the note.</p>
     <ContextNoteField value={note} onChange={setNote} label="Domain context note" />
   </ProposalForm>;
 }
 
+// Reorders the topics directly under a domain (node is a domain) or in one branch of a topic (node is a branch).
 function ReorderForm({ node, adminKey, onSubmitted }) {
   const [members, setMembers] = useState(null);
   const [error, setError] = useState(null);
+  const inBranch = node.type === "branch";
   useEffect(() => {
     let active = true;
-    (async () => {
-      const items = [];
-      for (let offset = 0; ; offset += 100) {
-        const page = await fetchKnowledgeMapBranchTopics(node.domainId, node.branch, { offset, limit: 100, include_nested: true });
-        items.push(...page.items);
-        if (items.length >= page.total || !page.items.length) break;
-      }
-      if (active) setMembers(items);
-    })().catch((requestError) => active && setError(requestError));
+    const request = inBranch
+      ? fetchKnowledgeMapTopicChildren(node.domainId, node.parentTopicId, { fresh: true }).then((data) => data.branches.find((item) => item.branch === node.branch)?.items || [])
+      : fetchKnowledgeMapChildren(node.domainId, { fresh: true }).then((data) => data.nodes.filter((item) => item.node_type === "topic"));
+    request.then((items) => active && setMembers(items), (requestError) => active && setError(requestError));
     return () => { active = false; };
-  }, [node.domainId, node.branch]);
+  }, [inBranch, node.domainId, node.parentTopicId, node.branch]);
   function move(index, delta) {
     setMembers((current) => {
       const next = [...current];
@@ -224,8 +240,8 @@ function ReorderForm({ node, adminKey, onSubmitted }) {
   }
   if (error) return <ErrorState error={error} />;
   if (!members) return <Loading label="Loading branch topics" />;
-  if (members.length < 2) return <p className="muted-copy">Reordering needs at least two published topics in this branch.</p>;
-  return <ProposalForm title={`Reorder ${node.label}`} adminKey={adminKey} onSubmitted={onSubmitted} build={() => ({ action: "REORDER_TOPICS", topic_id: members[0].id, proposed_content: { domain_id: node.domainId, map_branch: node.branch, ordered_topic_ids: members.map((item) => item.id) } })}>
+  if (members.length < 2) return <p className="muted-copy">Reordering needs at least two published topics {inBranch ? "in this branch" : "directly under this domain"}.</p>;
+  return <ProposalForm title={inBranch ? `Reorder ${node.label}` : `Reorder topics in ${node.label}`} adminKey={adminKey} onSubmitted={onSubmitted} build={() => ({ action: "REORDER_TOPICS", topic_id: members[0].id, proposed_content: { domain_id: node.domainId, ...slotContent(node.parentTopicId, node.branch), ordered_topic_ids: members.map((item) => item.id) } })}>
     <ol className="kma-reorder">{members.map((item, index) => <li key={item.id}><span>{item.name}</span><button type="button" aria-label={`Move ${item.name} up`} disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button type="button" aria-label={`Move ${item.name} down`} disabled={index === members.length - 1} onClick={() => move(index, 1)}>↓</button></li>)}</ol>
   </ProposalForm>;
 }
@@ -253,7 +269,8 @@ function RestoreForm({ topic, adminKey, onSubmitted }) {
 
 function TopicActions({ node, topic, topics, domains, levels, industries, adminKey, onSubmitted, onEditSections }) {
   const [action, setAction] = useState("PLACE_TOPIC");
-  const [domainId, setDomainId] = useState("");
+  const [domainId, setDomainId] = useState(String(node.domainId));
+  const [moveParentId, setMoveParentId] = useState("");
   const [branch, setBranch] = useState("foundations");
   const [otherId, setOtherId] = useState("");
   const [relationshipType, setRelationshipType] = useState("related");
@@ -266,14 +283,13 @@ function TopicActions({ node, topic, topics, domains, levels, industries, adminK
   const forms = {
     PLACE_TOPIC: <PlaceForm topics={topics} domains={domains} adminKey={adminKey} onSubmitted={onSubmitted} fixedTopicId={topicId} />,
     PLACEMENT_CONTEXT: <PlacementContextForm node={node} adminKey={adminKey} onSubmitted={onSubmitted} />,
-    MOVE_TOPIC: <ProposalForm title={`Move out of ${node.domainLabel || "this domain"}`} adminKey={adminKey} onSubmitted={onSubmitted} build={() => (!domainId ? "Choose the destination domain." : { action: "MOVE_TOPIC", topic_id: topicId, proposed_content: { from: { domain_id: node.domainId }, to: { domain_id: Number(domainId), map_branch: branch } } })}>
-      <DomainSelect domains={domains} value={domainId} onChange={setDomainId} label="Destination domain" /><BranchSelect value={branch} onChange={setBranch} /><ChildDomainWarning domains={domains} domainId={domainId} />
+    MOVE_TOPIC: <ProposalForm title={`Move from ${node.domainLabel || "this domain"}`} adminKey={adminKey} onSubmitted={onSubmitted} build={() => (!domainId ? "Choose the destination domain." : { action: "MOVE_TOPIC", topic_id: topicId, proposed_content: { from: { domain_id: node.domainId }, to: { domain_id: Number(domainId), ...slotContent(moveParentId, branch) } } })}>
+      <DomainSelect domains={domains} value={domainId} onChange={setDomainId} label="Destination domain" />
+      <ParentTopicFields topics={topics} exclude={topicId} parentId={moveParentId} onParentChange={setMoveParentId} branch={branch} onBranchChange={setBranch} />
+      <ChildDomainWarning domains={domains} domainId={domainId} />
     </ProposalForm>,
-    UNPLACE_TOPIC: <ProposalForm title="Remove from this domain's branch" adminKey={adminKey} onSubmitted={onSubmitted} build={() => ({ action: "UNPLACE_TOPIC", topic_id: topicId, proposed_content: { domain_id: node.domainId } })}>
-      <p className="muted-copy">The topic stays linked to the domain (and in Career Readiness); it only leaves the map here.</p>
-    </ProposalForm>,
-    SET_PARENT_TOPIC: <ProposalForm title="Set parent topic" adminKey={adminKey} onSubmitted={onSubmitted} build={() => ({ action: "SET_PARENT_TOPIC", topic_id: topicId, proposed_content: { parent_topic_id: otherId ? Number(otherId) : null } })}>
-      <TopicSelect topics={topics} value={otherId} onChange={setOtherId} exclude={topicId} label="Parent topic" allowNone />
+    UNPLACE_TOPIC: <ProposalForm title="Remove from this domain" adminKey={adminKey} onSubmitted={onSubmitted} build={() => ({ action: "UNPLACE_TOPIC", topic_id: topicId, proposed_content: { domain_id: node.domainId } })}>
+      <p className="muted-copy">The topic stays linked to the domain (and in Career Readiness); it only leaves the map here. Topics inside it move up to sit directly under the domain.</p>
     </ProposalForm>,
     ADD_TOPIC_RELATIONSHIP: <ProposalForm title="Add relationship" adminKey={adminKey} onSubmitted={onSubmitted} build={() => (!otherId ? "Choose the related topic." : { action: "ADD_TOPIC_RELATIONSHIP", topic_id: topicId, proposed_content: { target_topic_id: Number(otherId), relationship_type: relationshipType } })}>
       <label>Relationship<select value={relationshipType} onChange={(event) => setRelationshipType(event.target.value)}>{RELATIONSHIP_TYPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
@@ -385,7 +401,7 @@ export default function KnowledgeMapAdminPage({ onNavigate }) {
   const [adminKey, setAdminKey] = useState(() => getAdminSessionKey());
   const [data, setData] = useState({ loading: true, error: null, topics: [], domains: [], levels: [], industries: [], proposals: [] });
   const [editing, setEditing] = useState(null);
-  const [newTopic, setNewTopic] = useState({ name: "", description: "", domain_id: "", map_branch: "foundations", context_note: "" });
+  const [newTopic, setNewTopic] = useState({ name: "", description: "", domain_id: "", parent_topic_id: "", map_branch: "foundations", context_note: "" });
 
   const load = useCallback(async () => {
     if (!adminKey) return;
@@ -405,26 +421,27 @@ export default function KnowledgeMapAdminPage({ onNavigate }) {
 
   const badgeFor = useCallback((node) => {
     if (node.type === "topic" && pending.topics.has(node.topicId)) return "Pending";
-    if (node.type === "branch" && pending.branches.has(node.id)) return "Pending";
+    if (node.type === "branch" && pending.branches.has(slotKey(node.domainId, node.parentTopicId, node.branch))) return "Pending";
+    if ((node.type === "domain" || node.type === "child-domain") && pending.domains.has(node.domainId)) return "Pending";
     return null;
   }, [pending]);
 
   const renderDetails = useCallback((node, { state, placements, reloadChildren }) => {
     const parentLabel = state.nodes[state.parents[node.id]]?.label;
     // The placements request has the current note even when the node was revealed from search without one.
-    const placed = node.type === "topic" ? placements?.items?.find((item) => item.domain_path[item.domain_path.length - 1]?.id === node.domainId && item.branch === node.branch) : null;
+    const placed = node.type === "topic" ? placements?.items?.find((item) => item.domain_path[item.domain_path.length - 1]?.id === node.domainId) : null;
     // Nested topics sit under parent topics, so walk up to the nearest domain for its name.
     let ancestor = state.nodes[state.parents[node.id]];
     while (ancestor && ancestor.type !== "domain" && ancestor.type !== "child-domain") ancestor = state.nodes[state.parents[ancestor.id]];
     if (node.type === "topic") return <TopicActions key={node.id} node={{ ...node, domainLabel: ancestor?.label, contextNote: placed ? placed.context_note || "" : node.contextNote }} topic={topicById.get(node.topicId)} topics={activeTopics} domains={data.domains} levels={data.levels} industries={data.industries} adminKey={adminKey} onSubmitted={load} onEditSections={setEditing} />;
-    if (node.type === "branch") return <section className="kma-actions" key={node.id} aria-label={`Propose changes to ${parentLabel} ${node.label}`}><p className="eyebrow">PROPOSE A CHANGE</p><ReorderForm node={node} adminKey={adminKey} onSubmitted={load} /><PlaceForm topics={activeTopics} domains={data.domains} adminKey={adminKey} onSubmitted={load} fixedDomainId={node.domainId} fixedBranch={node.branch} /></section>;
+    if (node.type === "branch") return <section className="kma-actions" key={node.id} aria-label={`Propose changes to ${parentLabel} ${node.label}`}><p className="eyebrow">PROPOSE A CHANGE</p><ReorderForm node={node} adminKey={adminKey} onSubmitted={load} /><PlaceForm title={`Add a topic to ${parentLabel} › ${node.label}`} topics={activeTopics} domains={data.domains} adminKey={adminKey} onSubmitted={load} fixedDomainId={node.domainId} fixedParentTopicId={node.parentTopicId} fixedBranch={node.branch} /></section>;
     if (node.type === "domain" || node.type === "child-domain") return <section className="kma-actions" key={node.id} aria-label={`Propose changes to ${node.label}`}><p className="eyebrow">DOMAIN STRUCTURE</p><SubDomainForm parent={node} domains={data.domains} adminKey={adminKey} onCreated={() => Promise.all([load(), reloadChildren(node.id)])} /><DomainEditForm node={node} domains={data.domains} adminKey={adminKey} onChanged={async (previousParentId) => {
       // Refresh where the domain was and where it is now, so renames, moves and removals all show on the map.
       const [domains] = await Promise.all([fetchDomains().then(flattenDomains), load()]);
       const now = domains.find((item) => item.id === node.domainId);
       const ids = new Set([previousParentId ? domainNodeId(previousParentId) : ROOT_ID, now ? (now.parent_id ? domainNodeId(now.parent_id) : ROOT_ID) : null].filter(Boolean));
       await Promise.all([...ids].map((id) => reloadChildren(id)));
-    }} /><p className="eyebrow">PROPOSE A CHANGE</p><PlaceForm topics={activeTopics} domains={data.domains} adminKey={adminKey} onSubmitted={load} fixedDomainId={node.domainId} /></section>;
+    }} /><p className="eyebrow">PROPOSE A CHANGE</p><PlaceForm title={`Add a topic to ${node.label}`} topics={activeTopics} domains={data.domains} adminKey={adminKey} onSubmitted={load} fixedDomainId={node.domainId} /><ReorderForm node={node} adminKey={adminKey} onSubmitted={load} /></section>;
     return null;
   }, [topicById, activeTopics, data.domains, data.levels, data.industries, adminKey, load]);
 
@@ -436,7 +453,7 @@ export default function KnowledgeMapAdminPage({ onNavigate }) {
   function unlock() { if (enteredKey.trim()) { setAdminSessionKey(enteredKey.trim()); setAdminKey(enteredKey.trim()); } }
   function lock() { clearAdminSessionKey(); setEnteredKey(""); setAdminKey(""); }
 
-  const header = <PageHeader eyebrow="ADMINISTRATION / KNOWLEDGE MAP" title="Knowledge Map Management" description="Add sub-domains at any depth, then propose placements, ordering, hierarchy and topic changes in each domain's Foundations, Security and Common Vulnerabilities. Topic changes are proposals: they reach the public map only after review and explicit publication in Knowledge Review.">
+  const header = <PageHeader eyebrow="ADMINISTRATION / KNOWLEDGE MAP" title="Knowledge Map Management" description="Add sub-domains at any depth, then propose topics for each domain, and smaller topics in each topic's Foundations, Security and Common Vulnerabilities. Topic changes are proposals: they reach the public map only after review and explicit publication in Knowledge Review.">
     {adminKey && <div className="review-card-actions"><button className="button button-secondary" onClick={() => onNavigate?.("knowledge-review")}>Open Knowledge Review</button><button className="button button-secondary" onClick={() => onNavigate?.("taxonomy-management")}>Manage domains in Taxonomy Management</button><button className="button button-secondary" onClick={lock}>Lock workspace</button></div>}
   </PageHeader>;
 
@@ -448,16 +465,16 @@ export default function KnowledgeMapAdminPage({ onNavigate }) {
     {data.loading && !data.topics.length ? <Loading label="Loading knowledge map management" /> : <>
       <div className="kma-top">
         <section className="panel kma-new-topic">
-          <ProposalForm title="New topic" adminKey={adminKey} onSubmitted={() => { setNewTopic({ name: "", description: "", domain_id: "", map_branch: "foundations", context_note: "" }); load(); }} build={() => {
+          <ProposalForm title="New topic" adminKey={adminKey} onSubmitted={() => { setNewTopic({ name: "", description: "", domain_id: "", parent_topic_id: "", map_branch: "foundations", context_note: "" }); load(); }} build={() => {
             if (!newTopic.name.trim()) return "A topic name is required.";
             if (duplicates.some((item) => item.exact)) return "A topic with this name already exists. Place or update the existing topic instead.";
-            return { action: "CREATE_TOPIC", topic_name: newTopic.name.trim(), proposed_content: { topic: { name: newTopic.name.trim(), description: newTopic.description.trim() }, ...(newTopic.domain_id ? { placements: [{ domain_id: Number(newTopic.domain_id), map_branch: newTopic.map_branch, ...(newTopic.context_note.trim() ? { context_note: newTopic.context_note.trim() } : {}) }] } : {}) } };
+            return { action: "CREATE_TOPIC", topic_name: newTopic.name.trim(), proposed_content: { topic: { name: newTopic.name.trim(), description: newTopic.description.trim() }, ...(newTopic.domain_id ? { placements: [{ domain_id: Number(newTopic.domain_id), ...slotContent(newTopic.parent_topic_id, newTopic.map_branch), ...(newTopic.context_note.trim() ? { context_note: newTopic.context_note.trim() } : {}) }] } : {}) } };
           }}>
             <label>Name<input value={newTopic.name} maxLength="240" onChange={(event) => setNewTopic({ ...newTopic, name: event.target.value })} /></label>
             {duplicates.length > 0 && <div className="kma-duplicates" role="note"><span className="field-label">Possible duplicates</span><ul>{duplicates.map(({ topic, exact }) => <li key={topic.id}>{topic.name} {exact ? <Badge tone="violet">Same name, key or alias</Badge> : <Badge>Similar</Badge>}</li>)}</ul></div>}
             <label>Description<textarea rows="2" maxLength="2000" value={newTopic.description} onChange={(event) => setNewTopic({ ...newTopic, description: event.target.value })} /></label>
             <DomainSelect domains={data.domains} value={newTopic.domain_id} onChange={(value) => setNewTopic({ ...newTopic, domain_id: value })} label="Place in domain (optional)" />
-            {newTopic.domain_id && <BranchSelect value={newTopic.map_branch} onChange={(value) => setNewTopic({ ...newTopic, map_branch: value })} />}
+            {newTopic.domain_id && <ParentTopicFields topics={activeTopics} parentId={newTopic.parent_topic_id} onParentChange={(value) => setNewTopic({ ...newTopic, parent_topic_id: value })} branch={newTopic.map_branch} onBranchChange={(value) => setNewTopic({ ...newTopic, map_branch: value })} />}
             {newTopic.domain_id && <ContextNoteField value={newTopic.context_note} onChange={(value) => setNewTopic({ ...newTopic, context_note: value })} />}
             <ChildDomainWarning domains={data.domains} domainId={newTopic.domain_id} />
           </ProposalForm>
@@ -471,7 +488,7 @@ export default function KnowledgeMapAdminPage({ onNavigate }) {
         </section>
       </div>
       <KnowledgeMapSuggestions adminKey={adminKey} onSubmitted={load} />
-      <p className="muted-copy kma-hint">Select a domain, branch or topic on the map to propose a change for it. “Pending” marks items with open proposals; the public map never shows these badges.</p>
+      <p className="muted-copy kma-hint">Select a domain, topic or branch on the map to propose a change for it. “Pending” marks items with open proposals; the public map never shows these badges.</p>
       <KnowledgeMapPage onNavigate={onNavigate} admin={admin} />
     </>}
     {editing && <KnowledgeSectionEditor topic={editing} adminKey={adminKey} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}

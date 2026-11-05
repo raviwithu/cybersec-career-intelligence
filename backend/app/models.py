@@ -295,7 +295,7 @@ class KnowledgeTopic(Base):
     category: Mapped[CompetencyCategory | None] = relationship()
     parent: Mapped["KnowledgeTopic | None"] = relationship(remote_side=[id], back_populates="children")
     children: Mapped[list["KnowledgeTopic"]] = relationship(back_populates="parent")
-    domains: Mapped[list["KnowledgeTopicDomain"]] = relationship(back_populates="topic", cascade="all, delete-orphan")
+    domains: Mapped[list["KnowledgeTopicDomain"]] = relationship(back_populates="topic", cascade="all, delete-orphan", foreign_keys="KnowledgeTopicDomain.topic_id")
     industries: Mapped[list["KnowledgeTopicIndustry"]] = relationship(back_populates="topic", cascade="all, delete-orphan")
     level_expectations: Mapped[list["KnowledgeTopicLevel"]] = relationship(back_populates="topic", cascade="all, delete-orphan")
     competencies: Mapped[list["KnowledgeTopicCompetency"]] = relationship(back_populates="topic", cascade="all, delete-orphan")
@@ -325,8 +325,11 @@ class KnowledgeTopicDomain(Base):
     display_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # How a shared topic applies in this domain (e.g. SSRF in AWS Lambda vs in web applications). NULL: no note.
     context_note: Mapped[str | None] = mapped_column(Text)
+    # The topic this one sits under in this domain, inside that topic's map_branch. NULL: directly under the domain,
+    # where map_branch only marks the topic as placed (branches belong to topics, not domains).
+    parent_topic_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_topics.id", ondelete="SET NULL"), index=True)
 
-    topic: Mapped[KnowledgeTopic] = relationship(back_populates="domains")
+    topic: Mapped[KnowledgeTopic] = relationship(back_populates="domains", foreign_keys=[topic_id])
     domain: Mapped[SecurityDomain] = relationship()
 
 
