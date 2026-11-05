@@ -7,7 +7,7 @@ import { isRenderableDiagram } from "./knowledgeDiagramLayout";
 // these forms only make valid content easier to write and show a live preview.
 
 export const CODE_LANGUAGES = ["python", "javascript", "typescript", "java", "go", "csharp", "c", "cpp", "rust", "php", "ruby", "http", "json", "yaml", "bash"];
-const MAX_CODE_EXAMPLES = 6;
+const MAX_CODE_EXAMPLES = 12;
 const MAX_CODE_LENGTH = 8000;
 const EMPTY_EXAMPLE = { title: "", language: "python", vulnerable: "", secure: "", explanation: "", security_control: "" };
 const DIAGRAM_TEMPLATE = {

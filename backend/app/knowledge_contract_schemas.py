@@ -19,10 +19,19 @@ SECTION_TYPES = (
     "career_level_guidance",
     "code_examples",
     "architecture",
+    # Vulnerability playbook sections (KM-6). They stay last: CORE_SECTION_TYPES is the first seven.
+    "source_review",
+    "dynamic_review",
+    "information_gathering",
+    "ai_cicd_skill",
+    "ai_dynamic_skill",
 )
-# Coverage reports the core sections only; code examples and architecture diagrams are optional for a topic.
+# Coverage reports the core sections only; code examples, architecture diagrams and the playbook are optional for a topic.
 CORE_SECTION_TYPES = SECTION_TYPES[:7]
-SectionType = Literal["overview", "how_it_works", "attack_surfaces", "mitigations", "real_world_examples", "references", "career_level_guidance", "code_examples", "architecture"]
+# A topic's Playbook node on the map lists these, in this order. The node appears once one of the playbook-only sections is published.
+PLAYBOOK_ONLY_SECTION_TYPES = SECTION_TYPES[9:]
+PLAYBOOK_SECTION_TYPES = ("code_examples", "mitigations", *PLAYBOOK_ONLY_SECTION_TYPES)
+SectionType = Literal["overview", "how_it_works", "attack_surfaces", "mitigations", "real_world_examples", "references", "career_level_guidance", "code_examples", "architecture", "source_review", "dynamic_review", "information_gathering", "ai_cicd_skill", "ai_dynamic_skill"]
 # Stored relationship types (D4). Inverses such as "used by" are display labels only, never stored.
 RELATIONSHIP_TYPES = ("prerequisite", "related", "specialization", "dependency", "mitigated_by", "tested_by")
 ProposalAction = Literal[
@@ -223,6 +232,8 @@ class KnowledgeCoverageResponse(BaseModel):
     topic_key: str
     items: list[KnowledgeCoverageItem]
     complete: bool
+    # Vulnerability playbook sections; these never affect complete.
+    playbook_items: list[KnowledgeCoverageItem] = Field(default_factory=list)
 
 
 class KnowledgeTopicLevelResponse(BaseModel):

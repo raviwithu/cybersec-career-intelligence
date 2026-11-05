@@ -98,7 +98,7 @@ def test_example_script_reuses_existing_topics_and_completes_after_publication(c
         assert db.scalar(select(func.count()).select_from(KnowledgeTopic).where(func.lower(KnowledgeTopic.name).like("%request forgery%"))) == 1
         creates = db.scalars(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.action == "CREATE_TOPIC", KnowledgeTopicProposal.id > start)).all()
         names = {item.proposed_content["topic"]["name"] for item in creates}
-        assert names == {"IDOR / BOLA", "OAuth 2.0", "Firmware Signature Verification"}
+        assert names == {"IDOR / BOLA", "OAuth 2.0", "Firmware Signature Verification", "SQL Injection"}
         create_ids = [item.id for item in creates]
         assert any("reuse" in line for line in first.log)
 

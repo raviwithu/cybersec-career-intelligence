@@ -62,7 +62,7 @@ def test_code_examples_and_architecture_publish_and_render(client):
     ("code_examples", {"items": [{**CODE_EXAMPLE, "colour": "red"}]}),
     ("code_examples", {"items": [{**CODE_EXAMPLE, "vulnerable": "x" * 8001}]}),
     ("code_examples", {"items": [{**CODE_EXAMPLE, "language": "brainfuck"}]}),
-    ("code_examples", {"items": [CODE_EXAMPLE] * 7}),
+    ("code_examples", {"items": [CODE_EXAMPLE] * 13}),
     ("code_examples", {"items": [{**CODE_EXAMPLE, "secure": "<script>alert(1)</script>"}]}),
     ("code_examples", {"items": [{**CODE_EXAMPLE, "reference": "javascript:alert(1)"}]}),
     ("architecture", {"diagrams": [{**DIAGRAM, "edges": [{"from": "user", "to": "database"}]}]}),

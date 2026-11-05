@@ -5,10 +5,11 @@ The Security Knowledge Map turns published knowledge topics into a tree that can
 | Step | Status |
 |---|---|
 | KM-1: placement model, published hierarchy API, search | Shipped |
-| KM-2: map page, tree view, navigation, search UI | Not started |
-| KM-3: topic detail panel | Not started |
-| KM-4: map management, proposals, review, publish, rollback | Not started |
-| KM-5: initial example topics, AI decomposition proposals | Not started |
+| KM-2: map page, tree view, navigation, search UI | Shipped |
+| KM-3: topic detail panel | Shipped |
+| KM-4: map management, proposals, review, publish, rollback | Shipped |
+| KM-5: initial example topics, AI decomposition proposals | Shipped |
+| KM-6: vulnerability playbook sections and AI skills in the map | Built, not yet merged |
 
 ## Hierarchy
 
@@ -218,7 +219,7 @@ Both new section types are part of `SECTION_TYPES` and go through the knowledge 
 ```
 
 - `language`: one of python, javascript, typescript, java, go, csharp, c, cpp, rust, php, ruby, http, json, yaml, bash.
-- At most 6 items. `vulnerable`, `secure` and `explanation` at most 8,000 characters each; an item needs `vulnerable` or `secure`.
+- At most 12 items. `vulnerable`, `secure` and `explanation` at most 8,000 characters each; an item needs `vulnerable` or `secure`.
 - Only whole-section actions are accepted (`ADD_SECTION`, `UPDATE_SECTION`); item-append actions such as `ADD_MITIGATION` are rejected for this section.
 
 ### `architecture` and the diagram schema
@@ -416,3 +417,42 @@ No RAG engine is built. A future retrieval service submits content the same way 
 | `backend/app/knowledge_map_suggestions.py` | AI map suggestions for approved findings, and their submission as proposals |
 | `backend/tests/test_knowledge_map_examples_ai.py` | Example script and AI suggestion tests (mocked provider) |
 | `frontend/src/KnowledgeMapSuggestions.jsx` | AI map suggestions panel in Knowledge Map Management |
+
+## Vulnerability playbook (KM-6)
+
+A vulnerability stays a normal topic. Its review material lives in sections, and the map shows them under a **Playbook** node. There is no separate page and no new table. A sample prototype is linked from the [plan README](knowledge-map-plan/README.md).
+
+```text
+Topic
+├── Foundations
+├── Security
+├── Common Vulnerabilities
+└── Playbook                  (only when a review section is published)
+    ├── Example Code          (code_examples)
+    ├── Mitigations           (mitigations)
+    ├── Source Review         (source_review)
+    ├── Dynamic Review        (dynamic_review)
+    ├── Information Gathering (information_gathering)
+    ├── AI CI/CD Scan         (ai_cicd_skill)
+    └── AI Dynamic Analysis   (ai_dynamic_skill)
+```
+
+- **When Playbook appears.** A topic shows the node once at least one of the five review sections (`source_review` to `ai_dynamic_skill`) is published, wherever the topic sits. The branch is not the test, because a topic directly under a domain has no branch. A topic with only `code_examples` and `mitigations` keeps those as tabs.
+- **Selecting a section.** It opens the existing topic panel on that tab, in Graph and List views. Choosing a panel tab moves the map selection to the matching node when the Playbook is open. Links take the form `#knowledge-map?topic=<key>&section=<section_type>`; `?topic=` links still work, and an unknown section falls back to the topic.
+- **Publishing.** The five sections go through the knowledge contract like other sections. They accept only `ADD_SECTION` and `UPDATE_SECTION`, and strict schemas in `knowledge_content_schemas.py` reject unknown keys at proposal, review and publish. A stored section that no longer validates is returned as `{"content_hidden": true}`, and the page shows a notice.
+- **API.** `GET /knowledge-map/domains/{domain_id}/topics/{topic_id}/children` returns `playbook_sections`, the published sections in display order, or `[]` when the topic has no Playbook node. Coverage responses gain `playbook_items`; `items` and `complete` are unchanged.
+- **Management.** In Knowledge Map Management, a selected topic lists all seven sections as Published, In review, Draft or Missing. Each row opens the existing section editor on that section. The new sections use the JSON editor.
+
+| Section | Content |
+|---|---|
+| `source_review` | `entry_points[]`, `dangerous_sinks[]`, `search_patterns[{language, pattern}]`, `easy_to_miss[]` |
+| `dynamic_review` | `steps[{title, action, look_for}]` (at least one), `evidence[]` |
+| `information_gathering` | `issue_checks[{what, how, tells}]`, `mitigation_checks[{what, how, tells}]` |
+| `ai_cicd_skill` | `skill_id`, `summary`, `inputs[]`, `outputs[]`, `gate_policy[]`, `pipelines[{system, file_name, content}]` (at least one), optional `example_finding{location, explanation, suggested_fix}` |
+| `ai_dynamic_skill` | `skill_id`, `summary`, `guardrails[]` (at least one), `access_levels[{access: binary, system or remote, needs[], steps[], can_prove[], cannot_see[]}]` (each access once) |
+
+`mitigations` items also accept optional `control_type` (`fixes`, `limits` or `detects`) and `does_not_cover`. `code_examples` allows 12 examples, with a language filter when more than one language is present.
+
+**AI skills are content.** They are reviewed definitions you copy into your pipeline or tooling. The app runs no scans and sends no traffic to any target. Sample pipelines call `./ci/ai-scan`, a placeholder for your own runner. Dynamic content stays at method level, with no exploit payloads.
+
+**Sample content.** `python -m app.knowledge_map_examples` also proposes SQL Injection with all seven sections, as proposals only, with unverified references. Run it again after the topic is published to propose its sections. The content filter rejects `<script`, `<iframe`, `<object` and `<embed` even in code samples, so an XSS sample should show a sink such as `innerHTML` instead.

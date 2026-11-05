@@ -4,7 +4,7 @@ import { createKnowledgeProposal, fetchKnowledgeAdminTopic, fetchLevels } from "
 import { Badge, ErrorState, Loading } from "./components";
 import { ArchitectureEditor, CodeExamplesEditor } from "./KnowledgeSectionForms";
 
-const sectionLabels = { overview: "Overview", how_it_works: "How It Works", attack_surfaces: "Attack Surfaces", mitigations: "Mitigations", real_world_examples: "Real-World Examples", references: "References", career_level_guidance: "Career-Level Guidance", code_examples: "Code Examples", architecture: "Architecture Diagrams" };
+const sectionLabels = { overview: "Overview", how_it_works: "How It Works", attack_surfaces: "Attack Surfaces", mitigations: "Mitigations", real_world_examples: "Real-World Examples", references: "References", career_level_guidance: "Career-Level Guidance", code_examples: "Code Examples", architecture: "Architecture Diagrams", source_review: "Source Review", dynamic_review: "Dynamic Review", information_gathering: "Information Gathering", ai_cicd_skill: "AI CI/CD Scan", ai_dynamic_skill: "AI Dynamic Analysis" };
 const defaults = {
   overview: { short_description: "", technical_explanation: "", key_concepts: [], related_technologies: [] },
   how_it_works: { workflow: "", architecture_explanation: "", diagram: { nodes: [], edges: [] }, steps: [] },
@@ -14,6 +14,11 @@ const defaults = {
   references: { items: [] },
   code_examples: { items: [] },
   architecture: { diagrams: [] },
+  source_review: { entry_points: [], dangerous_sinks: [], search_patterns: [{ language: "", pattern: "" }], easy_to_miss: [] },
+  dynamic_review: { steps: [{ title: "", action: "", look_for: "" }], evidence: [] },
+  information_gathering: { issue_checks: [{ what: "", how: "", tells: "" }], mitigation_checks: [{ what: "", how: "", tells: "" }] },
+  ai_cicd_skill: { skill_id: "", summary: "", inputs: [], outputs: [], gate_policy: [], pipelines: [{ system: "", file_name: "", content: "" }] },
+  ai_dynamic_skill: { skill_id: "", summary: "", guardrails: [], access_levels: [{ access: "remote", needs: [], steps: [], can_prove: [], cannot_see: [] }] },
 };
 
 // Career-level guidance keys come from the active career levels, never a hardcoded list.
@@ -22,8 +27,8 @@ function sectionDefaults(section, levels) {
   return defaults[section];
 }
 
-export default function KnowledgeSectionEditor({ topic, adminKey, onClose, onSaved }) {
-  const [section, setSection] = useState("overview");
+export default function KnowledgeSectionEditor({ topic, initialSection = "overview", adminKey, onClose, onSaved }) {
+  const [section, setSection] = useState(initialSection);
   const [detail, setDetail] = useState(topic);
   const [content, setContent] = useState(defaults.overview);
   const [levels, setLevels] = useState([]);

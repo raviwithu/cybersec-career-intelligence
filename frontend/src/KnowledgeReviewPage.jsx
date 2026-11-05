@@ -4,7 +4,7 @@ import { clearAdminSessionKey, fetchKnowledgeMapPreview, fetchKnowledgeReviewQue
 import { Badge, EmptyState, ErrorState, Loading, PageHeader } from "./components";
 import { MAP_ACTIONS, MAP_ACTION_LABELS, isMapProposal, lineDiff } from "./knowledgeMapActions";
 
-const sectionLabels = { overview: "Overview", how_it_works: "How It Works", attack_surfaces: "Attack Surfaces", mitigations: "Mitigations", real_world_examples: "Real-World Examples", references: "References", career_level_guidance: "Career Guidance", code_examples: "Code Examples", architecture: "Architecture Diagrams" };
+const sectionLabels = { overview: "Overview", how_it_works: "How It Works", attack_surfaces: "Attack Surfaces", mitigations: "Mitigations", real_world_examples: "Real-World Examples", references: "References", career_level_guidance: "Career Guidance", code_examples: "Code Examples", architecture: "Architecture Diagrams", source_review: "Source Review", dynamic_review: "Dynamic Review", information_gathering: "Information Gathering", ai_cicd_skill: "AI CI/CD Scan", ai_dynamic_skill: "AI Dynamic Analysis" };
 
 function DiffView({ before, after }) {
   const rows = lineDiff(before, after);

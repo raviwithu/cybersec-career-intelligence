@@ -21,7 +21,7 @@ const branches = (topicId, domainId, foundations = []) => ({ topic_id: topicId, 
   { branch: "security", label: "Security", topic_count: 0, items: [] },
   { branch: "vulnerabilities", label: "Common Vulnerabilities", topic_count: 0, items: [] },
 ] });
-const adminTopic = (topic, extra = {}) => ({ id: topic.id, topic_key: topic.topic_key, name: topic.name, slug: topic.topic_key, description: "", sections: [], coverage: { topic_id: topic.id, topic_key: topic.topic_key, items: [], complete: false }, related_topics: [], level_expectations: [], last_updated: null, is_active: true, publication_status: "published", parent_topic_id: null, aliases: [], ...extra });
+const adminTopic = (topic, extra = {}) => ({ id: topic.id, topic_key: topic.topic_key, name: topic.name, slug: topic.topic_key, description: "", sections: [], coverage: { topic_id: topic.id, topic_key: topic.topic_key, items: [], complete: false, playbook_items: [{ section_type: "code_examples", status: "published", published_version: 1 }, { section_type: "source_review", status: "pending_review", published_version: 0 }, { section_type: "ai_cicd_skill", status: "missing", published_version: 0 }] }, related_topics: [], level_expectations: [], last_updated: null, is_active: true, publication_status: "published", parent_topic_id: null, aliases: [], ...extra });
 const DOMAINS = [{ id: 2, name: "Cloud API Security", parent_id: null, is_active: true, display_order: 1 }, { id: 5, name: "Embedded Systems Security", parent_id: null, is_active: true, display_order: 2 }, { id: 6, name: "Secure Boot", parent_id: 5, is_active: true, display_order: 0 }];
 // GET /domains returns top-level domains with their sub-domains nested under children, like the real API.
 const nest = (list, parentId = null) => list.filter((item) => item.parent_id === parentId && item.is_active).sort((a, b) => a.display_order - b.display_order).map((item) => ({ ...item, description: "", updated_at: `2026-10-30T00:00:0${item.version || 0}Z`, children: nest(list, item.id) }));
@@ -120,6 +120,17 @@ afterEach(() => {
 });
 
 describe("Knowledge Map Management", () => {
+  it("lists playbook coverage on a topic and opens the section editor on the chosen section", async () => {
+    await openTopicActions();
+    const coverage = screen.getByRole("group", { name: "Playbook coverage of OAuth 2.0" });
+    expect(within(coverage).getByText("Published")).toBeTruthy();
+    expect(within(coverage).getByText("In review")).toBeTruthy();
+    expect(within(coverage).getByText("Missing")).toBeTruthy();
+    fireEvent.click(within(coverage).getByRole("button", { name: "Add AI CI/CD Scan" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByLabelText("Section").value).toBe("ai_cicd_skill");
+  });
+
   it("submits a move proposal with the right payload and change reason", async () => {
     const actions = await openTopicActions();
     fireEvent.click(within(actions).getByRole("button", { name: "Move topic" }));

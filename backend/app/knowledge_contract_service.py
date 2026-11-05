@@ -13,8 +13,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from .knowledge_content_schemas import public_section_content, validate_section_content
-from .knowledge_contract_schemas import CORE_SECTION_TYPES, RELATIONSHIP_TYPES, SECTION_TYPES, KnowledgeProposalCreate, KnowledgeProposalReview, KnowledgeSourceReference
+from .knowledge_content_schemas import NEW_SECTION_SCHEMAS, public_section_content, validate_section_content
+from .knowledge_contract_schemas import CORE_SECTION_TYPES, PLAYBOOK_SECTION_TYPES, RELATIONSHIP_TYPES, SECTION_TYPES, KnowledgeProposalCreate, KnowledgeProposalReview, KnowledgeSourceReference
 from .knowledge_map_proposals import MAP_ACTIONS, affected_branches, apply_create_placements, branch_label, describe_branches, apply_map_change, current_state, map_snapshot, require_no_duplicate, stored_section_version, validate_create_placements, validate_map_change, validate_map_payload
 from .knowledge_topic_service import history as legacy_history
 from .models import (
@@ -133,14 +133,17 @@ def coverage(db: Session, topic: KnowledgeTopic, *, include_pending: bool = Fals
         for row in rows:
             if row.section_type and row.status in {"draft", "review", "deferred", "approved"}:
                 pending[row.section_type] = "pending_review" if row.status != "draft" else "draft"
-    items = []
-    for section_type in CORE_SECTION_TYPES:
+    def item(section_type: str) -> dict[str, Any]:
         section = _section(topic, section_type)
         if section is not None and section.status == "published":
-            items.append({"section_type": section_type, "status": "published", "published_version": section.published_version})
-        else:
-            items.append({"section_type": section_type, "status": pending.get(section_type, "missing"), "published_version": 0})
-    return {"topic_id": topic.id, "topic_key": _topic_key(topic), "items": items, "complete": all(item["status"] == "published" for item in items)}
+            return {"section_type": section_type, "status": "published", "published_version": section.published_version}
+        return {"section_type": section_type, "status": pending.get(section_type, "missing"), "published_version": 0}
+
+    items = [item(section_type) for section_type in CORE_SECTION_TYPES]
+    return {
+        "topic_id": topic.id, "topic_key": _topic_key(topic), "items": items, "complete": all(row["status"] == "published" for row in items),
+        "playbook_items": [item(section_type) for section_type in PLAYBOOK_SECTION_TYPES],
+    }
 
 
 def public_topic(db: Session, topic: KnowledgeTopic) -> dict[str, Any]:
@@ -569,7 +572,7 @@ def _apply_publication(db: Session, proposal: KnowledgeTopicProposal, actor: str
             content = _restored_section_content(db, topic, proposal)
         else:
             content = _content_for_action(topic, proposal.section_type, proposal.action, proposal.proposed_content or proposal.proposed_snapshot)
-        if proposal.section_type in {"code_examples", "architecture"}:
+        if proposal.section_type in NEW_SECTION_SCHEMAS:
             content = _validated_content(proposal.section_type, "UPDATE_SECTION", content)
         if section is None:
             section = KnowledgeTopicSection(topic_id=topic.id, section_type=proposal.section_type, published_content=content, published_version=1, status="published", updated_at=now())
