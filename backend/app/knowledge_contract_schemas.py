@@ -293,9 +293,11 @@ class KnowledgeReviewFilters(BaseModel):
 
 
 class KnowledgeMapPreviewBranch(BaseModel):
+    # One place on the map: directly under a domain (no parent topic), or one branch of a parent topic in it.
     domain_id: int
     domain_name: str
-    map_branch: str
+    parent_topic_id: int | None = None
+    map_branch: str | None = None
     label: str
     before: list[dict[str, Any]]
     after: list[dict[str, Any]]
@@ -314,11 +316,13 @@ class KnowledgeMapSuggestionItem(BaseModel):
     existing_topic_id: int | None = None
     name: str | None = None
     domain_id: int
+    parent_topic_id: int | None = None
     map_branch: str
     rationale: str
     related_topic_id: int | None = None
     relationship_type: str | None = None
     domain_name: str
+    parent_topic_name: str | None = None
     topic_name: str | None = None
     related_topic_name: str | None = None
     note: str | None = None

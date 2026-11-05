@@ -331,7 +331,6 @@ EXAMPLE_NOTES = {
     "secure-boot": "The CVE-2020-10713 example cites NVD and needs a verified source before publication.",
 }
 
-# Branches proposed for existing published topics (--place-existing). Topics not listed default to "security"
-# in every domain they are already linked to. Unlinked topics get the domains listed in EXISTING_UNLINKED.
-EXISTING_FOUNDATIONS = {"chain-of-trust", "hardware-root-of-trust", "cryptographic-key-management", "threat-modeling"}
+# Existing published topics (--place-existing) are placed in every domain they are already linked to.
+# Unlinked topics get the domains listed here.
 EXISTING_UNLINKED = {"chain-of-trust": ["boot-security"], "kubernetes-security": ["cloud-infrastructure-security"]}

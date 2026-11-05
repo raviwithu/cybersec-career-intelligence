@@ -3,47 +3,55 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import KnowledgeMapPage from "../src/KnowledgeMapPage";
 import SidebarNavigation, { getViewFromLocation } from "../src/SidebarNavigation";
-import { applyDomainChildren, applyRoot, applyTopicPage, branchNodeId, collapse, domainNodeId, ensureTopic, expand, initialMapState, layoutTree, pathTo, topicNodeId, visibleAncestor, visibleRows, visibleTree } from "../src/knowledgeMapModel";
+import { applyDomainChildren, applyRoot, applyTopicChildren, branchNodeId, collapse, domainNodeId, expand, initialMapState, layoutTree, pathTo, topicNodeId, visibleAncestor, visibleRows, visibleTree } from "../src/knowledgeMapModel";
 
 // React Flow needs real layout APIs that jsdom lacks; behaviour is tested through the list view and pure helpers.
 vi.mock("../src/KnowledgeMapGraph", () => ({ default: () => <div data-testid="graph-stub" /> }));
 
 const domain = (id, name, childCount = 0, topicCount = 0) => ({ node_type: "domain", id, slug: name.toLowerCase().replace(/ /g, "-"), name, child_domain_count: childCount, placed_topic_count: topicCount });
-const branch = (domainId, key, label, count) => ({ node_type: "branch", domain_id: domainId, branch: key, label, topic_count: count });
 const topic = (id, key, name, placementCount = 1) => ({ id, topic_key: key, name, short_description: `${name} summary.`, placement_count: placementCount, has_children: false });
-const placement = (path, key, label) => ({ domain_path: path.map(([id, name]) => ({ id, name })), branch: key, label });
+const inDomain = (domainId, item) => ({ node_type: "topic", domain_id: domainId, ...item });
+// A topic's three branches, as GET /domains/{id}/topics/{topicId}/children returns them.
+const branches = (topicId, domainId, { foundations = [], security = [], vulnerabilities = [] } = {}) => ({ topic_id: topicId, domain_id: domainId, branches: [
+  { branch: "foundations", label: "Foundations", topic_count: foundations.length, items: foundations },
+  { branch: "security", label: "Security", topic_count: security.length, items: security },
+  { branch: "vulnerabilities", label: "Common Vulnerabilities", topic_count: vulnerabilities.length, items: vulnerabilities },
+] });
+const placement = (path, branch = null, label = null, ancestors = []) => ({ domain_path: path.map(([id, name]) => ({ id, name })), branch, label, ancestors });
 
 const cloud = domain(2, "Cloud API Security", 0, 3);
 const embedded = domain(5, "Embedded Systems Security", 1, 2);
 const empty = domain(9, "Quantum Readiness", 0, 0);
 const secureBoot = domain(6, "Secure Boot", 0, 1);
-const oauth = topic(1, "oauth-2", "OAuth 2.0", 2);
-const oauthPlacements = [placement([[2, "Cloud API Security"]], "foundations", "Foundations"), placement([[5, "Embedded Systems Security"], [6, "Secure Boot"]], "foundations", "Foundations")];
-const VULNERABILITY_TOTAL = 120;
-const vulnerability = (index) => topic(100 + index, `vuln-${index}`, `Vulnerability ${String(index).padStart(3, "0")}`);
+const oauth = { ...topic(1, "oauth-2", "OAuth 2.0", 2), has_children: true };
+const apiAuthz = topic(2, "api-authz", "API Authorization");
+const secureBootChain = topic(3, "secure-boot-chain", "Chain of Trust");
+const pkce = { ...topic(11, "pkce", "PKCE"), has_children: true };
+const idor = topic(400, "idor", "IDOR / BOLA");
+const oauthPlacements = [placement([[2, "Cloud API Security"]]), placement([[5, "Embedded Systems Security"], [6, "Secure Boot"]])];
+const oauthRef = { id: 1, topic_key: "oauth-2", name: "OAuth 2.0", branch: null };
+const vulnerability = (index) => topic(1000 + index, `vuln-${index}`, `Vulnerability ${String(index).padStart(3, "0")}`);
 
 function routes(url) {
   const { pathname, searchParams } = new URL(url);
   const path = pathname.replace("/api/v1", "");
   if (path === "/knowledge-map") return { root: { id: "root", name: "CyberSec Career Intelligence" }, domains: [cloud, embedded, empty] };
-  if (path === "/knowledge-map/domains/2/children") return { domain: cloud, nodes: [branch(2, "foundations", "Foundations", 1), branch(2, "vulnerabilities", "Common Vulnerabilities", VULNERABILITY_TOTAL)] };
-  if (path === "/knowledge-map/domains/5/children") return { domain: embedded, nodes: [secureBoot, branch(5, "security", "Security", 1)] };
-  if (path === "/knowledge-map/domains/6/children") return { domain: secureBoot, nodes: [branch(6, "foundations", "Foundations", 1)] };
+  if (path === "/knowledge-map/domains/2/children") return { domain: cloud, nodes: [inDomain(2, oauth), inDomain(2, apiAuthz)] };
+  if (path === "/knowledge-map/domains/5/children") return { domain: embedded, nodes: [secureBoot, inDomain(5, secureBootChain)] };
+  if (path === "/knowledge-map/domains/6/children") return { domain: secureBoot, nodes: [inDomain(6, oauth)] };
   if (path === "/knowledge-map/domains/9/children") return { domain: empty, nodes: [] };
-  const topics = path.match(/^\/knowledge-map\/domains\/(\d+)\/branches\/(\w+)\/topics$/);
-  if (topics) {
-    const offset = Number(searchParams.get("offset") || 0);
-    const limit = Number(searchParams.get("limit") || 50);
-    const all = topics[2] === "vulnerabilities" ? Array.from({ length: VULNERABILITY_TOTAL }, (_, index) => vulnerability(index)) : topics[2] === "security" ? [topic(3, "secure-boot-chain", "Secure Boot Chain")] : [oauth];
-    return { domain_id: Number(topics[1]), branch: topics[2], label: topics[2], items: all.slice(offset, offset + limit), total: all.length, offset, limit };
-  }
+  if (path === "/knowledge-map/domains/2/topics/1/children") return branches(1, 2, { foundations: [pkce], vulnerabilities: [idor, topic(401, "bola-graphql", "GraphQL BOLA")] });
+  if (path === "/knowledge-map/domains/2/topics/11/children") return branches(11, 2, { foundations: [topic(12, "code-verifier", "Code Verifier")] });
+  const children = path.match(/^\/knowledge-map\/domains\/(\d+)\/topics\/(\d+)\/children$/);
+  if (children) return branches(Number(children[2]), Number(children[1]));
   if (path === "/knowledge-map/topics/oauth-2/placements") return oauthPlacements;
   if (path.startsWith("/knowledge-map/topics/")) return [];
   if (path === "/knowledge/topics/oauth-2") return { id: 1, topic_key: "oauth-2", name: "OAuth 2.0", description: "Delegated authorization." };
   if (path === "/knowledge-map/search") {
     const q = searchParams.get("q").toLowerCase();
-    if (q.startsWith("idor")) return { query: q, items: [{ id: 400, topic_key: "idor", name: "IDOR / BOLA", short_description: "Object-level authorization flaws.", placements: [placement([[2, "Cloud API Security"]], "vulnerabilities", "Common Vulnerabilities")] }] };
+    if (q.startsWith("idor")) return { query: q, items: [{ ...idor, short_description: "Object-level authorization flaws.", placements: [placement([[2, "Cloud API Security"]], "vulnerabilities", "Common Vulnerabilities", [oauthRef])] }] };
     if (q.startsWith("oauth")) return { query: q, items: [{ ...oauth, placements: oauthPlacements }] };
+    if (q.startsWith("code")) return { query: q, items: [{ ...topic(12, "code-verifier", "Code Verifier"), placements: [placement([[2, "Cloud API Security"]], "foundations", "Foundations", [oauthRef, { id: 11, topic_key: "pkce", name: "PKCE", branch: "foundations" }])] }] };
     return { query: q, items: [] };
   }
   throw new Error(`Unexpected request ${url}`);
@@ -94,81 +102,80 @@ describe("Security Knowledge Map page", () => {
     expect(screen.queryByTestId("graph-stub")).toBeNull();
   });
 
-  it("expands a domain into child domains first, then its branches", async () => {
+  it("expands a domain into its sub-domains first, then its topics", async () => {
     const fetchMock = mockApi();
     const embeddedItem = (await renderMap(), item("Embedded Systems Security"));
     expect(requested(fetchMock, "/domains/5/children")).toBe(false);
     press(embeddedItem, "ArrowRight");
-    await findItem("Secure Boot");
+    await findItem("Chain of Trust");
     expect(embeddedItem.getAttribute("aria-expanded")).toBe("true");
     const children = within(groupOf(embeddedItem)).getAllByRole("treeitem").filter((element) => element.getAttribute("aria-level") === "3");
-    expect(children.map((element) => element.textContent)).toEqual([expect.stringContaining("Secure Boot"), expect.stringContaining("Security")]);
+    expect(children.map((element) => element.textContent)).toEqual([expect.stringContaining("Secure Boot"), expect.stringContaining("Chain of Trust")]);
   });
 
-  it("keeps branches scoped to the domain that was expanded", async () => {
-    mockApi();
+  it("opens each topic, not the domain, into Foundations, Security and Common Vulnerabilities", async () => {
+    const fetchMock = mockApi();
     await renderMap();
     press(item("Cloud API Security"), "ArrowRight");
-    press(item("Embedded Systems Security"), "ArrowRight");
-    await findItem("Secure Boot");
-    await findItem("Common Vulnerabilities");
-    const cloudBranches = within(groupOf(item("Cloud API Security"))).getAllByRole("treeitem").map((element) => element.textContent);
-    expect(cloudBranches.some((text) => text.includes("Foundations"))).toBe(true);
-    expect(cloudBranches.some((text) => text.includes("Common Vulnerabilities"))).toBe(true);
-    expect(cloudBranches.some((text) => /^\W*Security/.test(text))).toBe(false);
-    expect(within(groupOf(item("Embedded Systems Security"))).queryByRole("treeitem", { name: /Common Vulnerabilities/ })).toBeNull();
+    const oauthItem = await findItem("OAuth 2.0");
+    const domainChildren = within(groupOf(item("Cloud API Security"))).getAllByRole("treeitem").filter((element) => element.getAttribute("aria-level") === "3");
+    expect(domainChildren.map((element) => element.textContent)).toEqual([expect.stringContaining("OAuth 2.0"), expect.stringContaining("API Authorization")]);
+    expect(oauthItem.getAttribute("aria-expanded")).toBe("false");
+    press(oauthItem, "ArrowRight");
+    await findItem("Foundations");
+    const topicBranches = within(groupOf(oauthItem)).getAllByRole("treeitem").filter((element) => element.getAttribute("aria-level") === "4");
+    expect(topicBranches.map((element) => element.textContent.replace(/\d+$/, "").replace(/^\W+/, ""))).toEqual(["Foundations", "Security", "Common Vulnerabilities"]);
+    expect(requested(fetchMock, "/domains/2/topics/1/children")).toBe(true);
+    // A branch's topics arrive with the topic, so opening a branch needs no request.
+    const calls = fetchMock.mock.calls.length;
+    press(within(groupOf(oauthItem)).getByRole("treeitem", { name: /^Common Vulnerabilities/ }), "ArrowRight");
+    expect(await findItem("IDOR / BOLA")).toBeTruthy();
+    expect(fetchMock.mock.calls.length).toBe(calls);
   });
 
-  it("shows an empty state for a domain with no published topics", async () => {
+  it("shows a placeholder for a domain without topics and for an empty branch", async () => {
     mockApi();
     await renderMap();
     press(item("Quantum Readiness"), "ArrowRight");
     expect(await findItem("No published topics yet")).toBeTruthy();
-  });
-
-  it("lists branch topics 50 at a time and loads the next page on request", async () => {
-    const fetchMock = mockApi();
-    await renderMap();
     press(item("Cloud API Security"), "ArrowRight");
-    press(await findItem("Common Vulnerabilities"), "ArrowRight");
-    await findItem("Vulnerability 049");
-    expect(screen.queryByRole("treeitem", { name: /^Vulnerability 050/ })).toBeNull();
-    press(item("Load more \\(70 remaining\\)"), "Enter");
-    await findItem("Vulnerability 099");
-    expect(requested(fetchMock, "/branches/vulnerabilities/topics?offset=50&limit=50")).toBe(true);
-    expect(item("Load more \\(20 remaining\\)")).toBeTruthy();
+    press(await findItem("API Authorization"), "ArrowRight");
+    await waitFor(() => expect(within(groupOf(item("API Authorization"))).getAllByRole("treeitem", { name: /^(Foundations|Security|Common Vulnerabilities)/ })).toHaveLength(3));
+    press(within(groupOf(item("API Authorization"))).getByRole("treeitem", { name: /^Security/ }), "ArrowRight");
+    await waitFor(() => expect(screen.getAllByRole("treeitem", { name: /^No published topics yet/ })).toHaveLength(2));
   });
 
   it("selecting a topic opens the details panel and the breadcrumb", async () => {
     mockApi();
     await renderMap();
     press(item("Cloud API Security"), "ArrowRight");
-    press(await findItem("Foundations"), "ArrowRight");
     press(await findItem("OAuth 2.0"), "Enter");
     const details = screen.getByRole("complementary", { name: "Selected node details" });
     expect(within(details).getByRole("heading", { name: "OAuth 2.0" })).toBeTruthy();
     expect(await within(details).findByText("Delegated authorization.")).toBeTruthy();
-    expect(await within(details).findByRole("button", { name: "Embedded Systems Security › Secure Boot › Foundations" })).toBeTruthy();
+    expect(await within(details).findByRole("button", { name: "Embedded Systems Security › Secure Boot" })).toBeTruthy();
     const crumbs = within(screen.getByRole("navigation", { name: "Selected path" })).getAllByRole("listitem").map((element) => element.textContent);
-    expect(crumbs).toEqual(["CyberSec Career Intelligence", "Cloud API Security", "Foundations", "OAuth 2.0"]);
+    expect(crumbs).toEqual(["CyberSec Career Intelligence", "Cloud API Security", "OAuth 2.0"]);
     expect(window.location.hash).toBe("#knowledge-map?topic=oauth-2");
     fireEvent.click(within(screen.getByRole("navigation", { name: "Selected path" })).getByRole("button", { name: "Cloud API Security" }));
     expect(within(details).getByRole("heading", { name: "Cloud API Security" })).toBeTruthy();
   });
 
-  it("search reveals only the path to the result, even beyond the loaded page", async () => {
+  it("search reveals only the path to the result, through its parent topic's branch", async () => {
     const fetchMock = mockApi();
     await renderMap();
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "idor" } });
-    fireEvent.click(await screen.findByRole("button", { name: /IDOR \/ BOLA/ }));
-    const idor = await findItem("IDOR / BOLA");
-    expect(idor.getAttribute("aria-selected")).toBe("true");
+    const result = await screen.findByRole("button", { name: /IDOR \/ BOLA/ });
+    expect(result.textContent).toContain("Cloud API Security › OAuth 2.0 › Common Vulnerabilities");
+    fireEvent.click(result);
+    const idorItem = await findItem("IDOR / BOLA");
+    expect(idorItem.getAttribute("aria-selected")).toBe("true");
     expect(item("Cloud API Security").getAttribute("aria-expanded")).toBe("true");
+    expect(item("OAuth 2.0").getAttribute("aria-expanded")).toBe("true");
     expect(item("Common Vulnerabilities").getAttribute("aria-expanded")).toBe("true");
     expect(item("Foundations").getAttribute("aria-expanded")).toBe("false");
     expect(item("Embedded Systems Security").getAttribute("aria-expanded")).toBe("false");
     expect(requested(fetchMock, "/domains/5/children")).toBe(false);
-    expect(requested(fetchMock, "/branches/foundations/")).toBe(false);
   });
 
   it("asks which path to use when a search result has several placements", async () => {
@@ -176,49 +183,38 @@ describe("Security Knowledge Map page", () => {
     await renderMap();
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "oauth" } });
     fireEvent.click(await screen.findByRole("button", { name: /OAuth 2\.0.*2 locations/ }));
-    fireEvent.click(within(screen.getByRole("group", { name: "Choose where to show OAuth 2.0" })).getByRole("button", { name: "Embedded Systems Security › Secure Boot › Foundations" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Choose where to show OAuth 2.0" })).getByRole("button", { name: "Embedded Systems Security › Secure Boot" }));
     await waitFor(() => expect(item("OAuth 2.0").getAttribute("aria-selected")).toBe("true"));
     expect(item("Secure Boot").getAttribute("aria-expanded")).toBe("true");
     expect(item("Cloud API Security").getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("expands a topic into its child topics, at any depth", async () => {
-    const children = { 1: [{ ...topic(11, "pkce", "PKCE"), has_children: true }], 11: [topic(12, "code-verifier", "Code Verifier")] };
-    mockApi((url) => {
-      const { pathname } = new URL(url);
-      const nested = pathname.match(/\/knowledge-map\/domains\/2\/branches\/foundations\/topics\/(\d+)\/children$/);
-      if (nested) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ topic_id: Number(nested[1]), domain_id: 2, branch: "foundations", items: children[nested[1]] }) });
-      if (pathname.endsWith("/domains/2/branches/foundations/topics")) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ domain_id: 2, branch: "foundations", label: "Foundations", items: [{ ...oauth, has_children: true }], total: 1, offset: 0, limit: 50 }) });
-      return null;
-    });
+  it("nests topics inside topics' branches, at any depth", async () => {
+    mockApi();
     press(await renderMap(), "ArrowRight");
-    press(await findItem("Foundations"), "ArrowRight");
     const parent = await findItem("OAuth 2.0");
-    expect(parent.getAttribute("aria-expanded")).toBe("false");
     press(parent, "ArrowRight");
-    const pkce = await findItem("PKCE");
-    expect(pkce.getAttribute("aria-level")).toBe(String(Number(parent.getAttribute("aria-level")) + 1));
-    press(pkce, "ArrowRight");
-    expect((await findItem("Code Verifier")).getAttribute("aria-level")).toBe(String(Number(pkce.getAttribute("aria-level")) + 1));
-    expect(item("Code Verifier").getAttribute("aria-expanded")).toBeNull();
+    const foundations = await findItem("Foundations");
+    press(foundations, "ArrowRight");
+    const pkceItem = await findItem("PKCE");
+    expect(pkceItem.getAttribute("aria-level")).toBe(String(Number(parent.getAttribute("aria-level")) + 2));
+    press(pkceItem, "ArrowRight");
+    await waitFor(() => expect(within(groupOf(pkceItem)).getAllByRole("treeitem", { name: /^(Foundations|Security|Common Vulnerabilities)/ })).toHaveLength(3));
+    press(within(groupOf(pkceItem)).getByRole("treeitem", { name: /^Foundations/ }), "ArrowRight");
+    expect((await findItem("Code Verifier")).getAttribute("aria-level")).toBe(String(Number(pkceItem.getAttribute("aria-level")) + 2));
   });
 
-  it("search opens a nested topic under its parent topics", async () => {
-    const pkcePlacement = { ...placement([[2, "Cloud API Security"]], "foundations", "Foundations"), ancestors: [{ id: 1, topic_key: "oauth-2", name: "OAuth 2.0" }] };
-    mockApi((url) => {
-      const { pathname, searchParams } = new URL(url);
-      const reply = (body) => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
-      if (pathname.endsWith("/knowledge-map/search") && searchParams.get("q") === "pkce") return reply({ query: "pkce", items: [{ ...topic(11, "pkce", "PKCE"), placements: [pkcePlacement] }] });
-      if (pathname.endsWith("/domains/2/branches/foundations/topics/1/children")) return reply({ topic_id: 1, domain_id: 2, branch: "foundations", items: [topic(11, "pkce", "PKCE")] });
-      if (pathname.endsWith("/domains/2/branches/foundations/topics")) return reply({ domain_id: 2, branch: "foundations", label: "Foundations", items: [{ ...oauth, has_children: true }], total: 1, offset: 0, limit: 50 });
-      return null;
-    });
+  it("search opens a nested topic under each of its parent topics", async () => {
+    mockApi();
     await renderMap();
-    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "pkce" } });
-    fireEvent.click(await screen.findByRole("button", { name: /PKCE/ }));
-    await waitFor(() => expect(item("PKCE").getAttribute("aria-selected")).toBe("true"));
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "code" } });
+    const result = await screen.findByRole("button", { name: /Code Verifier/ });
+    expect(result.textContent).toContain("Cloud API Security › OAuth 2.0 › Foundations › PKCE › Foundations");
+    fireEvent.click(result);
+    await waitFor(() => expect(item("Code Verifier").getAttribute("aria-selected")).toBe("true"));
     expect(item("OAuth 2.0").getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getAllByRole("treeitem", { name: /^PKCE/ })).toHaveLength(1);
+    expect(item("PKCE").getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getAllByRole("treeitem", { name: /^Code Verifier/ })).toHaveLength(1);
   });
 
   it("opens a deep-linked topic", async () => {
@@ -233,17 +229,17 @@ describe("Security Knowledge Map page", () => {
     window.location.hash = "#knowledge-map?topic=oauth-2";
     const json = (body) => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
     mockApi((url) => {
-      if (url.endsWith("/knowledge/topics/oauth-2")) return json({ id: 1, topic_key: "oauth-2", name: "OAuth 2.0", description: "Delegated authorization.", sections: [], level_expectations: [], related_topics: [{ id: 3, topic_key: "secure-boot-chain", name: "Secure Boot Chain", relationship_type: "dependency", direction: "incoming", label: "Used by" }] });
-      if (url.endsWith("/knowledge/topics/secure-boot-chain")) return json({ id: 3, topic_key: "secure-boot-chain", name: "Secure Boot Chain", description: "", sections: [], level_expectations: [], related_topics: [] });
-      if (url.endsWith("/knowledge-map/topics/secure-boot-chain/placements")) return json([placement([[5, "Embedded Systems Security"]], "security", "Security")]);
+      if (url.endsWith("/knowledge/topics/oauth-2")) return json({ id: 1, topic_key: "oauth-2", name: "OAuth 2.0", description: "Delegated authorization.", sections: [], level_expectations: [], related_topics: [{ id: 3, topic_key: "secure-boot-chain", name: "Chain of Trust", relationship_type: "dependency", direction: "incoming", label: "Used by" }] });
+      if (url.endsWith("/knowledge/topics/secure-boot-chain")) return json({ id: 3, topic_key: "secure-boot-chain", name: "Chain of Trust", description: "", sections: [], level_expectations: [], related_topics: [] });
+      if (url.endsWith("/knowledge-map/topics/secure-boot-chain/placements")) return json([placement([[5, "Embedded Systems Security"]])]);
       return null;
     });
     render(<KnowledgeMapPage />);
     const details = await screen.findByRole("complementary", { name: "Selected node details" });
     fireEvent.click(await within(details).findByRole("tab", { name: "Related Topics" }));
     expect(within(details).getByText("Used by")).toBeTruthy();
-    fireEvent.click(within(details).getByRole("button", { name: "Secure Boot Chain" }));
-    await waitFor(() => expect(item("Secure Boot Chain").getAttribute("aria-selected")).toBe("true"));
+    fireEvent.click(within(details).getByRole("button", { name: "Chain of Trust" }));
+    await waitFor(() => expect(item("Chain of Trust").getAttribute("aria-selected")).toBe("true"));
     expect(window.location.hash).toBe("#knowledge-map?topic=secure-boot-chain");
     expect(item("Embedded Systems Security").getAttribute("aria-expanded")).toBe("true");
   });
@@ -266,14 +262,14 @@ describe("Security Knowledge Map page", () => {
     press(root, "ArrowRight");
     expect(document.activeElement).toBe(item("Cloud API Security"));
     press(document.activeElement, "ArrowRight");
-    await findItem("Foundations");
+    await findItem("OAuth 2.0");
     press(document.activeElement, "ArrowRight");
-    expect(document.activeElement).toBe(item("Foundations"));
+    expect(document.activeElement).toBe(item("OAuth 2.0"));
     press(document.activeElement, "ArrowLeft");
     expect(document.activeElement).toBe(item("Cloud API Security"));
     press(document.activeElement, "ArrowLeft");
     expect(item("Cloud API Security").getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByRole("treeitem", { name: /^Foundations/ })).toBeNull();
+    expect(screen.queryByRole("treeitem", { name: /^OAuth/ })).toBeNull();
     expect(item("Cloud API Security").tabIndex).toBe(0);
   });
 
@@ -281,10 +277,10 @@ describe("Security Knowledge Map page", () => {
     mockApi();
     await renderMap();
     press(item("Cloud API Security"), "ArrowRight");
-    press(await findItem("Foundations"), "ArrowRight");
-    press(await findItem("OAuth 2.0"), "Enter");
+    press(await findItem("OAuth 2.0"), "ArrowRight");
+    press(await findItem("Foundations"), "Enter");
     fireEvent.click(screen.getByRole("button", { name: "Go to parent" }));
-    expect(item("Foundations").getAttribute("aria-selected")).toBe("true");
+    expect(item("OAuth 2.0").getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Go to parent" }));
     expect(item("Cloud API Security").getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
@@ -292,8 +288,9 @@ describe("Security Knowledge Map page", () => {
     expect(screen.queryByRole("treeitem", { name: /^OAuth/ })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Expand" }));
     expect(item("OAuth 2.0")).toBeTruthy();
+    expect(item("Foundations")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
-    expect(screen.queryByRole("treeitem", { name: /^Foundations/ })).toBeNull();
+    expect(screen.queryByRole("treeitem", { name: /^OAuth/ })).toBeNull();
     expect(item("Cloud API Security").getAttribute("aria-selected")).toBe("true");
   });
 
@@ -302,7 +299,7 @@ describe("Security Knowledge Map page", () => {
     await renderMap();
     fireEvent.click(screen.getByRole("button", { name: "Expand children" }));
     await findItem("Secure Boot");
-    await findItem("Common Vulnerabilities");
+    await waitFor(() => expect(within(groupOf(item("Cloud API Security"))).getByRole("treeitem", { name: /^OAuth 2\.0/ })).toBeTruthy());
     expect(item("Embedded Systems Security").getAttribute("aria-expanded")).toBe("true");
     expect(item("Secure Boot").getAttribute("aria-expanded")).toBe("false");
   });
@@ -322,7 +319,7 @@ describe("Security Knowledge Map page", () => {
     await renderMap();
     press(item("Cloud API Security"), "ArrowRight");
     press(await findItem("Could not load. Retry"), "Enter");
-    expect(await findItem("Foundations")).toBeTruthy();
+    expect(await findItem("OAuth 2.0")).toBeTruthy();
   });
 
   it("remembers the Graph or List choice", async () => {
@@ -336,37 +333,28 @@ describe("Security Knowledge Map page", () => {
     expect(screen.getByRole("button", { name: "Zoom in" }).disabled).toBe(true);
   });
 
-  it("stays responsive with a 1,000-topic branch loaded page by page", async () => {
+  it("stays responsive with a 1,000-topic branch", async () => {
     const total = 1000;
-    mockApi((url) => {
-      const match = url.match(/branches\/vulnerabilities\/topics\?offset=(\d+)&limit=(\d+)/);
-      if (!match) return null;
-      const [offset, limit] = [Number(match[1]), Number(match[2])];
-      const items = Array.from({ length: Math.min(limit, total - offset) }, (_, index) => vulnerability(offset + index));
-      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ domain_id: 2, branch: "vulnerabilities", label: "Common Vulnerabilities", items, total, offset, limit }) });
-    });
+    mockApi((url) => (url.endsWith("/domains/2/topics/1/children")
+      ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(branches(1, 2, { vulnerabilities: Array.from({ length: total }, (_, index) => vulnerability(index)) })) })
+      : null));
     // Role queries compute accessible names over every nested item, which is quadratic here; look rows up by label.
     const byLabel = (text) => [...document.querySelectorAll(".km-tree-label")].find((element) => element.textContent === text)?.closest("[role=treeitem]");
     await renderMap();
     press(item("Cloud API Security"), "ArrowRight");
-    press(await findItem("Common Vulnerabilities"), "ArrowRight");
-    const pageTimes = [];
-    for (let page = 1; page < total / 50; page += 1) {
-      const more = await waitFor(() => { const element = byLabel(`Load more (${total - page * 50} remaining)`); if (!element) throw new Error("not loaded"); return element; });
-      const started = performance.now();
-      press(more, "Enter");
-      await waitFor(() => { if (!byLabel(`Vulnerability ${String(page * 50 + 49).padStart(3, "0")}`)) throw new Error("not loaded"); });
-      pageTimes.push(performance.now() - started);
-    }
-    const last = byLabel("Vulnerability 999");
+    press(await findItem("OAuth 2.0"), "ArrowRight");
+    const vulnerabilities = await waitFor(() => { const element = byLabel("Common Vulnerabilities"); if (!element) throw new Error("not loaded"); return element; });
+    const opened = performance.now();
+    press(vulnerabilities, "ArrowRight");
+    const last = await waitFor(() => { const element = byLabel("Vulnerability 999"); if (!element) throw new Error("not loaded"); return element; });
+    const openTime = performance.now() - opened;
     const started = performance.now();
     press(last, "Enter");
     expect(last.getAttribute("aria-selected")).toBe("true");
     const elapsed = performance.now() - started;
-    console.info(`1,000 topics: slowest page load-and-render ${Math.max(...pageTimes).toFixed(0)} ms; selecting a topic ${elapsed.toFixed(1)} ms`);
+    console.info(`1,000 topics: opening the branch ${openTime.toFixed(0)} ms; selecting a topic ${elapsed.toFixed(1)} ms`);
     expect(elapsed).toBeLessThan(1000);
-    expect(document.querySelectorAll(".km-tree-row.km-node-topic").length).toBe(total);
-    expect([...document.querySelectorAll(".km-tree-label")].some((element) => element.textContent.startsWith("Load more"))).toBe(false);
+    expect(document.querySelectorAll(".km-tree-row.km-node-topic").length).toBe(total + 2);
   }, 60000);
 });
 
@@ -385,10 +373,12 @@ describe("Security Knowledge Map navigation", () => {
 });
 
 describe("knowledge map model", () => {
-  function loadedState() {
+  const oauthId = topicNodeId(2, "oauth-2");
+  function loadedState(vulnerabilities = [vulnerability(0), vulnerability(1)]) {
     let state = applyRoot(initialMapState(), { root: { id: "root", name: "Root" }, domains: [cloud, embedded] });
-    state = applyDomainChildren(state, domainNodeId(2), { nodes: [branch(2, "foundations", "Foundations", 1), branch(2, "vulnerabilities", "Common Vulnerabilities", 3)] });
-    return expand(state, [domainNodeId(2)]);
+    state = applyDomainChildren(state, domainNodeId(2), { nodes: [inDomain(2, oauth)] });
+    state = applyTopicChildren(state, oauthId, branches(1, 2, { foundations: [pkce], vulnerabilities }));
+    return expand(state, [domainNodeId(2), oauthId]);
   }
 
   it("lays the visible tree out left to right from structure alone", () => {
@@ -396,35 +386,34 @@ describe("knowledge map model", () => {
     const layout = layoutTree(visibleTree(state));
     const x = Object.fromEntries(layout.positions.map((position) => [position.id, position.x]));
     expect(x.root).toBeLessThan(x[domainNodeId(2)]);
-    expect(x[domainNodeId(2)]).toBeLessThan(x[branchNodeId(2, "foundations")]);
-    expect(layout.edges).toContainEqual(expect.objectContaining({ source: domainNodeId(2), target: branchNodeId(2, "vulnerabilities") }));
+    expect(x[domainNodeId(2)]).toBeLessThan(x[oauthId]);
+    expect(x[oauthId]).toBeLessThan(x[branchNodeId(2, "oauth-2", "foundations")]);
+    expect(layout.edges).toContainEqual(expect.objectContaining({ source: oauthId, target: branchNodeId(2, "oauth-2", "vulnerabilities") }));
     expect(layout.positions.map((position) => position.id)).not.toContain(domainNodeId(6));
   });
 
-  it("pages topics without duplicates and keeps revealed topics", () => {
-    const branchId = branchNodeId(2, "vulnerabilities");
-    let state = applyTopicPage(loadedState(), branchId, { items: [vulnerability(0)], total: 3, offset: 0, limit: 1 });
-    state = ensureTopic(state, branchId, vulnerability(2));
-    state = applyTopicPage(state, branchId, { items: [vulnerability(1), vulnerability(2)], total: 3, offset: 1, limit: 2 });
-    expect(state.children[branchId]).toEqual([0, 2, 1].map((index) => topicNodeId(2, "vulnerabilities", `vuln-${index}`)));
-    expect(pathTo(state, topicNodeId(2, "vulnerabilities", "vuln-1"))).toEqual(["root", domainNodeId(2), branchId, topicNodeId(2, "vulnerabilities", "vuln-1")]);
+  it("puts a branch's topics under the branch, inside the topic and its domain", () => {
+    const state = loadedState();
+    const branchId = branchNodeId(2, "oauth-2", "foundations");
+    expect(state.nodes[branchId]).toMatchObject({ type: "branch", parentTopicId: 1, parentTopicKey: "oauth-2", branch: "foundations", topicCount: 1 });
+    expect(state.nodes[topicNodeId(2, "pkce")]).toMatchObject({ parentTopicId: 1, branch: "foundations", domainId: 2 });
+    expect(pathTo(state, topicNodeId(2, "pkce"))).toEqual(["root", domainNodeId(2), oauthId, branchId, topicNodeId(2, "pkce")]);
+    expect(state.children[branchNodeId(2, "oauth-2", "security")]).toEqual([`empty:${branchNodeId(2, "oauth-2", "security")}`]);
   });
 
   it("moves a hidden selection to the collapsed ancestor", () => {
     const state = collapse(loadedState(), domainNodeId(2));
-    expect(visibleAncestor(state, branchNodeId(2, "foundations"))).toBe(domainNodeId(2));
+    expect(visibleAncestor(state, branchNodeId(2, "oauth-2", "foundations"))).toBe(domainNodeId(2));
     expect(visibleRows(visibleTree(state)).map((row) => row.id)).toEqual(["root", domainNodeId(2), domainNodeId(5)]);
   });
 
   it("lays out 1,000 visible topics quickly", () => {
-    const branchId = branchNodeId(2, "vulnerabilities");
-    let state = expand(loadedState(), [branchId]);
-    for (let offset = 0; offset < 1000; offset += 50) state = applyTopicPage(state, branchId, { items: Array.from({ length: 50 }, (_, index) => vulnerability(offset + index)), total: 1000, offset, limit: 50 });
+    const state = expand(loadedState(Array.from({ length: 1000 }, (_, index) => vulnerability(index))), [branchNodeId(2, "oauth-2", "vulnerabilities")]);
     const started = performance.now();
     const layout = layoutTree(visibleTree(state));
     const elapsed = performance.now() - started;
     console.info(`Laying out ${layout.positions.length} visible nodes took ${elapsed.toFixed(1)} ms`);
-    expect(layout.positions.length).toBe(1005);
+    expect(layout.positions.length).toBe(1007);
     expect(elapsed).toBeLessThan(500);
   });
 });

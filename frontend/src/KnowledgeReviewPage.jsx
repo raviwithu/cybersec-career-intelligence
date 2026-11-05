@@ -30,7 +30,7 @@ function MapChangeComparison({ proposal, adminKey }) {
     <div><span className="field-label">Change: current state (−) and proposed change (+)</span><DiffView before={proposal.original_content} after={proposal.proposed_content} /></div>
     <div><span className="field-label">Affected branches</span>
       {preview.loading ? <Loading label="Computing map preview" /> : preview.error ? <p className="muted-copy">Preview unavailable: {preview.error.message}</p>
-        : preview.data.branches.length ? preview.data.branches.map((branch) => <article className="kr-branch" key={`${branch.domain_id}-${branch.map_branch}`}><strong>{branch.domain_name} › {branch.label}</strong><div className="kr-branch-columns"><BranchList items={branch.before} label="Before" /><BranchList items={branch.after} label="After publish" /></div></article>)
+        : preview.data.branches.length ? preview.data.branches.map((branch) => <article className="kr-branch" key={`${branch.domain_id}-${branch.parent_topic_id}-${branch.map_branch}`}><strong>{branch.domain_name} › {branch.label}</strong><div className="kr-branch-columns"><BranchList items={branch.before} label="Before" /><BranchList items={branch.after} label="After publish" /></div></article>)
           : <p className="muted-copy">{preview.data.message || "No map branch changes; the change affects topic details only."}</p>}
     </div>
   </div>;

@@ -48,8 +48,9 @@ def _topic(db, name: str, *, status: str = "published", active: bool = True, ali
     return topic
 
 
-def _place(db, topic: KnowledgeTopic, domain: SecurityDomain, branch: str | None, order: int = 0) -> None:
-    db.add(KnowledgeTopicDomain(topic_id=topic.id, domain_id=domain.id, map_branch=branch, display_order=order))
+def _place(db, topic: KnowledgeTopic, domain: SecurityDomain, branch: str | None = "foundations", order: int = 0, *, under: KnowledgeTopic | None = None) -> None:
+    # Without under, the topic sits directly under the domain (branch then only marks it as placed; None leaves it unplaced).
+    db.add(KnowledgeTopicDomain(topic_id=topic.id, domain_id=domain.id, map_branch=branch, display_order=order, parent_topic_id=under.id if under else None))
     db.flush()
 
 
@@ -57,6 +58,15 @@ def _children(client, domain_id: int) -> list[dict]:
     response = client.get(f"{MAP}/domains/{domain_id}/children")
     assert response.status_code == 200, response.text
     return response.json()["nodes"]
+
+
+def _branches(client, domain_id: int, topic_id: int) -> dict[str, list[str]]:
+    response = client.get(f"{MAP}/domains/{domain_id}/topics/{topic_id}/children")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [(item["branch"], item["label"]) for item in body["branches"]] == [("foundations", "Foundations"), ("security", "Security"), ("vulnerabilities", "Common Vulnerabilities")]
+    assert all(item["topic_count"] == len(item["items"]) for item in body["branches"])
+    return {item["branch"]: [topic["name"] for topic in item["items"]] for item in body["branches"]}
 
 
 def test_root_lists_active_top_level_domains_in_display_order(client):
@@ -73,24 +83,27 @@ def test_root_lists_active_top_level_domains_in_display_order(client):
     assert ids == sorted(ids, key=orders.get)
 
 
-def test_embedded_systems_security_lists_child_domains_before_branches(client):
+def test_embedded_systems_security_lists_child_domains_then_its_topics(client):
     with SessionLocal() as db:
         embedded = db.scalar(select(SecurityDomain).where(SecurityDomain.slug == "embedded-systems-security"))
         child_names = [item.name for item in sorted(db.scalars(select(SecurityDomain).where(SecurityDomain.parent_id == embedded.id, SecurityDomain.is_active.is_(True))).all(), key=lambda item: (item.display_order, item.name.casefold()))]
-        _place(db, _topic(db, "Embedded Foundations Topic"), embedded, "foundations")
+        topic = _topic(db, "Embedded Root Topic")
+        _place(db, topic, embedded, "security", order=100_000)
         db.commit()
-        embedded_id = embedded.id
+        embedded_id, topic_id = embedded.id, topic.id
     nodes = _children(client, embedded_id)
     domains = [item for item in nodes if item["node_type"] == "domain"]
     assert [item["name"] for item in domains] == child_names and child_names
-    assert nodes[:len(domains)] == domains
-    assert nodes[-1]["node_type"] == "branch" and nodes[-1]["branch"] == "foundations"
+    # Domains hold sub-domains and topics; Foundations, Security and Common Vulnerabilities belong to topics.
+    assert nodes[:len(domains)] == domains and {item["node_type"] for item in nodes} == {"domain", "topic"}
+    assert nodes[-1]["id"] == topic_id and nodes[-1]["domain_id"] == embedded_id
+    assert _branches(client, embedded_id, topic_id) == {"foundations": [], "security": [], "vulnerabilities": []}
     root_node = next(item for item in client.get(MAP).json()["domains"] if item["id"] == embedded_id)
     assert root_node["child_domain_count"] == len(child_names)
 
 
-def test_sub_domains_nest_to_any_depth_before_the_branches(client):
-    # Domain > sub-domain > sub-sub-domain, created through Taxonomy Management, then Foundations/Security/Vulnerabilities.
+def test_sub_domains_nest_to_any_depth_before_topics_and_their_branches(client):
+    # Domain > sub-domain > sub-sub-domain, created through Taxonomy Management, then a topic with its three branches.
     admin = {"X-Admin-API-Key": "test-admin-key"}
     ids = []
     for name in ("Depth Root", "Depth Child", "Depth Grandchild"):
@@ -100,61 +113,67 @@ def test_sub_domains_nest_to_any_depth_before_the_branches(client):
     root_id, child_id, grandchild_id = ids
     with SessionLocal() as db:
         grandchild = db.get(SecurityDomain, grandchild_id)
-        _place(db, _topic(db, "Deep Foundations"), grandchild, "foundations")
-        _place(db, _topic(db, "Deep Vulnerability"), grandchild, "vulnerabilities")
+        deep = _topic(db, "Deep Topic")
+        _place(db, deep, grandchild)
+        _place(db, _topic(db, "Deep Foundations"), grandchild, "foundations", under=deep)
+        _place(db, _topic(db, "Deep Vulnerability"), grandchild, "vulnerabilities", under=deep)
         db.commit()
+        deep_id = deep.id
     assert [(item["node_type"], item["id"]) for item in _children(client, root_id)] == [("domain", child_id)]
     assert [(item["node_type"], item["id"]) for item in _children(client, child_id)] == [("domain", grandchild_id)]
-    assert [item["branch"] for item in _children(client, grandchild_id)] == ["foundations", "vulnerabilities"]
+    assert [(item["node_type"], item["name"], item["has_children"]) for item in _children(client, grandchild_id)] == [("topic", "Deep Topic", True)]
+    assert _branches(client, grandchild_id, deep_id) == {"foundations": ["Deep Foundations"], "security": [], "vulnerabilities": ["Deep Vulnerability"]}
     root_node = next(item for item in client.get(MAP).json()["domains"] if item["id"] == root_id)
-    assert (root_node["child_domain_count"], root_node["placed_topic_count"]) == (1, 2)
+    assert (root_node["child_domain_count"], root_node["placed_topic_count"]) == (1, 3)
     placement = client.get(f"{MAP}/search", params={"q": "Deep Vulnerability"}).json()["items"][0]["placements"][0]
     assert [item["id"] for item in placement["domain_path"]] == ids
+    assert (placement["branch"], placement["label"]) == ("vulnerabilities", "Common Vulnerabilities")
+    assert [(item["name"], item["branch"]) for item in placement["ancestors"]] == [("Deep Topic", None)]
 
 
-def test_child_topics_nest_under_their_parent_in_a_branch(client):
+def test_topics_sit_in_the_branches_of_their_parent_topic_to_any_depth(client):
     with SessionLocal() as db:
         domain = _domain(db, "Nesting Domain")
-        overview = _topic(db, "IAM Overview Nest")
-        hierarchy = _topic(db, "Hierarchy Nest", parent=overview)
-        components = _topic(db, "Components Nest", parent=overview)
-        users = _topic(db, "Users Nest", parent=components)
-        unplaced = _topic(db, "Unplaced Child Nest", parent=overview)
-        _topic(db, "Draft Child Nest", parent=overview, status="draft")
-        elsewhere = _topic(db, "Security Child Nest", parent=overview)
-        standalone = _topic(db, "Standalone Nest")
-        for order, topic in enumerate((overview, components, hierarchy, users, standalone)):
-            _place(db, topic, domain, "foundations", order)
-        _place(db, elsewhere, domain, "security")
+        overview, standalone = _topic(db, "IAM Overview Nest"), _topic(db, "Standalone Nest")
+        components, hierarchy, users = _topic(db, "Components Nest"), _topic(db, "Hierarchy Nest"), _topic(db, "Users Nest")
+        policies, draft, unplaced_parent, orphan = _topic(db, "Policies Nest"), _topic(db, "Draft Child Nest", status="draft"), _topic(db, "Elsewhere Nest"), _topic(db, "Orphan Nest")
+        _place(db, overview, domain, order=0)
+        _place(db, standalone, domain, order=1)
+        _place(db, components, domain, "foundations", 0, under=overview)
+        _place(db, hierarchy, domain, "foundations", 1, under=overview)
+        _place(db, users, domain, "foundations", under=components)
+        _place(db, policies, domain, "security", under=overview)
+        _place(db, draft, domain, "security", under=overview)
+        # Its parent is not on the map in this domain, so it sits directly under the domain.
+        _place(db, orphan, domain, "vulnerabilities", 2, under=unplaced_parent)
         db.commit()
-        d, ids = domain.id, {t.name: (t.id, t.topic_key) for t in (overview, hierarchy, components, users, unplaced, elsewhere, standalone)}
-    branch = client.get(f"{MAP}/domains/{d}/branches/foundations/topics").json()
-    assert [(item["name"], item["has_children"]) for item in branch["items"]] == [("IAM Overview Nest", True), ("Standalone Nest", False)] and branch["total"] == 2
-    children = client.get(f"{MAP}/domains/{d}/branches/foundations/topics/{ids['IAM Overview Nest'][0]}/children").json()
-    assert [(item["name"], item["has_children"]) for item in children["items"]] == [("Components Nest", True), ("Hierarchy Nest", False), ("Security Child Nest", False), ("Unplaced Child Nest", False)]
-    grandchildren = client.get(f"{MAP}/domains/{d}/branches/foundations/topics/{ids['Components Nest'][0]}/children").json()
-    assert [item["name"] for item in grandchildren["items"]] == ["Users Nest"]
-    # Its parent is not placed in Security, so the child stays at the top of that branch.
-    assert [item["name"] for item in client.get(f"{MAP}/domains/{d}/branches/security/topics").json()["items"]] == ["Security Child Nest"]
+        d, ids = domain.id, {t.name: (t.id, t.topic_key) for t in (overview, components, users, policies, standalone)}
+    assert [(item["name"], item["has_children"]) for item in _children(client, d)] == [("IAM Overview Nest", True), ("Standalone Nest", False), ("Orphan Nest", False)]
+    assert _branches(client, d, ids["IAM Overview Nest"][0]) == {"foundations": ["Components Nest", "Hierarchy Nest"], "security": ["Policies Nest"], "vulnerabilities": []}
+    assert _branches(client, d, ids["Components Nest"][0]) == {"foundations": ["Users Nest"], "security": [], "vulnerabilities": []}
     placements = client.get(f"{MAP}/topics/{ids['Users Nest'][1]}/placements").json()
-    assert [item["name"] for item in placements[0]["ancestors"]] == ["IAM Overview Nest", "Components Nest"]
-    assert client.get(f"{MAP}/topics/{ids['Security Child Nest'][1]}/placements").json()[0]["ancestors"] == []
-    assert client.get(f"{MAP}/domains/{d}/branches/foundations/topics/999999/children").status_code == 404
-    flat = client.get(f"{MAP}/domains/{d}/branches/foundations/topics", params={"include_nested": "true"}).json()
-    assert [item["name"] for item in flat["items"]] == ["IAM Overview Nest", "Components Nest", "Hierarchy Nest", "Users Nest", "Standalone Nest"] and flat["total"] == 5
+    assert [(item["name"], item["branch"]) for item in placements[0]["ancestors"]] == [("IAM Overview Nest", None), ("Components Nest", "foundations")]
+    assert placements[0]["branch"] == "foundations"
+    root = client.get(f"{MAP}/topics/{ids['Standalone Nest'][1]}/placements").json()[0]
+    assert (root["branch"], root["label"], root["ancestors"]) == (None, None, [])
+    assert client.get(f"{MAP}/domains/{d}/topics/999999/children").status_code == 404
 
 
-def test_branches_appear_only_with_a_published_placement_and_stay_in_their_domain(client):
+def test_every_topic_lists_all_three_branches_counting_only_published_placements(client):
     with SessionLocal() as db:
         domain_a, domain_b = _domain(db, "Domain A"), _domain(db, "Domain B")
-        _place(db, _topic(db, "Draft Only", status="draft"), domain_a, "security")
-        _place(db, _topic(db, "Unplaced Link"), domain_a, None)
-        _place(db, _topic(db, "Published Vuln"), domain_a, "vulnerabilities")
+        parent = _topic(db, "Branch Parent")
+        _place(db, parent, domain_a)
+        _place(db, _topic(db, "Draft Only", status="draft"), domain_a, "security", under=parent)
+        _place(db, _topic(db, "Unplaced Link"), domain_a, None, under=parent)
+        _place(db, _topic(db, "Published Vuln"), domain_a, "vulnerabilities", under=parent)
         db.commit()
-        a_id, b_id = domain_a.id, domain_b.id
-    assert [(item["branch"], item["label"], item["topic_count"]) for item in _children(client, a_id)] == [("vulnerabilities", "Common Vulnerabilities", 1)]
+        a_id, b_id, parent_id = domain_a.id, domain_b.id, parent.id
+    body = client.get(f"{MAP}/domains/{a_id}/topics/{parent_id}/children").json()
+    assert [(item["branch"], item["topic_count"]) for item in body["branches"]] == [("foundations", 0), ("security", 0), ("vulnerabilities", 1)]
     assert _children(client, b_id) == []
-    assert client.get(f"{MAP}/domains/{b_id}/branches/vulnerabilities/topics").json()["items"] == []
+    # The parent is not placed in Domain B.
+    assert client.get(f"{MAP}/domains/{b_id}/topics/{parent_id}/children").status_code == 404
 
 
 def test_draft_review_and_inactive_topics_are_excluded_everywhere(client):
@@ -165,53 +184,48 @@ def test_draft_review_and_inactive_topics_are_excluded_everywhere(client):
         for topic in (visible, *hidden):
             _place(db, topic, domain, "security")
         db.commit()
-        domain_id, hidden_keys = domain.id, [item.topic_key for item in hidden]
+        domain_id, hidden_keys, hidden_ids = domain.id, [item.topic_key for item in hidden], [item.id for item in hidden]
     root_node = next(item for item in client.get(MAP).json()["domains"] if item["id"] == domain_id)
     assert root_node["placed_topic_count"] == 1
-    assert _children(client, domain_id)[0]["topic_count"] == 1
-    page = client.get(f"{MAP}/domains/{domain_id}/branches/security/topics").json()
-    assert [item["name"] for item in page["items"]] == ["Zephyr Visible"] and page["total"] == 1
+    assert [item["name"] for item in _children(client, domain_id)] == ["Zephyr Visible"]
     assert [item["name"] for item in client.get(f"{MAP}/search", params={"q": "zephyr"}).json()["items"]] == ["Zephyr Visible"]
-    for key in hidden_keys:
+    for key, topic_id in zip(hidden_keys, hidden_ids):
         assert client.get(f"{MAP}/topics/{key}/placements").status_code == 404
+        assert client.get(f"{MAP}/domains/{domain_id}/topics/{topic_id}/children").status_code == 404
 
 
 def test_one_topic_in_two_domains_is_one_row_with_two_placements(client):
     with SessionLocal() as db:
         domain_a, domain_b = _domain(db, "Cross A"), _domain(db, "Cross B")
-        topic = _topic(db, "Cross Domain Topic")
-        _place(db, topic, domain_a, "foundations")
-        _place(db, topic, domain_b, "security")
+        topic, parent = _topic(db, "Cross Domain Topic"), _topic(db, "Cross Parent")
+        _place(db, topic, domain_a)
+        _place(db, parent, domain_b)
+        _place(db, topic, domain_b, "security", under=parent)
         db.commit()
-        a_id, b_id, topic_id, key = domain_a.id, domain_b.id, topic.id, topic.topic_key
+        a_id, b_id, topic_id, parent_id, key = domain_a.id, domain_b.id, topic.id, parent.id, topic.topic_key
         assert db.query(KnowledgeTopic).filter(KnowledgeTopic.topic_key == key).count() == 1
-    for domain_id, branch in ((a_id, "foundations"), (b_id, "security")):
-        item = client.get(f"{MAP}/domains/{domain_id}/branches/{branch}/topics").json()["items"][0]
-        assert (item["id"], item["placement_count"]) == (topic_id, 2)
+    item = _children(client, a_id)[0]
+    assert (item["id"], item["placement_count"]) == (topic_id, 2)
+    nested = client.get(f"{MAP}/domains/{b_id}/topics/{parent_id}/children").json()["branches"][1]["items"][0]
+    assert (nested["id"], nested["placement_count"]) == (topic_id, 2)
     placements = client.get(f"{MAP}/topics/{topic_id}/placements").json()
-    assert sorted((item["domain_path"][-1]["id"], item["branch"]) for item in placements) == sorted([(a_id, "foundations"), (b_id, "security")])
+    assert sorted((item["domain_path"][-1]["id"], item["branch"]) for item in placements) == sorted([(a_id, None), (b_id, "security")])
 
 
-def test_topics_are_paginated_and_ordered_with_a_limit_ceiling(client):
+def test_topics_are_ordered_and_descriptions_shortened(client):
     with SessionLocal() as db:
-        domain = _domain(db, "Paging Domain")
-        parent = None
-        for index, name in enumerate(["Echo", "Delta", "Charlie", "Bravo", "Alpha"]):
-            topic = _topic(db, name, description="x" * 300 if name == "Alpha" else f"{name} description")
-            _place(db, topic, domain, "foundations", order=0 if name in {"Echo", "Delta"} else 1)
-            parent = parent or topic
-        _topic(db, "Echo Child", parent=parent)
+        domain = _domain(db, "Ordering Domain")
+        topics = {}
+        for name in ["Echo", "Delta", "Charlie", "Bravo", "Alpha"]:
+            topics[name] = _topic(db, name, description="x" * 300 if name == "Alpha" else f"{name} description")
+            _place(db, topics[name], domain, order=0 if name in {"Echo", "Delta"} else 1)
+        _place(db, _topic(db, "Echo Child"), domain, "security", under=topics["Echo"])
         db.commit()
         domain_id = domain.id
-    url = f"{MAP}/domains/{domain_id}/branches/foundations/topics"
-    full = client.get(url).json()
-    assert [item["name"] for item in full["items"]] == ["Delta", "Echo", "Alpha", "Bravo", "Charlie"]
-    assert (full["total"], full["offset"], full["limit"]) == (5, 0, 50)
-    assert next(item for item in full["items"] if item["name"] == "Echo")["has_children"] is True
-    assert len(next(item for item in full["items"] if item["name"] == "Alpha")["short_description"]) == 200
-    page = client.get(url, params={"offset": 2, "limit": 2}).json()
-    assert [item["name"] for item in page["items"]] == ["Alpha", "Bravo"] and page["total"] == 5
-    assert client.get(url, params={"limit": 101}).status_code == 422
+    items = _children(client, domain_id)
+    assert [item["name"] for item in items] == ["Delta", "Echo", "Alpha", "Bravo", "Charlie"]
+    assert next(item for item in items if item["name"] == "Echo")["has_children"] is True
+    assert len(next(item for item in items if item["name"] == "Alpha")["short_description"]) == 200
 
 
 def test_search_matches_aliases_and_returns_placement_paths(client):
@@ -225,23 +239,23 @@ def test_search_matches_aliases_and_returns_placement_paths(client):
         parent_id, child_id = parent.id, child.id
     body = client.get(f"{MAP}/search", params={"q": "quokkachain"}).json()
     assert [item["name"] for item in body["items"]] == ["Return Oriented Programming"]
-    assert body["items"][0]["placements"] == [{"domain_path": [{"id": parent_id, "name": body["items"][0]["placements"][0]["domain_path"][0]["name"]}, {"id": child_id, "name": body["items"][0]["placements"][0]["domain_path"][1]["name"]}], "branch": "vulnerabilities", "label": "Common Vulnerabilities", "context_note": None, "ancestors": []}]
+    assert body["items"][0]["placements"] == [{"domain_path": [{"id": parent_id, "name": body["items"][0]["placements"][0]["domain_path"][0]["name"]}, {"id": child_id, "name": body["items"][0]["placements"][0]["domain_path"][1]["name"]}], "branch": None, "label": None, "context_note": None, "ancestors": []}]
     assert client.get(f"{MAP}/search", params={"q": "q"}).status_code == 422
     assert client.get(f"{MAP}/search", params={"q": " q "}).status_code == 422
     assert client.get(f"{MAP}/search", params={"q": "x" * 101}).status_code == 422
 
 
-def test_unknown_or_inactive_domains_404_and_invalid_branches_422(client):
+def test_unknown_or_inactive_domains_and_topics_404(client):
     with SessionLocal() as db:
         inactive = _domain(db, "Inactive Domain", active=False)
         orphan = _domain(db, "Child Of Inactive", parent=inactive)
         topic = _topic(db, "Unplaced Published")
+        _place(db, topic, orphan)
         db.commit()
         inactive_id, orphan_id, topic_id = inactive.id, orphan.id, topic.id
     for domain_id in (999999, inactive_id, orphan_id):
         assert client.get(f"{MAP}/domains/{domain_id}/children").status_code == 404
-        assert client.get(f"{MAP}/domains/{domain_id}/branches/security/topics").status_code == 404
-    assert client.get(f"{MAP}/domains/{orphan_id}/branches/tools/topics").status_code == 422
+        assert client.get(f"{MAP}/domains/{domain_id}/topics/{topic_id}/children").status_code == 404
     assert client.get(f"{MAP}/topics/{topic_id}/placements").json() == []
     assert client.get(f"{MAP}/topics/no-such-topic/placements").status_code == 404
 
@@ -301,7 +315,9 @@ def test_placement_migration_upgrades_and_downgrades_on_sqlite():
     try:
         alembic("upgrade", "head")
         names, indexes = columns()
-        assert {"map_branch", "display_order", "context_note"} <= names and "ix_knowledge_topic_domains_map_placement" in indexes
+        assert {"map_branch", "display_order", "context_note", "parent_topic_id"} <= names and "ix_knowledge_topic_domains_map_placement" in indexes
+        alembic("downgrade", "ph14placementcontext")
+        assert "parent_topic_id" not in columns()[0] and "context_note" in columns()[0]
         alembic("downgrade", "ph13mapplacement")
         assert "context_note" not in columns()[0]
         alembic("downgrade", "ph12dunblockresolved")

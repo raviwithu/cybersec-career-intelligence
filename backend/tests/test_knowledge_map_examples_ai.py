@@ -105,7 +105,7 @@ def test_example_script_reuses_existing_topics_and_completes_after_publication(c
     for proposal_id in create_ids:
         approve_and_publish(client, proposal_id)
     placements = client.get("/api/v1/knowledge-map/topics/idor-bola/placements").json()
-    assert {item["branch"] for item in placements} == {"vulnerabilities"} and len(placements) == 2
+    assert {(item["branch"], len(item["ancestors"])) for item in placements} == {(None, 0)} and len(placements) == 2
 
     with SessionLocal() as db:
         second = run(db)
@@ -235,7 +235,7 @@ def test_submitting_selected_suggestions_creates_ai_proposals_linked_to_the_find
     assert all(item["source_type"] == "ai" and item["status"] == "review" for item in body["created"])
     create = body["created"][1]
     assert create["proposed_content"]["topic"] == {"name": "API Gateway Security", "description": "", "topic_key": "api-gateway-security"}
-    assert create["proposed_content"]["placements"] == [{"domain_id": cloud, "map_branch": "security", "display_order": None}]
+    assert create["proposed_content"]["placements"] == [{"domain_id": cloud, "display_order": None}]
     with SessionLocal() as db:
         rows = db.scalars(select(KnowledgeTopicProposal).where(KnowledgeTopicProposal.id.in_([item["id"] for item in body["created"]]))).all()
         assert {row.finding_id for row in rows} == {finding_id}

@@ -1,10 +1,11 @@
 import { hierarchy, tree } from "d3-hierarchy";
 
 // Pure state helpers for the Security Knowledge Map. The page keeps one immutable state object:
-// nodes by id, loaded child ids per node, parent links, the expanded set and branch paging.
+// nodes by id, loaded child ids per node, parent links and the expanded set.
+// Domains hold sub-domains and topics; every topic holds the Foundations, Security and Common Vulnerabilities branches,
+// and each branch holds smaller topics, to any depth.
 
 export const ROOT_ID = "root";
-export const TOPIC_PAGE_SIZE = 50;
 export const DOMAIN_PALETTE_SIZE = 6;
 export const BRANCHES = {
   foundations: { label: "Foundations", icon: "▤" },
@@ -14,21 +15,27 @@ export const BRANCHES = {
 export const NODE_WIDTH = 260;
 const NODE_ROW_GAP = 52;
 const NODE_COLUMN_GAP = 310;
-const EXPANDABLE_TYPES = new Set(["root", "domain", "child-domain", "branch"]);
+const EXPANDABLE_TYPES = new Set(["root", "domain", "child-domain", "topic", "branch"]);
 
 export const domainNodeId = (domainId) => `domain:${domainId}`;
-export const branchNodeId = (domainId, branch) => `branch:${domainId}:${branch}`;
-export const topicNodeId = (domainId, branch, topicKey) => `topic:${domainId}:${branch}:${topicKey}`;
-const moreNodeId = (branchId) => `more:${branchId}`;
+// A topic appears at most once per domain, so the domain and topic key identify its node.
+export const topicNodeId = (domainId, topicKey) => `topic:${domainId}:${topicKey}`;
+export const branchNodeId = (domainId, topicKey, branch) => `branch:${domainId}:${topicKey}:${branch}`;
 const emptyNodeId = (parentId) => `empty:${parentId}`;
 
-export function initialMapState() {
-  return { nodes: {}, children: {}, parents: {}, expanded: {}, paging: {} };
+// Where a topic sits: its domains, then each parent topic followed by the branch of it the next one sits in.
+export function placementLabel(placement) {
+  const ancestors = placement.ancestors || [];
+  const topics = ancestors.flatMap((topic, index) => [topic.name, BRANCHES[index + 1 < ancestors.length ? ancestors[index + 1].branch : placement.branch]?.label]);
+  return [...placement.domain_path.map((domain) => domain.name), ...topics].filter(Boolean).join(" › ");
 }
 
-// Topics expand only when they have child topics (nested under them in the same branch).
+export function initialMapState() {
+  return { nodes: {}, children: {}, parents: {}, expanded: {} };
+}
+
 export function isExpandable(node) {
-  return Boolean(node) && (EXPANDABLE_TYPES.has(node.type) || (node.type === "topic" && node.hasChildren));
+  return Boolean(node) && EXPANDABLE_TYPES.has(node.type);
 }
 
 function domainNode(domain, parent, index) {
@@ -36,8 +43,9 @@ function domainNode(domain, parent, index) {
   return { id: domainNodeId(domain.id), type: topLevel ? "domain" : "child-domain", label: domain.name, domainId: domain.id, slug: domain.slug, childDomainCount: domain.child_domain_count, topicCount: domain.placed_topic_count, palette: topLevel ? index % DOMAIN_PALETTE_SIZE : parent.palette };
 }
 
-function topicNode(branch, item) {
-  return { id: topicNodeId(branch.domainId, branch.branch, item.topic_key), type: "topic", label: item.name, topicKey: item.topic_key, topicId: item.id, description: item.short_description || "", placementCount: item.placement_count ?? item.placements?.length ?? 1, contextNote: item.context_note || "", hasChildren: Boolean(item.has_children), domainId: branch.domainId, branch: branch.branch, palette: branch.palette };
+// parent is the domain node or branch node the topic sits in; branch nodes carry their parent topic.
+function topicNode(parent, item) {
+  return { id: topicNodeId(parent.domainId, item.topic_key), type: "topic", label: item.name, topicKey: item.topic_key, topicId: item.id, description: item.short_description || "", placementCount: item.placement_count ?? 1, contextNote: item.context_note || "", hasChildren: Boolean(item.has_children), domainId: parent.domainId, parentTopicId: parent.type === "branch" ? parent.parentTopicId : null, branch: parent.type === "branch" ? parent.branch : null, palette: parent.palette };
 }
 
 function withChildren(state, parentId, childNodes) {
@@ -57,51 +65,24 @@ export function applyRoot(state, data) {
   return withChildren(next, ROOT_ID, data.domains.map((domain, index) => domainNode(domain, root, index)));
 }
 
+// GET /knowledge-map/domains/{id}/children: sub-domains, then the topics placed directly in the domain.
 export function applyDomainChildren(state, domainId, data) {
   const parent = state.nodes[domainId];
-  const childNodes = data.nodes.map((item, index) => item.node_type === "branch"
-    ? { id: branchNodeId(item.domain_id, item.branch), type: "branch", label: item.label, branch: item.branch, domainId: item.domain_id, topicCount: item.topic_count, palette: parent.palette }
-    : domainNode(item, parent, index));
+  const childNodes = data.nodes.map((item, index) => (item.node_type === "topic" ? topicNode(parent, item) : domainNode(item, parent, index)));
   return withChildren(state, domainId, childNodes.length ? childNodes : [emptyNode(domainId)]);
 }
 
-function topicIds(state, branchId) {
-  return (state.children[branchId] || []).filter((id) => state.nodes[id]?.type === "topic");
-}
-
-function withTopics(state, branchId, topics, paging) {
-  const branch = state.nodes[branchId];
-  const known = new Set(topicIds(state, branchId));
-  const existing = topicIds(state, branchId).map((id) => state.nodes[id]);
-  const added = topics.map((item) => topicNode(branch, item)).filter((node) => !known.has(node.id) && known.add(node.id));
-  const remaining = paging.total - paging.loaded;
-  const more = remaining > 0 ? [{ id: moreNodeId(branchId), type: "more", label: `Load more (${remaining} remaining)`, branchId }] : [];
-  const listed = [...existing, ...added];
-  const next = withChildren(state, branchId, listed.length || more.length ? [...listed, ...more] : [emptyNode(branchId)]);
-  return { ...next, paging: { ...next.paging, [branchId]: paging } };
-}
-
-// Appends one page from GET /knowledge-map/domains/{id}/branches/{branch}/topics, skipping topics already listed.
-export function applyTopicPage(state, branchId, page) {
-  return withTopics(state, branchId, page.items, { total: page.total, loaded: page.offset + page.items.length });
-}
-
-// Lists a topic that search revealed but that lies beyond the loaded pages. Later pages skip it.
-// Child topics from GET /knowledge-map/domains/{id}/branches/{branch}/topics/{topicId}/children, nested under the topic.
+// GET /knowledge-map/domains/{id}/topics/{topicId}/children: the topic's three branches, each with its topics.
 export function applyTopicChildren(state, topicId, data) {
-  const parent = state.nodes[topicId];
-  const childNodes = data.items.map((item) => topicNode(parent, item));
-  return withChildren(state, topicId, childNodes.length ? childNodes : [emptyNode(topicId)]);
-}
-
-export function ensureTopic(state, branchId, topic) {
-  const branch = state.nodes[branchId];
-  if (state.nodes[topicNodeId(branch.domainId, branch.branch, topic.topic_key)]) return state;
-  return withTopics(state, branchId, [topic], state.paging[branchId] || { total: 0, loaded: 0 });
-}
-
-export function nextTopicOffset(state, branchId) {
-  return state.paging[branchId]?.loaded || 0;
+  const topic = state.nodes[topicId];
+  const branches = data.branches.map((item) => ({ id: branchNodeId(topic.domainId, topic.topicKey, item.branch), type: "branch", label: item.label, branch: item.branch, domainId: topic.domainId, parentTopicId: topic.topicId, parentTopicKey: topic.topicKey, topicCount: item.topic_count, palette: topic.palette }));
+  let next = withChildren(state, topicId, branches);
+  data.branches.forEach((item, index) => {
+    const branch = branches[index];
+    const topics = item.items.map((child) => topicNode(branch, child));
+    next = withChildren(next, branch.id, topics.length ? topics : [emptyNode(branch.id)]);
+  });
+  return next;
 }
 
 export function expand(state, ids) {

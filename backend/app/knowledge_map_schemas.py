@@ -17,14 +17,6 @@ class MapDomainNode(BaseModel):
     placed_topic_count: int
 
 
-class MapBranchNode(BaseModel):
-    node_type: Literal["branch"] = "branch"
-    domain_id: int
-    branch: MapBranch
-    label: str
-    topic_count: int
-
-
 class MapRootNode(BaseModel):
     id: Literal["root"] = "root"
     name: str
@@ -35,30 +27,32 @@ class MapRootResponse(BaseModel):
     domains: list[MapDomainNode]
 
 
-class MapChildrenResponse(BaseModel):
-    domain: MapDomainNode
-    # Child domains first, then the domain's non-empty branches.
-    nodes: list[MapDomainNode | MapBranchNode]
-
-
 class MapTopicNode(BaseModel):
     id: int
     topic_key: str
     name: str
     short_description: str
     placement_count: int
-    has_children: bool
+    has_children: bool  # whether any topic sits in one of its branches in this domain
     context_note: str | None = None
 
 
-class MapTopicPage(BaseModel):
+class MapDomainTopicNode(MapTopicNode):
+    node_type: Literal["topic"] = "topic"
     domain_id: int
+
+
+class MapChildrenResponse(BaseModel):
+    domain: MapDomainNode
+    # Child domains first, then the topics placed directly in the domain. Branches belong to topics.
+    nodes: list[MapDomainNode | MapDomainTopicNode]
+
+
+class MapTopicBranch(BaseModel):
     branch: MapBranch
     label: str
+    topic_count: int
     items: list[MapTopicNode]
-    total: int
-    offset: int
-    limit: int
 
 
 class MapDomainRef(BaseModel):
@@ -70,21 +64,21 @@ class MapTopicRef(BaseModel):
     id: int
     topic_key: str
     name: str
+    branch: MapBranch | None  # the branch of its own parent it sits in; None for the outermost, which sits under the domain
 
 
 class MapPlacement(BaseModel):
     domain_path: list[MapDomainRef]
-    branch: MapBranch
-    label: str
+    branch: MapBranch | None  # the branch of its parent topic it sits in; None when it sits directly under the domain
+    label: str | None
     context_note: str | None = None
-    ancestors: list[MapTopicRef] = []  # parent topics it is nested under in this branch, outermost first
+    ancestors: list[MapTopicRef] = []  # parent topics it sits under in this domain, outermost first
 
 
 class MapTopicChildren(BaseModel):
     topic_id: int
     domain_id: int
-    branch: MapBranch
-    items: list[MapTopicNode]
+    branches: list[MapTopicBranch]  # always all three, in Foundations, Security, Common Vulnerabilities order
 
 
 class MapSearchResult(BaseModel):

@@ -3,6 +3,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { fetchKnowledgeContractTopic, fetchLevels } from "./api";
 import { Badge, ErrorState, Loading } from "./components";
 import { LegacyCareerGuidance, SectionContent, sectionsByType, useRelatedGroups } from "./KnowledgeSections";
+import { placementLabel } from "./knowledgeMapModel";
 
 // Topic detail panel for the Security Knowledge Map. Tabs appear only when the topic has published content for them.
 
@@ -68,9 +69,6 @@ function RelatedTopics({ related, onSelectTopic }) {
   return <div className="kx-related">{groups.map(([label, items]) => <section key={label}><span className="field-label">{label}</span><ul>{items.map((item) => <li key={`${item.direction}-${item.relationship_type}-${item.id}`}><button type="button" className="text-link" onClick={() => onSelectTopic(item.topic_key)}>{item.name}</button></li>)}</ul></section>)}</div>;
 }
 
-function placementLabel(placement) {
-  return [...placement.domain_path.map((domain) => domain.name), placement.label, ...(placement.ancestors || []).map((topic) => topic.name)].join(" › ");
-}
 
 export default function KnowledgeMapTopicPanel({ node, breadcrumb, placements, isCurrentPlacement, onReveal, onSelectTopic, onNavigate }) {
   const [detail, setDetail] = useState({ loading: true, error: null, topic: null });
