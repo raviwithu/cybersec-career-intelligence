@@ -292,15 +292,14 @@ def _map_parent_problem(db: Session, topic_id: int | None, domain_id: int, paren
     link = _link(db, parent_id, domain_id)
     if parent is None or not parent.is_active or _placement_state(link) is None:
         return "The parent topic must be active and placed in the same domain"
-    if link.parent_topic_id is not None and link.map_branch == "vulnerabilities":
-        return "A topic in Common Vulnerabilities cannot have topics under it"
+    in_a_branch = link.parent_topic_id is not None
     seen: set[int] = set()
     while link is not None and link.topic_id not in seen:
         if link.topic_id == topic_id:
             return "This parent topic would create a cycle on the map"
         seen.add(link.topic_id)
         link = _link(db, link.parent_topic_id, domain_id) if link.parent_topic_id else None
-    return None
+    return "A topic inside a branch cannot have topics under it" if in_a_branch else None
 
 
 def _require_map_parent(db: Session, topic_id: int | None, content: dict[str, Any]) -> None:

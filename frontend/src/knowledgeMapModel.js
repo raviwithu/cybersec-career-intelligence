@@ -2,8 +2,8 @@ import { hierarchy, tree } from "d3-hierarchy";
 
 // Pure state helpers for the Security Knowledge Map. The page keeps one immutable state object:
 // nodes by id, loaded child ids per node, parent links and the expanded set.
-// Domains hold sub-domains and topics; a topic holds the Foundations, Security and Common Vulnerabilities branches, unless it is itself in Common Vulnerabilities,
-// and each branch holds smaller topics, to any depth. A topic also holds a group node for each of Learn, Playbook and
+// Domains hold sub-domains and topics; a topic directly under a domain holds the Foundations, Security and Common
+// Vulnerabilities branches, and each branch holds smaller topics, which have no branches of their own. A topic also holds a group node for each of Learn, Playbook and
 // Reference that has published content, and each group's facet nodes open one section in the topic panel.
 
 export const ROOT_ID = "root";
@@ -126,7 +126,7 @@ export function applyTopicChildren(state, topicId, data) {
     return { group, members, node: { id: sectionGroupNodeId(topic.domainId, topic.topicKey, group), type: "section-group", group, label, domainId: topic.domainId, topicKey: topic.topicKey, parentTopicKey: topic.topicKey, topicNodeId: topicId, sectionCount: members.length } };
   }).filter((item) => item.members.length);
   const children = [...branches, ...groups.map((item) => item.node)];
-  // A topic in Common Vulnerabilities has no branches, so with no sections either it would expand to nothing.
+  // A topic inside a branch has no branches of its own, so with no sections either it would expand to nothing.
   let next = withChildren(state, topicId, children.length ? children : [emptyNode(topicId, "No published sections yet")]);
   data.branches.forEach((item, index) => {
     const branch = branches[index];

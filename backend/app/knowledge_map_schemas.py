@@ -78,8 +78,8 @@ class MapPlacement(BaseModel):
 class MapTopicChildren(BaseModel):
     topic_id: int
     domain_id: int
-    # All three in Foundations, Security, Common Vulnerabilities order. A topic inside Common Vulnerabilities has none,
-    # apart from any that already hold topics.
+    # All three in Foundations, Security, Common Vulnerabilities order. A topic inside a branch has none, apart from any
+    # that already hold topics.
     branches: list[MapTopicBranch]
     # What the topic's section nodes can open, in display order. Empty: the topic has no section nodes.
     sections: list[str] = []
