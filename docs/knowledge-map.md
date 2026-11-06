@@ -465,14 +465,32 @@ No new topic can be placed under one: the proposal gets a 409. If a topic alread
 
 ## Branch recommendations
 
-Knowledge Map Management has a **Branch Recommendations** panel. It lists every topic with at least one item in each of Foundations, Security and Common Vulnerabilities. Items still in review count, so a topic can be improved before its branches are published.
+Knowledge Map Management has a **Branch Recommendations** panel. It lists every published topic directly under a domain, whether its branches are filled or empty. A topic inside a branch is not listed, because it has no branches. The numbers after a topic are its items in Foundations, Security and Common Vulnerabilities, counting items still in review.
+
+Every run covers all three branches. An empty branch can take up to four new topics, and a branch with items up to two. Each Common Vulnerabilities item is asked for an `Example:` at design level. If a branch stays empty or an item has no example, the panel's notes say so.
 
 Pick a topic, then connect to one source:
 
 | Source | What it uses | What it asks |
 |---|---|---|
-| RAG knowledge DB | VideoRAG (`VIDEORAG_BASE_URL`, `VIDEORAG_ACCESS_KEY`), one RAG domain chosen in the panel | One question per item, up to 12, and one per branch |
+| RAG knowledge DB | VideoRAG (`VIDEORAG_BASE_URL`, `VIDEORAG_ACCESS_KEY`), one RAG domain or all of them | One question per item, up to 12, and one per branch |
 | Kimi | `KIMI_MODEL` (default `k3.1-pro`) through OpenWebUI | One request for the whole topic |
+| RAG + Kimi | Both | The RAG questions, then one Kimi request that checks the drafts and covers the rest |
+
+With **RAG + Kimi**, RAG drafts whatever it has an answer for, and Kimi gives each draft a verdict. Each item shows the result:
+
+| Badge | Meaning | Proposal `source_type` | References |
+|---|---|---|---|
+| Kimi confirmed | RAG's text, which Kimi accepted | `rag` | RAG (private) and Kimi |
+| Kimi corrected | Kimi's rewrite of the RAG draft | `ai` | RAG (private) and Kimi |
+| Not checked by Kimi | RAG's text. Kimi failed, skipped it, or its correction was unusable | `rag` | RAG (private) |
+| Kimi only, no RAG source | RAG had nothing, so Kimi wrote it | `ai` | Kimi |
+
+The panel picks a RAG domain when the map domain's slug contains its name, which is rare, so it normally starts on **All domains**. That setting searches everything indexed.
+
+A draft Kimi rejects is dropped, and the notes give Kimi's reason. If RAG is down, the run uses Kimi alone. If Kimi fails, the RAG drafts stay, marked not checked. It only fails when neither source produced anything. A run can take up to 8 minutes, so nginx allows 540 seconds on `/api/`.
+
+Kimi's verdict is one model checking another, not a verified source, so references stay `unverified` or `ai_derived`. Reviewers still need to read the text.
 
 Recommendations are returned and not stored. The ones you select go to Knowledge Review, and nothing in this flow can approve or publish:
 
@@ -483,7 +501,7 @@ Recommendations are returned and not stored. The ones you select go to Knowledge
 
 Rules the server enforces:
 
-- RAG answers come from private course material. They are never sent to Kimi, and only title, locator and hash are kept as private references.
+- RAG answers come from private course material, and only title, locator and hash are kept as private references. The RAG and Kimi options keep the two apart. RAG + Kimi sends Kimi, which is remote, the short draft text with its item name and branch. It never sends transcripts, screen text or source names.
 - A RAG answer that is not grounded, or that says its sources do not cover the question, is skipped with a note. The service can mark a refusal as grounded, so its reasons and wording are checked too. Other weak answers are shown with a Weak evidence badge.
 - New topics that overlap anything in the domain are dropped, including other parents' items, because a topic has one place per domain. The match is on shared words, so similar ideas with different names can still get through.
 - Anything naming a CVE is dropped, because CVE content needs a verified source.

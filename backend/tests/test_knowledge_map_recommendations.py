@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 import pytest
 from sqlalchemy import delete, func, select
 
@@ -7,6 +10,7 @@ from app import knowledge_map_recommendations as recommendations
 from app.database import SessionLocal
 from app.models import KnowledgeProposalSource, KnowledgeTopic, KnowledgeTopicProposal, SecurityDomain
 from app.provider_common import ProviderError
+from app.videorag_client import VideoRagClient
 from tests.test_knowledge_contract import ADMIN, approve_and_publish
 from tests.test_knowledge_map import _domain, _place, _remove_created_rows, _topic  # noqa: F401
 
@@ -112,7 +116,7 @@ def test_routes_need_an_administrator(client, filled):
     assert client.post(f"{BASE}/topics/{filled['parent']}/branch-recommendations/submit", json={"domain_id": filled["domain"], "source": "kimi", "items": [_update(filled)]}).status_code in {401, 403}
 
 
-def test_options_list_topics_filled_by_published_and_pending_items(client, filled, rag):
+def test_options_count_published_and_pending_items(client, filled, rag):
     body = client.get(f"{BASE}/branch-recommendations", headers=ADMIN).json()
     topic = next(item for item in body["topics"] if item["topic_id"] == filled["parent"])
     assert topic["counts"] == {"foundations": 1, "security": 1, "vulnerabilities": 1}
@@ -122,17 +126,83 @@ def test_options_list_topics_filled_by_published_and_pending_items(client, fille
     assert [item["slug"] for item in source["domains"]] == ["boot"]
 
 
-def test_a_topic_missing_a_branch_is_not_listed_or_accepted(client, kimi, rag):
+@pytest.fixture
+def empty(client):
+    """A parent topic with nothing in any branch."""
     with SessionLocal() as db:
-        domain = _domain(db, "Partly Filled Domain")
-        parent = _topic(db, "Partly Filled Parent")
-        child = _topic(db, "Only Foundation Item")
+        domain = _domain(db, "Empty Branch Domain")
+        parent = _topic(db, "Empty Branch Parent")
         _place(db, parent, domain)
-        _place(db, child, domain, "foundations", under=parent)
         db.commit()
-        domain_id, parent_id = domain.id, parent.id
-    assert parent_id not in [item["topic_id"] for item in client.get(f"{BASE}/branch-recommendations", headers=ADMIN).json()["topics"]]
-    response = client.post(f"{BASE}/topics/{parent_id}/branch-recommendations", headers=ADMIN, json={"domain_id": domain_id, "source": "kimi"})
+        return {"domain": domain.id, "parent": parent.id}
+
+
+def _addition(branch, name, description="Something new."):
+    return {"branch": branch, "name": name, "description": description, "aliases": []}
+
+
+def test_a_topic_with_empty_branches_is_listed_and_gets_all_three_filled(client, empty, kimi, rag):
+    topic = next(item for item in client.get(f"{BASE}/branch-recommendations", headers=ADMIN).json()["topics"] if item["topic_id"] == empty["parent"])
+    assert topic["counts"] == {"foundations": 0, "security": 0, "vulnerabilities": 0}
+    names = {"foundations": "Alpha Basics", "security": "Bravo Control", "vulnerabilities": "Charlie Weakness"}
+    kimi["reply"] = json.dumps({"updates": [], "additions": [_addition(branch, name, "It matters. Example: a system that trusts it.") for branch, name in names.items()]})
+    response = _ask(client, empty, source="kimi")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert {item["branch"]: item["name"] for item in body["recommendations"]} == names
+    assert body["warnings"] == []
+    assert '"foundations": 4' in kimi["calls"][0]["prompt"]
+    sent = _submit(client, empty, body["recommendations"], source="kimi").json()
+    assert sent["errors"] == []
+    assert {item["status"] for item in sent["proposals"]} == {"review"}
+
+
+def test_an_empty_branch_can_take_more_new_topics_than_a_filled_one(client, filled, kimi):
+    with SessionLocal() as db:
+        parent = _topic(db, "Limit Parent")
+        _place(db, parent, db.get(SecurityDomain, filled["domain"]))
+        db.commit()
+        data = {"domain": filled["domain"], "parent": parent.id}
+    words = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]
+    kimi["reply"] = json.dumps({"updates": [], "additions": [_addition("security", f"{word} Item") for word in words]})
+    assert len(_ask(client, data, source="kimi").json()["recommendations"]) == 4
+    assert len(_ask(client, filled, source="kimi").json()["recommendations"]) == 2
+
+
+def test_a_branch_that_stays_empty_and_a_weakness_with_no_example_are_noted(client, empty, kimi):
+    kimi["reply"] = json.dumps({"updates": [], "additions": [_addition("foundations", "Alpha Basics"), _addition("vulnerabilities", "Charlie Weakness", "No illustration here.")]})
+    warnings = _ask(client, empty, source="kimi").json()["warnings"]
+    assert "Security is still empty: nothing came back for it." in warnings
+    assert "Charlie Weakness has no example." in warnings
+    assert not any("Alpha Basics" in warning for warning in warnings)
+
+
+def test_kimi_and_rag_are_both_asked_for_a_vulnerability_example(client, filled, kimi, rag):
+    _ask(client, filled, source="kimi")
+    assert 'starting "Example:"' in kimi["calls"][0]["prompt"]
+    _ask(client, filled, source="rag", rag_domain="boot")
+    asked = {question for question, _ in rag.asked}
+    assert any("common vulnerabilities" in question and "Example:" in question for question in asked)
+    assert any("Pending Weakness Item" in question and "Example:" in question for question in asked)
+    assert not any("Pending Control Item" in question and "Example:" in question for question in asked)
+
+
+def test_the_example_survives_when_a_rag_answer_is_shortened(client, filled, rag):
+    rag.answers = {"Pending Weakness Item": {"answer": "One. Two. Three. Example: a loader that skips the check.", "grounded": True, "weak": False, "sources": [SOURCE]}}
+    body = _ask(client, filled, source="rag", rag_domain="boot").json()
+    assert body["recommendations"][0]["description"].endswith("Example: a loader that skips the check.")
+
+
+def test_a_topic_inside_a_branch_is_not_listed_or_accepted(client, filled, kimi, rag):
+    topics = client.get(f"{BASE}/branch-recommendations", headers=ADMIN).json()["topics"]
+    assert filled["child"] not in [item["topic_id"] for item in topics]
+    response = client.post(f"{BASE}/topics/{filled['child']}/branch-recommendations", headers=ADMIN, json={"domain_id": filled["domain"], "source": "kimi"})
+    assert response.status_code == 409
+    assert kimi["calls"] == []
+
+
+def test_a_topic_in_another_domain_is_refused(client, filled, empty, kimi):
+    response = client.post(f"{BASE}/topics/{filled['parent']}/branch-recommendations", headers=ADMIN, json={"domain_id": empty["domain"], "source": "kimi"})
     assert response.status_code == 409
     assert kimi["calls"] == []
 
@@ -183,8 +253,21 @@ def test_failures_and_bad_replies_store_nothing(client, filled, kimi, monkeypatc
     assert "429" in response.json()["detail"]
 
 
-def test_rag_needs_a_domain(client, filled, rag):
-    assert _ask(client, filled, source="rag").status_code == 422
+def test_rag_with_no_domain_searches_every_domain(client, filled, rag):
+    rag.answers = {"Pending Control Item": {"answer": "It stops tampering.", "grounded": True, "weak": False, "sources": [SOURCE]}}
+    body = _ask(client, filled, source="rag").json()
+    assert {domain for _, domain in rag.asked} == {None}
+    assert [item["name"] for item in body["recommendations"]] == ["Pending Control Item"]
+    assert body["source_label"] == "RAG knowledge DB (all domains)"
+
+
+def test_the_client_leaves_the_domain_out_to_search_everything(monkeypatch):
+    sent = []
+    client = VideoRagClient(SimpleNamespace(videorag_base_url="http://rag", videorag_access_key="key", videorag_timeout_seconds=1))
+    monkeypatch.setattr(client, "_request", lambda method, path, **kwargs: sent.append(kwargs["json"]) or {})
+    client.ask("Question")
+    client.ask("Question", "boot")
+    assert sent == [{"q": "Question"}, {"q": "Question", "domain": "boot"}]
 
 
 def test_rag_recommendations_keep_private_text_out_and_never_use_kimi(client, filled, rag, kimi):
@@ -320,3 +403,172 @@ def test_a_published_item_becomes_a_reviewable_update_that_changes_nothing_yet(c
 def test_a_cve_cannot_be_submitted_directly(client, filled):
     body = _submit(client, filled, [_update(filled, description="See CVE-2024-12345.")], source="kimi").json()
     assert body["done"] == [] and "CVE" in body["errors"][0]
+
+
+GOOD = {"grounded": True, "weak": False, "sources": [SOURCE]}
+
+
+def _both(client, data, **body):
+    return _ask(client, data, source="both", **{"rag_domain": "boot", **body})
+
+
+def _draft_ids(prompt):
+    drafts = json.loads(prompt[prompt.index("Drafts to verify"):].split(":\n", 1)[1].split("\n\nChild topics", 1)[0])
+    return {item["name"]: item["id"] for item in drafts}
+
+
+def test_both_keeps_private_text_and_source_names_away_from_kimi(client, filled, rag, kimi):
+    rag.answers = {"Pending Control Item": {"answer": "It stops tampering.", **GOOD}}
+    _both(client, filled)
+    prompt = kimi["calls"][0]["prompt"]
+    assert "It stops tampering." in prompt
+    assert "its name is a heading" in prompt
+    assert "PRIVATE" not in prompt
+    assert "Course lesson" not in prompt
+    assert "videorag" not in prompt
+    assert "a" * 64 not in prompt
+
+
+def test_both_applies_kimis_verdict_to_each_draft_and_covers_what_rag_could_not(client, filled, rag, monkeypatch):
+    rag.answers = {
+        "Pending Control Item": {"answer": "It stops tampering.", **GOOD},
+        "Pending Weakness Item": {"answer": "It is harmless. Example: none.", **GOOD},
+        "core concepts": {"answer": "Fresh Concept: Worth knowing.\nWrong Concept: Not true.", **GOOD},
+    }
+    state = {}
+
+    def complete(provider, model_id, system, prompt, timeout=None):
+        state["prompt"] = prompt
+        ids = _draft_ids(prompt)
+        return json.dumps({
+            "checks": [
+                {"id": ids["Pending Control Item"], "verdict": "confirmed", "note": "Accurate."},
+                {"id": ids["Pending Weakness Item"], "verdict": "corrected", "description": "It is a real weakness. Example: a loader that skips the check.", "note": "The draft understated it."},
+                {"id": ids["Fresh Concept"], "verdict": "confirmed"},
+                {"id": ids["Wrong Concept"], "verdict": "rejected", "note": "This is false."},
+            ],
+            "updates": [{"ref": f"topic:{filled['child']}", "description": "Written by Kimi."}],
+            "additions": [_addition("security", "Kimi Safeguard")],
+        })
+
+    monkeypatch.setattr(recommendations.providers, "complete_selected", complete)
+    body = _both(client, filled).json()
+    items = {item["name"]: item for item in body["recommendations"]}
+    assert items["Pending Control Item"]["verification"] == "confirmed"
+    assert items["Pending Control Item"]["description"] == "It stops tampering."
+    assert items["Pending Control Item"]["sources"]
+    assert items["Pending Weakness Item"]["verification"] == "corrected"
+    assert items["Pending Weakness Item"]["description"].startswith("It is a real weakness.")
+    assert items["Pending Weakness Item"]["verification_note"] == "The draft understated it."
+    assert items["Pending Weakness Item"]["sources"]
+    assert "Wrong Concept" not in items
+    assert "Wrong Concept was dropped: Kimi rejected it (This is false.)." in body["warnings"]
+    assert items["Published Foundation Item"]["verification"] == "kimi_only"
+    assert items["Published Foundation Item"]["sources"] == []
+    assert items["Kimi Safeguard"]["verification"] == "kimi_only"
+    assert body["source_label"].startswith("RAG knowledge DB (boot) + Kimi")
+    # Items RAG drafted are checked, not rewritten a second time.
+    revise = state["prompt"].split("Child topics you may revise:", 1)[1].split("Already covered", 1)[0]
+    assert "Pending Control Item" not in revise and "Published Foundation Item" in revise
+
+
+def test_both_frees_the_slot_of_a_rejected_new_topic(client, filled, rag, monkeypatch):
+    rag.answers = {"core concepts": {"answer": "Wrong One: Bad.\nWrong Two: Bad.", **GOOD}}
+
+    def complete(provider, model_id, system, prompt, timeout=None):
+        ids = _draft_ids(prompt)
+        return json.dumps({"checks": [{"id": value, "verdict": "rejected"} for value in ids.values()], "additions": [_addition("foundations", "Replacement Concept")]})
+
+    monkeypatch.setattr(recommendations.providers, "complete_selected", complete)
+    body = _both(client, filled).json()
+    assert [item["name"] for item in body["recommendations"]] == ["Replacement Concept"]
+
+
+def test_both_with_no_rag_domain_still_uses_rag(client, filled, rag, kimi):
+    rag.answers = {"Pending Control Item": {"answer": "It stops tampering.", **GOOD}}
+    body = _ask(client, filled, source="both").json()
+    assert {domain for _, domain in rag.asked} == {None}
+    assert "It stops tampering." in kimi["calls"][0]["prompt"]
+    assert body["source_label"].startswith("RAG knowledge DB (all domains) + Kimi")
+
+
+def test_both_uses_kimi_alone_when_rag_is_down(client, filled, kimi, monkeypatch):
+    kimi["reply"] = json.dumps({"additions": [_addition("security", "Kimi Safeguard")]})
+
+    class Down(FakeRag):
+        def ask(self, question, domain):
+            raise ProviderError("videorag", "The RAG knowledge DB could not be reached")
+
+    monkeypatch.setattr(recommendations, "videorag", Down())
+    body = _both(client, filled).json()
+    assert body["recommendations"][0]["verification"] == "kimi_only"
+    assert any(warning.startswith("RAG was not used") for warning in body["warnings"])
+
+
+def test_both_keeps_rag_drafts_marked_unchecked_when_kimi_fails(client, filled, rag, monkeypatch):
+    rag.answers = {"Pending Control Item": {"answer": "It stops tampering.", **GOOD}}
+
+    def down(*args, **kwargs):
+        raise ProviderError("openwebui", "OpenWebUI request failed with HTTP 429")
+
+    monkeypatch.setattr(recommendations.providers, "complete_selected", down)
+    response = _both(client, filled)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [(item["name"], item["verification"]) for item in body["recommendations"]] == [("Pending Control Item", "unchecked")]
+    assert any("marked not checked" in warning for warning in body["warnings"])
+
+
+def test_both_fails_when_neither_source_produced_anything(client, filled, rag, monkeypatch):
+    def down(*args, **kwargs):
+        raise ProviderError("openwebui", "OpenWebUI request failed with HTTP 429")
+
+    monkeypatch.setattr(recommendations.providers, "complete_selected", down)
+    assert _both(client, filled).status_code == 503
+
+
+def test_both_does_not_count_a_skipped_or_unusable_check_as_verified(client, filled, rag, monkeypatch):
+    rag.answers = {"Pending Control Item": {"answer": "It stops tampering.", **GOOD}, "Pending Weakness Item": {"answer": "Plain answer.", **GOOD}}
+
+    def complete(provider, model_id, system, prompt, timeout=None):
+        ids = _draft_ids(prompt)
+        return json.dumps({"checks": [{"id": ids["Pending Weakness Item"], "verdict": "corrected", "description": "Seen in CVE-2024-12345."}, {"id": "draft-99", "verdict": "confirmed"}]})
+
+    monkeypatch.setattr(recommendations.providers, "complete_selected", complete)
+    body = _both(client, filled).json()
+    items = {item["name"]: item for item in body["recommendations"]}
+    assert items["Pending Control Item"]["verification"] == "unchecked"
+    assert items["Pending Weakness Item"]["verification"] == "unchecked"
+    assert items["Pending Weakness Item"]["description"] == "Plain answer."
+    assert "Kimi did not check Pending Control Item." in body["warnings"]
+    assert any("correction to Pending Weakness Item was not used" in warning for warning in body["warnings"])
+
+
+def test_both_stores_who_wrote_the_text_and_keeps_rag_references_private(client, filled):
+    source = {"title": "Course lesson 4.mp4", "locator": "1 min 15 s", "document_identifier": "videorag:transcript:12", "content_hash": "a" * 64}
+    items = [
+        {"kind": "add_topic", "branch": "security", "name": "Confirmed Item", "description": "Text.", "sources": [source], "verification": "confirmed", "verification_note": "Accurate."},
+        {"kind": "add_topic", "branch": "security", "name": "Corrected Item", "description": "Text.", "sources": [source], "verification": "corrected"},
+        {"kind": "add_topic", "branch": "foundations", "name": "Unchecked Item", "description": "Text.", "sources": [source], "verification": "unchecked"},
+        {"kind": "add_topic", "branch": "foundations", "name": "Gap Item", "description": "Text.", "verification": "kimi_only"},
+    ]
+    body = _submit(client, filled, items, source="both", rag_domain="boot").json()
+    assert body["errors"] == []
+    assert [item["source_type"] for item in body["proposals"]] == ["rag", "ai", "rag", "ai"]
+    assert {item["status"] for item in body["proposals"]} == {"review"}
+    assert "confirmed by Kimi" in body["proposals"][0]["change_reason"] and "Accurate." in body["proposals"][0]["change_reason"]
+    with SessionLocal() as db:
+        rows = [db.scalars(select(KnowledgeProposalSource).where(KnowledgeProposalSource.proposal_id == item["id"])).all() for item in body["proposals"]]
+    assert [sorted(row.source_type for row in group) for group in rows] == [["ai", "rag"], ["ai", "rag"], ["rag"], ["ai"]]
+    assert all(row.is_private for group in rows for row in group if row.source_type == "rag")
+    assert all(row.verification_status != "verified" for group in rows for row in group)
+
+
+def test_a_pending_item_revised_by_both_is_marked_as_kimis_wording_when_corrected(client, filled):
+    body = _submit(client, filled, [_update(filled, verification="corrected")], source="both", rag_domain="boot").json()
+    assert body["errors"] == []
+    assert (body["proposals"][0]["source_type"], body["proposals"][0]["status"]) == ("ai", "review")
+
+
+def test_both_items_must_say_how_they_were_checked(client, filled):
+    assert _submit(client, filled, [_update(filled)], source="both", rag_domain="boot").status_code == 422
