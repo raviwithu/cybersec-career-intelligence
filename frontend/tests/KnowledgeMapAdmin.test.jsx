@@ -72,6 +72,7 @@ function mockApi() {
     if (options.method === "POST") { posted.push({ path, ...JSON.parse(options.body) }); return json({ id: 1, status: "approved", version: 2 }); }
     if (path === "/knowledge/admin/topics") return json([adminTopic(oauth, { related_topics: [{ id: 7, topic_key: "jwt", name: "JSON Web Tokens", relationship_type: "dependency", direction: "outgoing", label: "Depends on" }] }), adminTopic(jwt, { aliases: ["JWT"] })]);
     if (path === "/domains") return json(nest(domains));
+    if (path === "/knowledge/admin/branch-recommendations") return json({ sources: [], topics: [] });
     if (path === "/knowledge/admin/findings") return json([{ id: 31, candidate_name: "Experience securing cloud-native APIs", finding_type: "practical-capability", domain: "Cloud API Security", status: "published" }]);
     if (path === "/levels") return json(LEVELS);
     if (path === "/industries") return json([]);

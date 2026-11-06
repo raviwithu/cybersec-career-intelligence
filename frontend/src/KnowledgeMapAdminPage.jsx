@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearAdminSessionKey, createKnowledgeProposal, createTaxonomyEntry, deleteTaxonomyEntry, fetchDomains, fetchIndustries, fetchKnowledgeAdminTopics, fetchKnowledgeContractHistory, fetchKnowledgeMapChildren, fetchKnowledgeMapTopicChildren, fetchKnowledgeReviewQueue, fetchLevels, getAdminSessionKey, setAdminSessionKey, setTaxonomyActive, updateTaxonomyEntry } from "./api";
 import { Badge, EmptyState, ErrorState, Loading, PageHeader } from "./components";
 import KnowledgeMapPage from "./KnowledgeMapPage";
+import KnowledgeMapRecommendations from "./KnowledgeMapRecommendations";
 import KnowledgeMapSuggestions from "./KnowledgeMapSuggestions";
 import KnowledgeSectionEditor from "./KnowledgeSectionEditor";
 import { MAP_ACTION_LABELS } from "./knowledgeMapActions";
@@ -498,6 +499,7 @@ export default function KnowledgeMapAdminPage({ onNavigate }) {
         </section>
       </div>
       <KnowledgeMapSuggestions adminKey={adminKey} onSubmitted={load} />
+      <KnowledgeMapRecommendations adminKey={adminKey} onSubmitted={load} />
       <p className="muted-copy kma-hint">Select a domain, topic or branch on the map to propose a change for it. “Pending” marks items with open proposals; the public map never shows these badges.</p>
       <KnowledgeMapPage onNavigate={onNavigate} admin={admin} />
     </>}

@@ -13,6 +13,7 @@ from .database import get_db
 from .knowledge_auth import enforce_proposal_rate_limit, require_proposal_submitter
 from .knowledge_contract_schemas import ApprovedFindingSummary, KnowledgeCoverageResponse, KnowledgeMapPreviewResponse, KnowledgeMapSuggestionSubmitResponse, KnowledgeMapSuggestionsResponse, KnowledgeProposalCreate, KnowledgeProposalPage, KnowledgeProposalPublish, KnowledgeProposalResponse, KnowledgeProposalReview, KnowledgePublicTopicResponse
 from .knowledge_contract_service import admin_topic, coverage, get_proposal, is_map_proposal, list_proposals, map_preview, topic_history, list_public_topics, proposal_response, public_topic, publish_proposal, resolve_topic, create_proposal, review_proposal
+from .knowledge_map_recommendations import RecommendationRequest, RecommendationSubmission, recommend, recommendation_options, submit_recommendations
 from .knowledge_map_suggestions import Suggestion, approved_findings, submit_suggestions, suggest
 from .knowledge_topic_schemas import TopicHistoryResponse
 from .models import KnowledgeTopic, KnowledgeTopicProposal
@@ -166,3 +167,20 @@ def create_map_suggestions(finding_id: int, db: Session = Depends(get_db)) -> Kn
 def submit_map_suggestions(finding_id: int, payload: SuggestionSubmission, actor: str = Depends(require_admin), db: Session = Depends(get_db)) -> KnowledgeMapSuggestionSubmitResponse:
     result = submit_suggestions(db, finding_id, payload.suggestions, actor)
     return KnowledgeMapSuggestionSubmitResponse(created=[KnowledgeProposalResponse.model_validate(proposal_response(item)) for item in result["created"]], errors=result["errors"])
+
+
+@router.get("/admin/branch-recommendations", dependencies=[Depends(require_admin)])
+def get_recommendation_options(db: Session = Depends(get_db)) -> dict:
+    return recommendation_options(db)
+
+
+@router.post("/admin/topics/{topic_id}/branch-recommendations", dependencies=[Depends(require_admin)])
+def create_branch_recommendations(topic_id: int, payload: RecommendationRequest, db: Session = Depends(get_db)) -> dict:
+    # Asks the chosen source and returns recommendations only; nothing is stored.
+    return recommend(db, topic_id, payload)
+
+
+@router.post("/admin/topics/{topic_id}/branch-recommendations/submit", dependencies=[Depends(require_admin)])
+def submit_branch_recommendations(topic_id: int, payload: RecommendationSubmission, actor: str = Depends(require_admin), db: Session = Depends(get_db)) -> dict:
+    result = submit_recommendations(db, topic_id, payload, actor)
+    return {"proposals": [KnowledgeProposalResponse.model_validate(proposal_response(item)).model_dump(mode="json") for item in result["proposals"]], "done": result["done"], "errors": result["errors"]}

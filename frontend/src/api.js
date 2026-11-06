@@ -83,6 +83,9 @@ export function fetchKnowledgeAdminTopics(adminKey) { return request("/api/v1/kn
 export function fetchApprovedFindings(adminKey) { return request("/api/v1/knowledge/admin/findings", { headers: adminHeaders(adminKey) }); }
 export function requestMapSuggestions(findingId, adminKey) { return request(`/api/v1/knowledge/admin/findings/${findingId}/map-suggestions`, { method: "POST", headers: adminHeaders(adminKey) }); }
 export function submitMapSuggestions(findingId, suggestions, adminKey) { return request(`/api/v1/knowledge/admin/findings/${findingId}/map-suggestions/submit`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify({ suggestions }) }); }
+export function fetchRecommendationOptions(adminKey) { return request("/api/v1/knowledge/admin/branch-recommendations", { headers: adminHeaders(adminKey) }); }
+export function requestBranchRecommendations(topicId, payload, adminKey) { return request(`/api/v1/knowledge/admin/topics/${topicId}/branch-recommendations`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
+export function submitBranchRecommendations(topicId, payload, adminKey) { return request(`/api/v1/knowledge/admin/topics/${topicId}/branch-recommendations/submit`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }
 export function fetchKnowledgeMapPreview(id, adminKey) { return request(`/api/v1/knowledge/admin/proposals/${id}/map-preview`, { headers: adminHeaders(adminKey) }); }
 export function fetchKnowledgeContractHistory(topicId, adminKey) { return request(`/api/v1/knowledge/admin/topics/${topicId}/history`, { headers: adminHeaders(adminKey) }); }
 export function publishKnowledgeProposal(id, payload, adminKey) { return request(`/api/v1/knowledge/admin/proposals/${id}/publish`, { method: "POST", headers: adminHeaders(adminKey), body: JSON.stringify(payload) }); }

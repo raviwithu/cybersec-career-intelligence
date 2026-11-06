@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     openwebui_base_url: str | None = None
     openwebui_api_key: str | None = None
     openwebui_timeout_seconds: float | None = None
+    videorag_base_url: str | None = None
+    videorag_access_key: str | None = None
+    videorag_timeout_seconds: float = 120.0
+    kimi_model: str = "k3.1-pro"
+    recommendation_timeout_seconds: float = 240.0
     ai_provider: str = "ollama"
     ai_model: str | None = None
     ollama_timeout_seconds: float = 90.0
