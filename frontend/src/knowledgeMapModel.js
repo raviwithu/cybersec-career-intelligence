@@ -3,8 +3,8 @@ import { hierarchy, tree } from "d3-hierarchy";
 // Pure state helpers for the Security Knowledge Map. The page keeps one immutable state object:
 // nodes by id, loaded child ids per node, parent links and the expanded set.
 // Domains hold sub-domains and topics; every topic holds the Foundations, Security and Common Vulnerabilities branches,
-// and each branch holds smaller topics, to any depth. A topic with published review sections also holds a Playbook node,
-// whose facet nodes each open one section in the topic panel.
+// and each branch holds smaller topics, to any depth. A topic also holds a group node for each of Learn, Playbook and
+// Reference that has published content, and each group's facet nodes open one section in the topic panel.
 
 export const ROOT_ID = "root";
 export const DOMAIN_PALETTE_SIZE = 6;
@@ -13,7 +13,14 @@ export const BRANCHES = {
   security: { label: "Security", icon: "◆" },
   vulnerabilities: { label: "Common Vulnerabilities", icon: "⚠" },
 };
-// The Playbook node's sections, in display order; the keys are section types.
+// Each group's sections, in display order; the keys are the topic panel's tab ids.
+const LEARN_SECTIONS = {
+  overview: { label: "Overview", icon: "◎" },
+  how_it_works: { label: "How It Works", icon: "⚙" },
+  attack_surfaces: { label: "Attack Surface", icon: "⚠" },
+  architecture: { label: "Architecture", icon: "▦" },
+  real_world_examples: { label: "Real-World CVEs", icon: "◆" },
+};
 export const PLAYBOOK_SECTIONS = {
   code_examples: { label: "Example Code", icon: "‹›" },
   mitigations: { label: "Mitigations", icon: "✓" },
@@ -23,16 +30,35 @@ export const PLAYBOOK_SECTIONS = {
   ai_cicd_skill: { label: "CI/CD Scan", icon: "⚙" },
   ai_dynamic_skill: { label: "Dynamic Analysis", icon: "◉" },
 };
+const REFERENCE_SECTIONS = {
+  career_levels: { label: "Career Levels", icon: "⇢" },
+  related: { label: "Related Topics", icon: "⇄" },
+  references: { label: "References", icon: "▤" },
+};
+export const SECTION_GROUPS = {
+  learn: { label: "Learn", sections: LEARN_SECTIONS },
+  playbook: { label: "Playbook", sections: PLAYBOOK_SECTIONS },
+  reference: { label: "Reference", sections: REFERENCE_SECTIONS },
+};
+
+export function groupOfSection(section) {
+  return Object.keys(SECTION_GROUPS).find((group) => SECTION_GROUPS[group].sections[section]) || null;
+}
+
+export function sectionInfo(section) {
+  return SECTION_GROUPS[groupOfSection(section)]?.sections[section];
+}
+
 export const NODE_WIDTH = 260;
 const NODE_ROW_GAP = 52;
 const NODE_COLUMN_GAP = 310;
-const EXPANDABLE_TYPES = new Set(["root", "domain", "child-domain", "topic", "branch", "playbook"]);
+const EXPANDABLE_TYPES = new Set(["root", "domain", "child-domain", "topic", "branch", "section-group"]);
 
 export const domainNodeId = (domainId) => `domain:${domainId}`;
 // A topic appears at most once per domain, so the domain and topic key identify its node.
 export const topicNodeId = (domainId, topicKey) => `topic:${domainId}:${topicKey}`;
 export const branchNodeId = (domainId, topicKey, branch) => `branch:${domainId}:${topicKey}:${branch}`;
-export const playbookNodeId = (domainId, topicKey) => `playbook:${domainId}:${topicKey}`;
+export const sectionGroupNodeId = (domainId, topicKey, group) => `group:${domainId}:${topicKey}:${group}`;
 export const facetNodeId = (domainId, topicKey, section) => `facet:${domainId}:${topicKey}:${section}`;
 const emptyNodeId = (parentId) => `empty:${parentId}`;
 
@@ -51,7 +77,7 @@ export function isExpandable(node) {
   return Boolean(node) && EXPANDABLE_TYPES.has(node.type);
 }
 
-// Topics and their playbook facets both open the wide topic panel.
+// Topics and their section facets both open the wide topic panel.
 export function opensTopicPanel(node) {
   return node?.type === "topic" || node?.type === "facet";
 }
@@ -94,15 +120,20 @@ export function applyDomainChildren(state, domainId, data) {
 export function applyTopicChildren(state, topicId, data) {
   const topic = state.nodes[topicId];
   const branches = data.branches.map((item) => ({ id: branchNodeId(topic.domainId, topic.topicKey, item.branch), type: "branch", label: item.label, branch: item.branch, domainId: topic.domainId, parentTopicId: topic.topicId, parentTopicKey: topic.topicKey, topicCount: item.topic_count, palette: topic.palette }));
-  const sections = (data.playbook_sections || []).filter((section) => PLAYBOOK_SECTIONS[section]);
-  const playbook = sections.length ? { id: playbookNodeId(topic.domainId, topic.topicKey), type: "playbook", label: "Playbook", domainId: topic.domainId, topicKey: topic.topicKey, parentTopicKey: topic.topicKey, topicNodeId: topicId, sectionCount: sections.length } : null;
-  let next = withChildren(state, topicId, playbook ? [...branches, playbook] : branches);
+  const available = new Set(data.sections || []);
+  const groups = Object.entries(SECTION_GROUPS).map(([group, { label, sections }]) => {
+    const members = Object.keys(sections).filter((section) => available.has(section));
+    return { group, members, node: { id: sectionGroupNodeId(topic.domainId, topic.topicKey, group), type: "section-group", group, label, domainId: topic.domainId, topicKey: topic.topicKey, parentTopicKey: topic.topicKey, topicNodeId: topicId, sectionCount: members.length } };
+  }).filter((item) => item.members.length);
+  let next = withChildren(state, topicId, [...branches, ...groups.map((item) => item.node)]);
   data.branches.forEach((item, index) => {
     const branch = branches[index];
     const topics = item.items.map((child) => topicNode(branch, child));
     next = withChildren(next, branch.id, topics.length ? topics : [emptyNode(branch.id)]);
   });
-  if (playbook) next = withChildren(next, playbook.id, sections.map((section) => ({ id: facetNodeId(topic.domainId, topic.topicKey, section), type: "facet", label: PLAYBOOK_SECTIONS[section].label, section, domainId: topic.domainId, topicKey: topic.topicKey, topicNodeId: topicId })));
+  groups.forEach(({ group, members, node }) => {
+    next = withChildren(next, node.id, members.map((section) => ({ id: facetNodeId(topic.domainId, topic.topicKey, section), type: "facet", label: sectionInfo(section).label, section, group, domainId: topic.domainId, topicKey: topic.topicKey, topicNodeId: topicId })));
+  });
   return next;
 }
 

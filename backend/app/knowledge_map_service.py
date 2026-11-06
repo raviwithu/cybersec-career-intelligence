@@ -7,11 +7,13 @@ from fastapi import HTTPException
 from sqlalchemy import String, case, cast, func, select
 from sqlalchemy.orm import Session
 
-from .knowledge_contract_schemas import PLAYBOOK_ONLY_SECTION_TYPES, PLAYBOOK_SECTION_TYPES
-from .models import MAP_BRANCHES, KnowledgeTopic, KnowledgeTopicDomain, KnowledgeTopicSection, KnowledgeTopicSectionVersion, SecurityDomain
+from .knowledge_contract_schemas import PLAYBOOK_SECTION_TYPES
+from .models import MAP_BRANCHES, CareerLevel, KnowledgeTopic, KnowledgeTopicDomain, KnowledgeTopicLevel, KnowledgeTopicRelationship, KnowledgeTopicSection, KnowledgeTopicSectionVersion, SecurityDomain
 
 ROOT_NAME = "CyberSec Career Intelligence"
 SHORT_DESCRIPTION_LENGTH = 200
+# Everything a topic can show as a node on the map, in display order. career_levels and related are not section types.
+MAP_SECTIONS = ("overview", "how_it_works", "attack_surfaces", "architecture", "real_world_examples", *PLAYBOOK_SECTION_TYPES, "career_levels", "related", "references")
 
 
 def _published_topic():
@@ -161,14 +163,25 @@ def _topic_items(db: Session, reachable: dict[int, SecurityDomain], layout: dict
     } for topic, item in zip(topics, members)]
 
 
-def _playbook_sections(db: Session, topic_id: int) -> list[str]:
-    # Content decides, not the branch: vulnerabilities can sit directly under a domain, where placements have no branch.
-    published = set(db.scalars(select(KnowledgeTopicSection.section_type).where(
-        KnowledgeTopicSection.topic_id == topic_id, KnowledgeTopicSection.section_type.in_(PLAYBOOK_SECTION_TYPES), KnowledgeTopicSection.status == "published",
+def _map_sections(db: Session, topic_id: int) -> list[str]:
+    """What a topic's section nodes can open: its published sections, plus career levels and related topics, which live in their own tables."""
+    rows = dict(db.execute(select(KnowledgeTopicSection.section_type, KnowledgeTopicSection.published_content).where(
+        KnowledgeTopicSection.topic_id == topic_id, KnowledgeTopicSection.section_type.in_(MAP_SECTIONS + ("career_level_guidance",)), KnowledgeTopicSection.status == "published",
     )).all())
-    if published.isdisjoint(PLAYBOOK_ONLY_SECTION_TYPES):
-        return []
-    return [section_type for section_type in PLAYBOOK_SECTION_TYPES if section_type in published]
+    available = set(rows) - {"career_level_guidance"}
+    # The panel only offers an architecture tab when there is a diagram to show.
+    if not (rows.get("architecture") or {}).get("diagrams"):
+        available.discard("architecture")
+    level = db.scalar(select(KnowledgeTopicLevel.id).join(CareerLevel, CareerLevel.id == KnowledgeTopicLevel.career_level_id).where(KnowledgeTopicLevel.topic_id == topic_id, CareerLevel.is_active.is_(True)).limit(1))
+    if level is not None or "career_level_guidance" in rows:
+        available.add("career_levels")
+    other = case((KnowledgeTopicRelationship.source_topic_id == topic_id, KnowledgeTopicRelationship.target_topic_id), else_=KnowledgeTopicRelationship.source_topic_id)
+    related = db.scalar(select(KnowledgeTopicRelationship.id).join(KnowledgeTopic, KnowledgeTopic.id == other).where(
+        (KnowledgeTopicRelationship.source_topic_id == topic_id) | (KnowledgeTopicRelationship.target_topic_id == topic_id), KnowledgeTopic.id != topic_id, *_published_topic(),
+    ).limit(1))
+    if related is not None:
+        available.add("related")
+    return [section for section in MAP_SECTIONS if section in available]
 
 
 def topic_children(db: Session, domain_id: int, topic_id: int) -> dict[str, Any]:
@@ -183,7 +196,7 @@ def topic_children(db: Session, domain_id: int, topic_id: int) -> dict[str, Any]
     for branch, label in MAP_BRANCHES.items():
         members = slot_members(layout, topic_id, branch)
         branches.append({"branch": branch, "label": label, "topic_count": len(members), "items": _topic_items(db, reachable, layout, members)})
-    return {"topic_id": topic_id, "domain_id": domain_id, "branches": branches, "playbook_sections": _playbook_sections(db, topic_id)}
+    return {"topic_id": topic_id, "domain_id": domain_id, "branches": branches, "sections": _map_sections(db, topic_id)}
 
 
 def _domain_path(domain: SecurityDomain, reachable: dict[int, SecurityDomain]) -> list[dict[str, Any]]:

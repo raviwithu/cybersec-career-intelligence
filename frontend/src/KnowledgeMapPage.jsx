@@ -4,7 +4,7 @@ import { fetchKnowledgeContractTopic, fetchKnowledgeMapChildren, fetchKnowledgeM
 import { EmptyState, ErrorState, Loading, PageHeader } from "./components";
 import KnowledgeMapTopicPanel from "./KnowledgeMapTopicPanel";
 import KnowledgeMapTree from "./KnowledgeMapTree";
-import { BRANCHES, PLAYBOOK_SECTIONS, ROOT_ID, applyDomainChildren, applyRoot, applyTopicChildren, branchNodeId, collapse, collapseAll, domainNodeId, expand, facetNodeId, initialMapState, isExpandable, layoutTree, opensTopicPanel, pathTo, playbookNodeId, placementLabel, topicNodeId, visibleAncestor, visibleRows, visibleTree } from "./knowledgeMapModel";
+import { BRANCHES, ROOT_ID, applyDomainChildren, applyRoot, applyTopicChildren, branchNodeId, collapse, collapseAll, domainNodeId, expand, facetNodeId, groupOfSection, initialMapState, isExpandable, layoutTree, opensTopicPanel, pathTo, placementLabel, sectionGroupNodeId, topicNodeId, visibleAncestor, visibleRows, visibleTree } from "./knowledgeMapModel";
 
 // The graph library is only downloaded when the graph view is shown.
 const KnowledgeMapGraph = lazy(() => import("./KnowledgeMapGraph"));
@@ -57,11 +57,11 @@ function NodeDetails({ node, state, placements, onReveal, onSelectTopic, onSelec
       onSectionChange={(section) => onSectionChange(topic, section)}
       onNavigate={onNavigate} />;
   }
-  if (node.type === "playbook") return <>
-    <p className="eyebrow">PLAYBOOK OF {state.nodes[node.topicNodeId]?.label}</p>
+  if (node.type === "section-group") return <>
+    <p className="eyebrow">{node.label.toUpperCase()} OF {state.nodes[node.topicNodeId]?.label}</p>
     <h2><span aria-hidden="true">▣ </span>{node.label}</h2>
-    <p className="km-details-copy">{node.sectionCount} published {node.sectionCount === 1 ? "section" : "sections"} for reviewing this vulnerability.</p>
-    <ul className="km-placement-list">{(state.children[node.id] || []).map((id) => <li key={id}><button type="button" className="text-link" onClick={() => onSelectNode(id)}>{PLAYBOOK_SECTIONS[state.nodes[id].section]?.label}</button></li>)}</ul>
+    <p className="km-details-copy">{node.sectionCount} published {node.sectionCount === 1 ? "section" : "sections"}. Select one to open it in the topic panel.</p>
+    <ul className="km-placement-list">{(state.children[node.id] || []).map((id) => <li key={id}><button type="button" className="text-link" onClick={() => onSelectNode(id)}>{state.nodes[id].label}</button></li>)}</ul>
   </>;
   if (node.type === "branch") return <>
     <p className="eyebrow">BRANCH OF {state.nodes[state.parents[node.id]]?.label}</p>
@@ -120,8 +120,8 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
     if (fresh && id !== ROOT_ID && !isExpandable(node)) return Promise.resolve(false);
     if (inflight.current[id]) return inflight.current[id];
     setNodeStatus(id, "loading");
-    // A branch's topics and a playbook's sections arrive with their topic, so both reload through it.
-    if (node?.type === "branch" || node?.type === "playbook") return loadChildren(topicNodeId(node.domainId, node.parentTopicKey), { fresh });
+    // A branch's topics and a group's sections arrive with their topic, so both reload through it.
+    if (node?.type === "branch" || node?.type === "section-group") return loadChildren(topicNodeId(node.domainId, node.parentTopicKey), { fresh });
     const request = id === ROOT_ID ? fetchKnowledgeMapRoot({ fresh }).then((data) => update((value) => applyRoot(value, data)))
       : node.type === "topic" ? fetchKnowledgeMapTopicChildren(node.domainId, node.topicId, { fresh }).then((data) => update((value) => applyTopicChildren(value, id, data)))
         : fetchKnowledgeMapChildren(node.domainId, { fresh }).then((data) => update((value) => applyDomainChildren(value, id, data)));
@@ -175,16 +175,16 @@ export default function KnowledgeMapPage({ onNavigate, admin = null }) {
     setNotice("");
     const facetId = facetNodeId(leaf.id, topic.topic_key, section);
     if (section && (await loadChildren(targetId)) && stateRef.current.nodes[facetId]) {
-      update((value) => expand(value, [targetId, playbookNodeId(leaf.id, topic.topic_key)]));
+      update((value) => expand(value, [targetId, sectionGroupNodeId(leaf.id, topic.topic_key, groupOfSection(section))]));
       selectNode(facetId, true);
     } else selectNode(targetId, true);
   }, [loadChildren, update, selectNode]);
 
-  // A panel tab follows the map: its facet when the Playbook is open, otherwise the topic.
+  // A panel tab follows the map: its facet when that group is open, otherwise the topic.
   const showSection = useCallback((topic, section) => {
     const { nodes, expanded } = stateRef.current;
     const facetId = facetNodeId(topic.domainId, topic.topicKey, section);
-    selectNode(nodes[facetId] && expanded[topic.id] && expanded[playbookNodeId(topic.domainId, topic.topicKey)] ? facetId : topic.id);
+    selectNode(nodes[facetId] && expanded[topic.id] && expanded[sectionGroupNodeId(topic.domainId, topic.topicKey, groupOfSection(section))] ? facetId : topic.id);
   }, [selectNode]);
 
   const openTopicKey = useCallback(async (topicKey, section = "") => {

@@ -82,7 +82,7 @@ export default function KnowledgeMapTopicPanel({ node, activeSection, onSectionC
   const tabRefs = useRef({});
   const baseId = useId();
 
-  // A playbook facet selected on the map opens its section here.
+  // A section facet selected on the map opens its tab here.
   useEffect(() => { if (activeSection) setTab(activeSection); }, [activeSection]);
 
   function chooseTab(id) {
