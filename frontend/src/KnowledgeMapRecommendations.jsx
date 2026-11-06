@@ -4,12 +4,14 @@ import { fetchRecommendationOptions, requestBranchRecommendations, submitBranchR
 import { Badge, ErrorState, Loading } from "./components";
 import { BRANCHES } from "./knowledgeMapModel";
 
-// Recommendations for topics whose three branches are all filled, from the RAG knowledge DB or Kimi. Nothing is stored
-// until the administrator sends the selected ones to review, and nothing here can approve or publish.
+// Recommendations for the three branches of any topic directly under a domain, filled or empty, from the RAG knowledge
+// DB, Kimi, or RAG checked by Kimi. Nothing is stored until the administrator sends the selected ones to review, and
+// nothing here can approve or publish.
 
 const KIND = { update_description: "Update description", add_topic: "New topic" };
 const STATUS = { connected: "Connected", unavailable: "Unavailable", unconfigured: "Not configured" };
-const SUBMIT_KEYS = ["kind", "ref", "expected_version", "branch", "name", "current_description", "description", "aliases", "weak", "sources"];
+const VERIFICATION = { confirmed: "Kimi confirmed", corrected: "Kimi corrected", unchecked: "Not checked by Kimi", kimi_only: "Kimi only, no RAG source" };
+const SUBMIT_KEYS = ["kind", "ref", "expected_version", "branch", "name", "current_description", "description", "aliases", "weak", "sources", "verification", "verification_note"];
 
 const topicKey = (topic) => `${topic.domain_id}:${topic.topic_id}`;
 const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -33,7 +35,7 @@ export default function KnowledgeMapRecommendations({ adminKey, onSubmitted }) {
 
   const topic = options.topics.find((item) => topicKey(item) === chosen);
   const rag = options.sources.find((item) => item.id === "rag");
-  const ready = topic && options.sources.find((item) => item.id === source)?.status === "connected" && (source !== "rag" || ragDomain);
+  const ready = topic && options.sources.find((item) => item.id === source)?.status === "connected";
 
   function clear() { setResult(null); setSelected([]); setError(null); setNotice(""); }
   function chooseTopic(value) {
@@ -43,7 +45,8 @@ export default function KnowledgeMapRecommendations({ adminKey, onSubmitted }) {
   }
   function chooseSource(value) { clear(); setSource(value); }
 
-  const request = () => ({ domain_id: topic.domain_id, source, ...(source === "rag" ? { rag_domain: ragDomain } : {}) });
+  const usesRag = source === "rag" || (source === "both" && rag?.status === "connected");
+  const request = () => ({ domain_id: topic.domain_id, source, ...(usesRag && ragDomain ? { rag_domain: ragDomain } : {}) });
 
   async function ask() {
     clear();
@@ -69,9 +72,9 @@ export default function KnowledgeMapRecommendations({ adminKey, onSubmitted }) {
 
   return <section className="panel kma-suggestions" aria-label="Branch recommendations">
     <p className="eyebrow">BRANCH RECOMMENDATIONS</p>
-    <h2>Get recommendations for a filled topic</h2>
-    <p className="muted-copy">For topics with items in Foundations, Security and Common Vulnerabilities, including items still in review. Recommendations are not stored; the ones you select go to Knowledge Review. Nothing is approved or published here.</p>
-    {options.loading && !options.topics.length ? <Loading label="Checking sources and topics" /> : options.error ? <ErrorState error={options.error} onRetry={load} /> : options.topics.length === 0 ? <p className="muted-copy">No topic has all three branches filled yet.</p> : <div className="kma-form">
+    <h2>Get recommendations for a topic</h2>
+    <p className="muted-copy">For any topic directly under a domain, even with empty branches. Covers Foundations, Security and Common Vulnerabilities, and each vulnerability comes with an example. Recommendations are not stored; the ones you select go to Knowledge Review. Nothing is approved or published here.</p>
+    {options.loading && !options.topics.length ? <Loading label="Checking sources and topics" /> : options.error ? <ErrorState error={options.error} onRetry={load} /> : options.topics.length === 0 ? <p className="muted-copy">No published topic sits directly under a domain yet.</p> : <div className="kma-form">
       <label>Topic<select value={chosen} onChange={(event) => chooseTopic(event.target.value)}><option value="">Choose a topic</option>{options.topics.map((item) => <option key={topicKey(item)} value={topicKey(item)}>{item.domain_name} › {item.topic_name} ({item.counts.foundations} / {item.counts.security} / {item.counts.vulnerabilities})</option>)}</select></label>
       <fieldset className="kma-sources">
         <legend className="field-label">Connect to</legend>
@@ -80,18 +83,19 @@ export default function KnowledgeMapRecommendations({ adminKey, onSubmitted }) {
           <span><strong>{item.label}</strong> <Badge tone={item.status === "connected" ? "violet" : undefined}>{STATUS[item.status] || item.status}</Badge><small>{item.detail}</small></span>
         </label>)}
       </fieldset>
-      {source === "rag" && <label>RAG domain<select value={ragDomain} onChange={(event) => { clear(); setRagDomain(event.target.value); }}><option value="">Choose a domain</option>{rag.domains.map((item) => <option key={item.slug} value={item.slug}>{item.name} ({item.indexed_pct}% indexed)</option>)}</select></label>}
+      {usesRag && <label>RAG domain<select value={ragDomain} onChange={(event) => { clear(); setRagDomain(event.target.value); }}><option value="">All domains</option>{rag.domains.map((item) => <option key={item.slug} value={item.slug}>{item.name} ({item.indexed_pct}% indexed)</option>)}</select></label>}
       <button type="button" className="button button-secondary" disabled={!ready || Boolean(busy)} onClick={ask}>{busy === "ask" ? "Asking…" : "Get recommendations"}</button>
     </div>}
-    {busy === "ask" && <Loading label="Waiting for recommendations. This can take 2 to 3 minutes" />}
+    {busy === "ask" && <Loading label={`Waiting for recommendations. This can take ${source === "both" ? "up to 8" : "2 to 3"} minutes`} />}
     {error && <p className="kma-error" role="alert">{error.message}</p>}
     {notice && <p className="success-copy" role="status">{notice}</p>}
     {result && <div className="kma-suggestion-list">
       <p className="muted-copy">Source: {result.source_label}</p>
       {result.recommendations.length ? <ul>{result.recommendations.map((item, index) => <li key={`${item.kind}:${item.ref || item.name}`}><label className="kma-suggestion">
         <input type="checkbox" checked={selected.includes(index)} onChange={() => toggle(index)} aria-label={`Select ${KIND[item.kind]}: ${item.name}`} />
-        <span><strong>{item.name}</strong> <Badge tone="violet">{KIND[item.kind]}</Badge> <Badge>{BRANCHES[item.branch]?.label || item.branch}</Badge>{item.weak && <> <Badge>Weak evidence</Badge></>}
+        <span><strong>{item.name}</strong> <Badge tone="violet">{KIND[item.kind]}</Badge> <Badge>{BRANCHES[item.branch]?.label || item.branch}</Badge>{item.weak && <> <Badge>Weak evidence</Badge></>}{item.verification && <> <Badge tone={item.verification === "confirmed" ? "violet" : undefined}>{VERIFICATION[item.verification]}</Badge></>}
           <span className="kma-compare">{item.current_description && <small><s>{item.current_description}</s></small>}<small>{item.description}</small></span>
+          {item.verification_note && <small>Kimi: {item.verification_note}</small>}
           {item.sources.length > 0 && <small>Sources: {item.sources.map((entry) => `${entry.title}${entry.locator ? ` (${entry.locator})` : ""}`).join("; ")}</small>}
         </span>
       </label></li>)}</ul> : <p className="muted-copy">No recommendations left for this topic.</p>}

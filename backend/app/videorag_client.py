@@ -9,7 +9,7 @@ from .provider_common import ProviderError
 
 
 class VideoRagClient:
-    """The private VideoRAG knowledge DB. Its sources are private course material, so answers stay on this side and are never passed to a remote model."""
+    """The private VideoRAG knowledge DB. Its sources are private course material, so nothing from it reaches a remote model, except the short drafts an administrator chooses to have Kimi check."""
 
     provider = "videorag"
 
@@ -51,8 +51,9 @@ class VideoRagClient:
         data = self._request("GET", "/api/v1/coverage", timeout=10)
         return data if isinstance(data, list) else []
 
-    def ask(self, question: str, domain: str) -> dict[str, Any]:
-        data = self._request("POST", "/api/v1/ask", json={"q": question, "domain": domain})
+    def ask(self, question: str, domain: str | None = None) -> dict[str, Any]:
+        """With no domain, the service searches everything it has indexed."""
+        data = self._request("POST", "/api/v1/ask", json={"q": question, **({"domain": domain} if domain else {})})
         if not isinstance(data, dict):
             raise ProviderError(self.provider, "The RAG knowledge DB returned an unreadable response")
         return data
