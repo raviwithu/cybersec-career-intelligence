@@ -131,7 +131,7 @@ def test_sub_domains_nest_to_any_depth_before_topics_and_their_branches(client):
     assert [(item["name"], item["branch"]) for item in placement["ancestors"]] == [("Deep Topic", None)]
 
 
-def test_topics_sit_in_the_branches_of_their_parent_topic_to_any_depth(client):
+def test_topics_sit_in_the_branches_of_their_parent_topic(client):
     with SessionLocal() as db:
         domain = _domain(db, "Nesting Domain")
         overview, standalone = _topic(db, "IAM Overview Nest"), _topic(db, "Standalone Nest")
@@ -150,7 +150,9 @@ def test_topics_sit_in_the_branches_of_their_parent_topic_to_any_depth(client):
         d, ids = domain.id, {t.name: (t.id, t.topic_key) for t in (overview, components, users, policies, standalone)}
     assert [(item["name"], item["has_children"]) for item in _children(client, d)] == [("IAM Overview Nest", True), ("Standalone Nest", False), ("Orphan Nest", False)]
     assert _branches(client, d, ids["IAM Overview Nest"][0]) == {"foundations": ["Components Nest", "Hierarchy Nest"], "security": ["Policies Nest"], "vulnerabilities": []}
-    assert _branches(client, d, ids["Components Nest"][0]) == {"foundations": ["Users Nest"], "security": [], "vulnerabilities": []}
+    # Components Nest is itself in a branch, so it shows only the branch that already holds a topic.
+    nested = client.get(f"{MAP}/domains/{d}/topics/{ids['Components Nest'][0]}/children").json()["branches"]
+    assert [(item["branch"], [topic["name"] for topic in item["items"]]) for item in nested] == [("foundations", ["Users Nest"])]
     placements = client.get(f"{MAP}/topics/{ids['Users Nest'][1]}/placements").json()
     assert [(item["name"], item["branch"]) for item in placements[0]["ancestors"]] == [("IAM Overview Nest", None), ("Components Nest", "foundations")]
     assert placements[0]["branch"] == "foundations"
@@ -159,22 +161,20 @@ def test_topics_sit_in_the_branches_of_their_parent_topic_to_any_depth(client):
     assert client.get(f"{MAP}/domains/{d}/topics/999999/children").status_code == 404
 
 
-def test_a_topic_in_common_vulnerabilities_has_no_branches_of_its_own(client):
+@pytest.mark.parametrize("branch", ["foundations", "security", "vulnerabilities"])
+def test_a_topic_inside_any_branch_has_no_branches_of_its_own(client, branch):
     with SessionLocal() as db:
-        domain = _domain(db, "Weakness Domain")
-        parent = _topic(db, "Weakness Parent")
-        weakness = _topic(db, "Weakness Item")
-        control = _topic(db, "Control Item")
+        domain = _domain(db, "Branch Item Domain")
+        parent = _topic(db, "Branch Item Parent")
+        item = _topic(db, "Branch Item")
         _place(db, parent, domain)
-        _place(db, weakness, domain, "vulnerabilities", under=parent)
-        _place(db, control, domain, "security", under=parent)
+        _place(db, item, domain, branch, under=parent)
         db.commit()
-        domain_id, parent_id, weakness_id, control_id = domain.id, parent.id, weakness.id, control.id
-    body = client.get(f"{MAP}/domains/{domain_id}/topics/{weakness_id}/children").json()
+        domain_id, parent_id, item_id = domain.id, parent.id, item.id
+    body = client.get(f"{MAP}/domains/{domain_id}/topics/{item_id}/children").json()
     assert body["branches"] == []
     assert body["sections"] == []
     assert len(client.get(f"{MAP}/domains/{domain_id}/topics/{parent_id}/children").json()["branches"]) == 3
-    assert len(client.get(f"{MAP}/domains/{domain_id}/topics/{control_id}/children").json()["branches"]) == 3
 
 
 def test_a_topic_directly_under_a_domain_keeps_its_branches_whatever_its_stored_branch(client):
@@ -188,7 +188,7 @@ def test_a_topic_directly_under_a_domain_keeps_its_branches_whatever_its_stored_
     assert len(client.get(f"{MAP}/domains/{domain_id}/topics/{topic_id}/children").json()["branches"]) == 3
 
 
-def test_a_topic_already_under_a_vulnerability_stays_visible(client):
+def test_a_topic_already_under_a_branch_item_stays_visible(client):
     with SessionLocal() as db:
         domain = _domain(db, "Legacy Weakness Domain")
         parent = _topic(db, "Legacy Parent")
@@ -203,18 +203,19 @@ def test_a_topic_already_under_a_vulnerability_stays_visible(client):
     assert [(item["branch"], [topic["name"] for topic in item["items"]]) for item in branches] == [("foundations", ["Legacy Child"])]
 
 
-def test_no_new_topic_can_be_placed_under_a_vulnerability(client):
+@pytest.mark.parametrize("branch", ["foundations", "security", "vulnerabilities"])
+def test_no_new_topic_can_be_placed_under_a_branch_item(client, branch):
     with SessionLocal() as db:
-        domain = _domain(db, "Refused Weakness Domain")
+        domain = _domain(db, "Refused Item Domain")
         parent = _topic(db, "Refused Parent")
-        weakness = _topic(db, "Refused Weakness")
+        item = _topic(db, "Refused Item")
         _place(db, parent, domain)
-        _place(db, weakness, domain, "vulnerabilities", under=parent)
+        _place(db, item, domain, branch, under=parent)
         db.commit()
-        domain_id, weakness_id = domain.id, weakness.id
-    response = client.post("/api/v1/knowledge/proposals", headers={"X-Admin-API-Key": "test-admin-key"}, json={"schema_version": "1.0", "source_type": "manual", "action": "CREATE_TOPIC", "topic_name": "Refused Child", "change_reason": "Test", "proposed_content": {"topic": {"name": "Refused Child", "description": ""}, "placements": [{"domain_id": domain_id, "parent_topic_id": weakness_id, "map_branch": "foundations"}]}})
+        domain_id, item_id = domain.id, item.id
+    response = client.post("/api/v1/knowledge/proposals", headers={"X-Admin-API-Key": "test-admin-key"}, json={"schema_version": "1.0", "source_type": "manual", "action": "CREATE_TOPIC", "topic_name": "Refused Child", "change_reason": "Test", "proposed_content": {"topic": {"name": "Refused Child", "description": ""}, "placements": [{"domain_id": domain_id, "parent_topic_id": item_id, "map_branch": "foundations"}]}})
     assert response.status_code == 409
-    assert "Common Vulnerabilities" in response.text
+    assert "inside a branch" in response.text
 
 
 def test_every_topic_lists_all_three_branches_counting_only_published_placements(client):

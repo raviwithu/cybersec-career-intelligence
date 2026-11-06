@@ -186,18 +186,18 @@ def _map_sections(db: Session, topic_id: int) -> list[str]:
 
 def topic_children(db: Session, domain_id: int, topic_id: int) -> dict[str, Any]:
     """A topic's Foundations, Security and Common Vulnerabilities branches in one domain, each with the topics placed in it.
-    A topic shows all three branches, even before a topic is placed in one. The exception is a topic that is itself in a
-    Common Vulnerabilities branch: a weakness has no branches of its own, so it shows only what was already placed under it."""
+    A topic directly under a domain shows all three, even before a topic is placed in one. A topic inside a branch has no
+    branches of its own, so it shows only what was already placed under it."""
     reachable = _reachable_domains(db)
     _require_domain(reachable, domain_id)
     layout = domain_layout(db, domain_id)
     if topic_id not in layout:
         raise HTTPException(status_code=404, detail="The topic is not on the published map in this domain")
-    is_vulnerability = layout[topic_id]["branch"] == "vulnerabilities"
+    in_a_branch = layout[topic_id]["parent_id"] is not None
     branches = []
     for branch, label in MAP_BRANCHES.items():
         members = slot_members(layout, topic_id, branch)
-        if is_vulnerability and not members:
+        if in_a_branch and not members:
             continue
         branches.append({"branch": branch, "label": label, "topic_count": len(members), "items": _topic_items(db, reachable, layout, members)})
     return {"topic_id": topic_id, "domain_id": domain_id, "branches": branches, "sections": _map_sections(db, topic_id)}
