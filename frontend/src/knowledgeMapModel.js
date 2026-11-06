@@ -2,7 +2,7 @@ import { hierarchy, tree } from "d3-hierarchy";
 
 // Pure state helpers for the Security Knowledge Map. The page keeps one immutable state object:
 // nodes by id, loaded child ids per node, parent links and the expanded set.
-// Domains hold sub-domains and topics; every topic holds the Foundations, Security and Common Vulnerabilities branches,
+// Domains hold sub-domains and topics; a topic holds the Foundations, Security and Common Vulnerabilities branches, unless it is itself in Common Vulnerabilities,
 // and each branch holds smaller topics, to any depth. A topic also holds a group node for each of Learn, Playbook and
 // Reference that has published content, and each group's facet nodes open one section in the topic panel.
 
@@ -99,8 +99,8 @@ function withChildren(state, parentId, childNodes) {
   return { ...state, nodes, parents, children: { ...state.children, [parentId]: childNodes.map((node) => node.id) } };
 }
 
-function emptyNode(parentId) {
-  return { id: emptyNodeId(parentId), type: "empty", label: "No published topics yet" };
+function emptyNode(parentId, label = "No published topics yet") {
+  return { id: emptyNodeId(parentId), type: "empty", label };
 }
 
 export function applyRoot(state, data) {
@@ -125,7 +125,9 @@ export function applyTopicChildren(state, topicId, data) {
     const members = Object.keys(sections).filter((section) => available.has(section));
     return { group, members, node: { id: sectionGroupNodeId(topic.domainId, topic.topicKey, group), type: "section-group", group, label, domainId: topic.domainId, topicKey: topic.topicKey, parentTopicKey: topic.topicKey, topicNodeId: topicId, sectionCount: members.length } };
   }).filter((item) => item.members.length);
-  let next = withChildren(state, topicId, [...branches, ...groups.map((item) => item.node)]);
+  const children = [...branches, ...groups.map((item) => item.node)];
+  // A topic in Common Vulnerabilities has no branches, so with no sections either it would expand to nothing.
+  let next = withChildren(state, topicId, children.length ? children : [emptyNode(topicId, "No published sections yet")]);
   data.branches.forEach((item, index) => {
     const branch = branches[index];
     const topics = item.items.map((child) => topicNode(branch, child));

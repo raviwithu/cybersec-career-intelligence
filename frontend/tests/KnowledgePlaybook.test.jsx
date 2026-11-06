@@ -106,6 +106,18 @@ describe("section group model", () => {
     expect(groupOfSection("future_section")).toBeNull();
   });
 
+  it("gives a topic with no branches only its section groups", () => {
+    const state = applyTopicChildren(loaded([]), topicNodeId(1, "sqli"), { topic_id: 7, domain_id: 1, branches: [], sections: ["overview", "mitigations"] });
+    const kids = state.children[topicNodeId(1, "sqli")].map((id) => state.nodes[id]);
+    expect(kids.map((node) => [node.type, node.label])).toEqual([["section-group", "Learn"], ["section-group", "Playbook"]]);
+  });
+
+  it("says so when a topic has no branches and no sections, so it does not expand to nothing", () => {
+    const state = applyTopicChildren(loaded([]), topicNodeId(1, "sqli"), { topic_id: 7, domain_id: 1, branches: [], sections: [] });
+    const kids = state.children[topicNodeId(1, "sqli")].map((id) => state.nodes[id]);
+    expect(kids.map((node) => [node.type, node.label])).toEqual([["empty", "No published sections yet"]]);
+  });
+
   it("lays every section out as a graph node when its group is open", () => {
     const sections = ["overview", "how_it_works", "attack_surfaces", "architecture", "real_world_examples", "code_examples", "mitigations", "source_review", "dynamic_review", "information_gathering", "ai_cicd_skill", "ai_dynamic_skill", "career_levels", "related", "references"];
     const topicId = topicNodeId(1, "sqli");

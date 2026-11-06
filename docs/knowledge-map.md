@@ -457,6 +457,12 @@ Topic
 
 **Sample content.** `python -m app.knowledge_map_examples` also proposes SQL Injection with all seven sections, as proposals only, with unverified references. Run it again after the topic is published to propose its sections. The content filter rejects `<script`, `<iframe`, `<object` and `<embed` even in code samples, so an XSS sample should show a sink such as `innerHTML` instead.
 
+## Topics inside Common Vulnerabilities
+
+A topic placed in another topic's Common Vulnerabilities branch is a weakness, so it has no Foundations, Security or Common Vulnerabilities of its own. It keeps its Learn, Playbook and Reference groups. With no published sections it shows "No published sections yet".
+
+No new topic can be placed under one: the proposal gets a 409. If a topic already sits under one, for example after a move, that branch stays visible so nothing is hidden. Topics directly under a domain, and topics in Foundations or Security, keep all three branches.
+
 ## Branch recommendations
 
 Knowledge Map Management has a **Branch Recommendations** panel. It lists every topic with at least one item in each of Foundations, Security and Common Vulnerabilities. Items still in review count, so a topic can be improved before its branches are published.
