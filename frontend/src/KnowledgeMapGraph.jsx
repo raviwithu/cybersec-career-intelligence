@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef } from "react";
-import { Background, Handle, Position, ReactFlow, ReactFlowProvider, useReactFlow } from "@xyflow/react";
+import { Background, Handle, Position, ReactFlow, ReactFlowProvider, useReactFlow, useStore } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
 import { NODE_WIDTH, isExpandable } from "./knowledgeMapModel";
@@ -43,15 +43,28 @@ function GraphCanvas({ layout, expanded, selectedId, focusRequest, onActivate, o
     return () => { commandRef.current = null; };
   }, [flow, duration, commandRef]);
 
+  const centreOn = (id) => {
+    const target = layout.positions.find((item) => item.id === id);
+    if (target) flow.setCenter(target.x + NODE_WIDTH / 2, target.y, { zoom: flow.getZoom(), duration });
+    return Boolean(target);
+  };
+
   // Centre on nodes selected from outside the canvas (search, breadcrumb, toolbar), once they are laid out.
   const centred = useRef(null);
   useEffect(() => {
     if (!focusRequest || centred.current === focusRequest) return;
-    const target = layout.positions.find((item) => item.id === focusRequest.id);
-    if (!target) return;
-    centred.current = focusRequest;
-    flow.setCenter(target.x + NODE_WIDTH / 2, target.y, { zoom: flow.getZoom(), duration });
+    if (centreOn(focusRequest.id)) centred.current = focusRequest;
   }, [focusRequest, layout]);
+
+  // Opening the topic panel narrows the canvas, which would push the node just clicked out of view. React Flow learns
+  // the new size after the click, so this waits for the width to change rather than centring on the click itself.
+  const canvasWidth = useStore((state) => state.width);
+  const lastWidth = useRef(canvasWidth);
+  useEffect(() => {
+    const previous = lastWidth.current;
+    lastWidth.current = canvasWidth;
+    if (previous && previous !== canvasWidth) centreOn(selectedId);
+  }, [canvasWidth]);
 
   return <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} defaultViewport={DEFAULT_VIEWPORT} fitView fitViewOptions={{ padding: 0.15, maxZoom: 1 }} minZoom={0.2} maxZoom={2} nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} nodesFocusable={false} edgesFocusable={false} zoomOnDoubleClick={false} onlyRenderVisibleElements>
     <Background gap={24} size={1} color="var(--km-grid)" />

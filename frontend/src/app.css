@@ -495,6 +495,9 @@ code { color: #9ff2cc; font: .9em 'DM Mono', monospace; }
 .km-graph .react-flow__edge-path { stroke: var(--km-edge); stroke-width: 1.4; }
 .km-graph .react-flow__attribution { background: transparent; }
 .km-graph .react-flow__attribution a { color: var(--muted); }
+/* React Flow sets pointer-events: none on nodes that are neither selectable nor draggable, which is how the graph is
+   configured because selection is handled by our own buttons. Without this rule clicks fall through to the pane. */
+.km-graph .km-node { pointer-events: all; }
 .km-handle { opacity: 0; pointer-events: none; }
 .km-node { position: relative; display: flex; align-items: center; min-height: 38px; border: 1px solid var(--km-edge); border-left: 4px solid var(--km-node-accent, var(--km-edge)); border-radius: 7px; color: var(--km-node-text); background: var(--km-node-bg); font-size: .74rem; }
 .km-node.selected { border-color: var(--km-selected); box-shadow: 0 0 0 2px var(--km-focus); }
