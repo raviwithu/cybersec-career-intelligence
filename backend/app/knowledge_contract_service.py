@@ -417,7 +417,8 @@ def review_proposal(db: Session, proposal_id: int, payload: KnowledgeProposalRev
     proposal = get_proposal(db, proposal_id)
     if proposal.version != payload.expected_version:
         raise HTTPException(status_code=409, detail="Proposal changed; reload it before reviewing")
-    if proposal.status not in {"review", "deferred", "draft"}:
+    # An approved proposal can still be rejected: if it goes stale it can no longer be published, and would otherwise stay open.
+    if proposal.status not in {"review", "deferred", "draft"} and not (proposal.status == "approved" and payload.action == "reject"):
         raise HTTPException(status_code=409, detail="Only reviewable proposals can be acted on")
     before = deepcopy(proposal.proposed_content or proposal.proposed_snapshot)
     if payload.verified_source_ids:

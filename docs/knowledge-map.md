@@ -283,7 +283,7 @@ Map changes never write live tables directly (D3). Every change is a knowledge-c
 
 - **Header:** each proposal shows action, source type, status, submitter, change reason and the existing evidence view.
 - **Before and after:** a line diff of the captured live state (−) against the proposed change (+), and the affected branches before and after publish from the map-preview endpoint.
-- **Controls:** the existing Approve, Modify, Defer and Reject controls, then a separate Publish step for approved proposals.
+- **Controls:** the existing Approve, Modify, Defer and Reject controls, for drafts as well as proposals in review, then a separate Publish step for approved proposals. An approved proposal can still be rejected, which clears one that went stale and can no longer be published.
 - **Merge:** the existing merge action is refused for map actions, because moving a placement onto another topic is not meaningful. To retire a duplicate, deactivate it with "duplicate of".
 
 ### Action payloads
@@ -433,8 +433,8 @@ Topic
     ├── Source Review         (source_review)
     ├── Dynamic Review        (dynamic_review)
     ├── Information Gathering (information_gathering)
-    ├── AI CI/CD Scan         (ai_cicd_skill)
-    └── AI Dynamic Analysis   (ai_dynamic_skill)
+    ├── CI/CD Scan            (ai_cicd_skill)
+    └── Dynamic Analysis      (ai_dynamic_skill)
 ```
 
 - **When Playbook appears.** A topic shows the node once at least one of the five review sections (`source_review` to `ai_dynamic_skill`) is published, wherever the topic sits. The branch is not the test, because a topic directly under a domain has no branch. A topic with only `code_examples` and `mitigations` keeps those as tabs.

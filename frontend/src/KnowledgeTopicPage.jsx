@@ -17,8 +17,8 @@ const labels = {
   source_review: "Source Review",
   dynamic_review: "Dynamic Review",
   information_gathering: "Information Gathering",
-  ai_cicd_skill: "AI CI/CD Scan",
-  ai_dynamic_skill: "AI Dynamic Analysis",
+  ai_cicd_skill: "CI/CD Scan",
+  ai_dynamic_skill: "Dynamic Analysis",
 };
 const tabs = ["overview", "how_it_works", "code_examples", "attack_surfaces", "mitigations", "source_review", "dynamic_review", "information_gathering", "ai_cicd_skill", "ai_dynamic_skill", "real_world_examples", "architecture", "references", "career_level_guidance"];
 
