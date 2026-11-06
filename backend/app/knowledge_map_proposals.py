@@ -292,6 +292,8 @@ def _map_parent_problem(db: Session, topic_id: int | None, domain_id: int, paren
     link = _link(db, parent_id, domain_id)
     if parent is None or not parent.is_active or _placement_state(link) is None:
         return "The parent topic must be active and placed in the same domain"
+    if link.parent_topic_id is not None and link.map_branch == "vulnerabilities":
+        return "A topic in Common Vulnerabilities cannot have topics under it"
     seen: set[int] = set()
     while link is not None and link.topic_id not in seen:
         if link.topic_id == topic_id:

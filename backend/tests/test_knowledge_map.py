@@ -159,6 +159,64 @@ def test_topics_sit_in_the_branches_of_their_parent_topic_to_any_depth(client):
     assert client.get(f"{MAP}/domains/{d}/topics/999999/children").status_code == 404
 
 
+def test_a_topic_in_common_vulnerabilities_has_no_branches_of_its_own(client):
+    with SessionLocal() as db:
+        domain = _domain(db, "Weakness Domain")
+        parent = _topic(db, "Weakness Parent")
+        weakness = _topic(db, "Weakness Item")
+        control = _topic(db, "Control Item")
+        _place(db, parent, domain)
+        _place(db, weakness, domain, "vulnerabilities", under=parent)
+        _place(db, control, domain, "security", under=parent)
+        db.commit()
+        domain_id, parent_id, weakness_id, control_id = domain.id, parent.id, weakness.id, control.id
+    body = client.get(f"{MAP}/domains/{domain_id}/topics/{weakness_id}/children").json()
+    assert body["branches"] == []
+    assert body["sections"] == []
+    assert len(client.get(f"{MAP}/domains/{domain_id}/topics/{parent_id}/children").json()["branches"]) == 3
+    assert len(client.get(f"{MAP}/domains/{domain_id}/topics/{control_id}/children").json()["branches"]) == 3
+
+
+def test_a_topic_directly_under_a_domain_keeps_its_branches_whatever_its_stored_branch(client):
+    # Directly under a domain, map_branch only marks the topic as placed.
+    with SessionLocal() as db:
+        domain = _domain(db, "Direct Weakness Domain")
+        topic = _topic(db, "Direct Weakness Topic")
+        _place(db, topic, domain, "vulnerabilities")
+        db.commit()
+        domain_id, topic_id = domain.id, topic.id
+    assert len(client.get(f"{MAP}/domains/{domain_id}/topics/{topic_id}/children").json()["branches"]) == 3
+
+
+def test_a_topic_already_under_a_vulnerability_stays_visible(client):
+    with SessionLocal() as db:
+        domain = _domain(db, "Legacy Weakness Domain")
+        parent = _topic(db, "Legacy Parent")
+        weakness = _topic(db, "Legacy Weakness")
+        child = _topic(db, "Legacy Child")
+        _place(db, parent, domain)
+        _place(db, weakness, domain, "vulnerabilities", under=parent)
+        _place(db, child, domain, "foundations", under=weakness)
+        db.commit()
+        domain_id, weakness_id = domain.id, weakness.id
+    branches = client.get(f"{MAP}/domains/{domain_id}/topics/{weakness_id}/children").json()["branches"]
+    assert [(item["branch"], [topic["name"] for topic in item["items"]]) for item in branches] == [("foundations", ["Legacy Child"])]
+
+
+def test_no_new_topic_can_be_placed_under_a_vulnerability(client):
+    with SessionLocal() as db:
+        domain = _domain(db, "Refused Weakness Domain")
+        parent = _topic(db, "Refused Parent")
+        weakness = _topic(db, "Refused Weakness")
+        _place(db, parent, domain)
+        _place(db, weakness, domain, "vulnerabilities", under=parent)
+        db.commit()
+        domain_id, weakness_id = domain.id, weakness.id
+    response = client.post("/api/v1/knowledge/proposals", headers={"X-Admin-API-Key": "test-admin-key"}, json={"schema_version": "1.0", "source_type": "manual", "action": "CREATE_TOPIC", "topic_name": "Refused Child", "change_reason": "Test", "proposed_content": {"topic": {"name": "Refused Child", "description": ""}, "placements": [{"domain_id": domain_id, "parent_topic_id": weakness_id, "map_branch": "foundations"}]}})
+    assert response.status_code == 409
+    assert "Common Vulnerabilities" in response.text
+
+
 def test_every_topic_lists_all_three_branches_counting_only_published_placements(client):
     with SessionLocal() as db:
         domain_a, domain_b = _domain(db, "Domain A"), _domain(db, "Domain B")
