@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -415,5 +418,13 @@ describe("knowledge map model", () => {
     console.info(`Laying out ${layout.positions.length} visible nodes took ${elapsed.toFixed(1)} ms`);
     expect(layout.positions.length).toBe(1007);
     expect(elapsed).toBeLessThan(500);
+  });
+});
+
+describe("graph node styles", () => {
+  it("keeps graph nodes clickable, because React Flow turns pointer events off on non-selectable nodes", () => {
+    // The graph is stubbed in these tests and jsdom has no hit testing, so this guards the rule itself.
+    const css = readFileSync(resolve(process.cwd(), "src/app.css"), "utf8");
+    expect(css).toMatch(/\.km-graph \.km-node\s*\{\s*pointer-events:\s*all;/);
   });
 });
