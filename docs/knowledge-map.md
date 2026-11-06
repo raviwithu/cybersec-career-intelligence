@@ -456,3 +456,29 @@ Topic
 **AI skills are content.** They are reviewed definitions you copy into your pipeline or tooling. The app runs no scans and sends no traffic to any target. Sample pipelines call `./ci/ai-scan`, a placeholder for your own runner. Dynamic content stays at method level, with no exploit payloads.
 
 **Sample content.** `python -m app.knowledge_map_examples` also proposes SQL Injection with all seven sections, as proposals only, with unverified references. Run it again after the topic is published to propose its sections. The content filter rejects `<script`, `<iframe`, `<object` and `<embed` even in code samples, so an XSS sample should show a sink such as `innerHTML` instead.
+
+## Branch recommendations
+
+Knowledge Map Management has a **Branch Recommendations** panel. It lists every topic with at least one item in each of Foundations, Security and Common Vulnerabilities. Items still in review count, so a topic can be improved before its branches are published.
+
+Pick a topic, then connect to one source:
+
+| Source | What it uses | What it asks |
+|---|---|---|
+| RAG knowledge DB | VideoRAG (`VIDEORAG_BASE_URL`, `VIDEORAG_ACCESS_KEY`), one RAG domain chosen in the panel | One question per item, up to 12, and one per branch |
+| Kimi | `KIMI_MODEL` (default `k3.1-pro`) through OpenWebUI | One request for the whole topic |
+
+Recommendations are returned and not stored. The ones you select go to Knowledge Review, and nothing in this flow can approve or publish:
+
+- A pending item (draft, review or deferred) is edited through the `modify` review action, which keeps the old text in the review history and sets the proposal's source to the one used.
+- A published item gets an `UPDATE_TOPIC` proposal.
+- A new topic gets a `CREATE_TOPIC` proposal placed in the chosen branch.
+- An approved item, and a pending placement of an existing topic, count as filled but are not changed.
+
+Rules the server enforces:
+
+- RAG answers come from private course material. They are never sent to Kimi, and only title, locator and hash are kept as private references.
+- A RAG answer that is not grounded, or that says its sources do not cover the question, is skipped with a note. The service can mark a refusal as grounded, so its reasons and wording are checked too. Other weak answers are shown with a Weak evidence badge.
+- New topics that overlap anything in the domain are dropped, including other parents' items, because a topic has one place per domain. The match is on shared words, so similar ideas with different names can still get through.
+- Anything naming a CVE is dropped, because CVE content needs a verified source.
+- If a proposal changed after the recommendation was made, that item is refused and the change is kept.

@@ -671,6 +671,14 @@ code { color: #9ff2cc; font: .9em 'DM Mono', monospace; }
 .kma-suggestion { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid #213c55; border-radius: 7px; font-size: .74rem; }
 .kma-suggestion span { display: grid; gap: 3px; }
 .kma-suggestion small { color: #8da3b7; }
+.kma-sources { display: grid; gap: 6px; margin: 0; padding: 0; border: 0; }
+.kma-sources legend { margin-bottom: 4px; padding: 0; }
+.kma-source { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid #213c55; border-radius: 7px; font-size: .74rem; }
+.kma-source span { display: grid; gap: 3px; }
+.kma-source small { color: #8da3b7; }
+.kma-source-off { opacity: .6; }
+.kma-compare { display: grid; gap: 3px; }
+.kma-compare s { color: #8da3b7; }
 .kma-note { color: #f3c878 !important; }
 .duplicate-check { display: grid; gap: 4px; margin-top: 8px; padding: 8px 10px; border: 1px solid #315e8f; border-radius: 6px; background: rgba(55,108,164,.1); font-size: .72rem; }
 .duplicate-check p { margin: 0; color: #b2c2d1; }
