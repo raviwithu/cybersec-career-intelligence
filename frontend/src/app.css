@@ -503,8 +503,10 @@ code { color: #9ff2cc; font: .9em 'DM Mono', monospace; }
 .km-node.km-branch-foundations { --km-node-accent: var(--km-foundations); } .km-node.km-branch-security { --km-node-accent: var(--km-security); } .km-node.km-branch-vulnerabilities { --km-node-accent: var(--km-vulnerabilities); }
 .km-node-branch .km-node-icon { color: var(--km-node-accent); }
 .km-node-topic { border-left-width: 2px; }
-.km-node-playbook, .km-node-facet { --km-node-accent: var(--violet); }
-.km-node-playbook .km-node-icon, .km-node-facet .km-node-icon { color: var(--km-node-accent); }
+.km-node.km-group-learn { --km-node-accent: var(--km-palette-0); }
+.km-node.km-group-playbook { --km-node-accent: var(--km-palette-1); }
+.km-node.km-group-reference { --km-node-accent: var(--km-palette-2); }
+.km-node-section-group .km-node-icon, .km-node-facet .km-node-icon { color: var(--km-node-accent); }
 .km-node-facet { border-left-width: 2px; }
 .km-node-more, .km-node-empty, .km-node-loading, .km-node-error { border-style: dashed; color: var(--km-node-muted); background: transparent; }
 .km-node-error { border-color: var(--km-vulnerabilities); color: var(--km-vulnerabilities); }

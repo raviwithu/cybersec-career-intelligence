@@ -6,7 +6,7 @@ from app.database import SessionLocal
 from app.knowledge_content_schemas import validate_section_content
 from app.knowledge_contract_schemas import CORE_SECTION_TYPES, PLAYBOOK_SECTION_TYPES, KnowledgeProposalCreate
 from app.knowledge_map_example_content import EXAMPLE_TOPICS
-from app.models import KnowledgeTopicSection
+from app.models import CareerLevel, KnowledgeTopic, KnowledgeTopicLevel, KnowledgeTopicRelationship, KnowledgeTopicSection
 from tests.test_knowledge_content import CODE_EXAMPLE, propose
 from tests.test_knowledge_contract import ADMIN, approve_and_publish
 from tests.test_knowledge_map import MAP, _domain, _place, _remove_created_rows, _topic  # noqa: F401
@@ -56,10 +56,10 @@ def _publish(client, topic_id: int, section: str, content: dict) -> None:
     approve_and_publish(client, response.json())
 
 
-def _playbook(client, domain_id: int, topic_id: int) -> list[str]:
+def _sections(client, domain_id: int, topic_id: int) -> list[str]:
     response = client.get(f"{MAP}/domains/{domain_id}/topics/{topic_id}/children")
     assert response.status_code == 200, response.text
-    return response.json()["playbook_sections"]
+    return response.json()["sections"]
 
 
 @pytest.mark.parametrize("section", list(CONTENT))
@@ -107,22 +107,65 @@ def test_playbook_section_that_no_longer_validates_is_hidden_on_read(client):
 
 
 @pytest.mark.parametrize("under", [False, True])
-def test_playbook_appears_once_a_review_section_is_published_wherever_the_topic_sits(client, under):
+def test_map_sections_list_published_content_in_order_wherever_the_topic_sits(client, under):
     domain_id, topic_id, _ = _map_topic(under=under)
-    assert _playbook(client, domain_id, topic_id) == []
-    _publish(client, topic_id, "code_examples", {"items": [CODE_EXAMPLE]})
-    _publish(client, topic_id, "mitigations", {"items": [{"control": "Bind values", "description": "Keep values out of the SQL text."}]})
-    # Code and mitigations alone stay as tabs: any topic can have those.
-    assert _playbook(client, domain_id, topic_id) == []
+    assert _sections(client, domain_id, topic_id) == []
     _publish(client, topic_id, "ai_dynamic_skill", AI_DYNAMIC_SKILL)
-    _publish(client, topic_id, "source_review", SOURCE_REVIEW)
-    assert _playbook(client, domain_id, topic_id) == ["code_examples", "mitigations", "source_review", "ai_dynamic_skill"]
+    _publish(client, topic_id, "mitigations", {"items": [{"control": "Bind values", "description": "Keep values out of the SQL text."}]})
+    _publish(client, topic_id, "overview", {"short_description": "Input becomes SQL."})
+    _publish(client, topic_id, "references", {"items": [{"title": "CWE-89", "url": "https://cwe.mitre.org/data/definitions/89.html"}]})
+    assert _sections(client, domain_id, topic_id) == ["overview", "mitigations", "ai_dynamic_skill", "references"]
 
 
-def test_playbook_excludes_unpublished_sections(client):
+def test_map_sections_exclude_unpublished_sections(client):
     domain_id, topic_id, _ = _map_topic()
     assert propose(client, topic_id, SOURCE_REVIEW, section="source_review").status_code == 201
-    assert _playbook(client, domain_id, topic_id) == []
+    assert _sections(client, domain_id, topic_id) == []
+
+
+def test_map_sections_skip_an_architecture_section_without_diagrams(client):
+    domain_id, topic_id, _ = _map_topic()
+    _publish(client, topic_id, "architecture", {"diagrams": []})
+    assert _sections(client, domain_id, topic_id) == []
+
+
+def test_map_sections_include_career_levels_only_for_active_levels(client):
+    domain_id, topic_id, _ = _map_topic()
+    with SessionLocal() as db:
+        level = CareerLevel(name=f"Retired {topic_id}", slug=f"retired-{topic_id}", display_order=99, is_active=False)
+        db.add(level)
+        db.flush()
+        row = KnowledgeTopicLevel(topic_id=topic_id, career_level_id=level.id, expectation="Know it.")
+        db.add(row)
+        db.commit()
+        level_id, row_id = level.id, row.id
+    try:
+        assert _sections(client, domain_id, topic_id) == []
+        with SessionLocal() as db:
+            db.get(CareerLevel, level_id).is_active = True
+            db.commit()
+        assert _sections(client, domain_id, topic_id) == ["career_levels"]
+    finally:
+        with SessionLocal() as db:
+            db.delete(db.get(KnowledgeTopicLevel, row_id))
+            db.delete(db.get(CareerLevel, level_id))
+            db.commit()
+
+
+@pytest.mark.parametrize("incoming", [False, True])
+def test_map_sections_include_related_topics_in_either_direction_when_published(client, incoming):
+    domain_id, topic_id, _ = _map_topic()
+    with SessionLocal() as db:
+        draft = _topic(db, "Unpublished Neighbour", status="draft")
+        source, target = (draft.id, topic_id) if incoming else (topic_id, draft.id)
+        db.add(KnowledgeTopicRelationship(source_topic_id=source, target_topic_id=target, relationship_type="related"))
+        db.commit()
+        draft_id = draft.id
+    assert _sections(client, domain_id, topic_id) == []
+    with SessionLocal() as db:
+        db.get(KnowledgeTopic, draft_id).publication_status = "published"
+        db.commit()
+    assert _sections(client, domain_id, topic_id) == ["related"]
 
 
 def test_coverage_reports_the_playbook_without_changing_completeness(client):

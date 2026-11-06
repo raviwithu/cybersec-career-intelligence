@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SectionContent } from "../src/KnowledgeSections";
 import KnowledgeMapPage from "../src/KnowledgeMapPage";
-import { applyDomainChildren, applyRoot, applyTopicChildren, domainNodeId, facetNodeId, initialMapState, opensTopicPanel, playbookNodeId, topicNodeId } from "../src/knowledgeMapModel";
+import { applyDomainChildren, applyRoot, applyTopicChildren, domainNodeId, expand, facetNodeId, groupOfSection, initialMapState, layoutTree, opensTopicPanel, sectionGroupNodeId, topicNodeId, visibleTree } from "../src/knowledgeMapModel";
 
 vi.mock("../src/KnowledgeMapGraph", () => ({ default: () => <div data-testid="graph-stub" /> }));
 
@@ -11,7 +11,7 @@ const web = { node_type: "domain", id: 1, slug: "web", name: "Web Application Se
 const topic = (id, key, name) => ({ node_type: "topic", domain_id: 1, id, topic_key: key, name, short_description: "", placement_count: 1, has_children: false });
 const sqli = topic(7, "sqli", "SQL Injection");
 const xss = topic(8, "xss", "Cross-Site Scripting");
-const children = (topicId, playbook) => ({ topic_id: topicId, domain_id: 1, playbook_sections: playbook, branches: [
+const children = (topicId, sections) => ({ topic_id: topicId, domain_id: 1, sections, branches: [
   { branch: "foundations", label: "Foundations", topic_count: 0, items: [] },
   { branch: "security", label: "Security", topic_count: 0, items: [] },
   { branch: "vulnerabilities", label: "Common Vulnerabilities", topic_count: 0, items: [] },
@@ -38,14 +38,14 @@ const AI_DYNAMIC = {
   ],
 };
 const section = (type, content) => ({ section_type: type, status: "published", published_version: 1, content });
-const detail = { id: 7, topic_key: "sqli", name: "SQL Injection", description: "", sections: [section("overview", { short_description: "Input becomes SQL." }), section("code_examples", CODE), section("source_review", SOURCE), section("dynamic_review", DYNAMIC)], related_topics: [], level_expectations: [], coverage: { items: [] } };
+const detail = { id: 7, topic_key: "sqli", name: "SQL Injection", description: "", sections: [section("overview", { short_description: "Input becomes SQL." }), section("code_examples", CODE), section("source_review", SOURCE), section("dynamic_review", DYNAMIC), section("attack_surfaces", { items: [{ name: "Query parameters", weakness_description: "Input reaches the query." }] }), section("references", { items: [{ title: "CWE-89", url: "https://cwe.mitre.org/data/definitions/89.html" }] })], related_topics: [], level_expectations: [], coverage: { items: [] } };
 
 function mockApi() {
   global.fetch = vi.fn((url) => {
     const path = new URL(url).pathname.replace("/api/v1", "");
     const body = path === "/knowledge-map" ? { root: { id: "root", name: "CyberSec Career Intelligence" }, domains: [web] }
       : path === "/knowledge-map/domains/1/children" ? { domain: web, nodes: [sqli, xss] }
-        : path === "/knowledge-map/domains/1/topics/7/children" ? children(7, ["code_examples", "source_review", "dynamic_review"])
+        : path === "/knowledge-map/domains/1/topics/7/children" ? children(7, ["overview", "attack_surfaces", "code_examples", "source_review", "dynamic_review", "references"])
           : path === "/knowledge-map/domains/1/topics/8/children" ? children(8, [])
             : path.endsWith("/placements") ? placed(path.split("/")[3])
               : path === "/knowledge/topics/sqli" ? detail
@@ -80,30 +80,45 @@ afterEach(() => {
   window.location.hash = "";
 });
 
-describe("playbook model", () => {
-  function loaded(playbook) {
+describe("section group model", () => {
+  function loaded(sections) {
     let state = applyRoot(initialMapState(), { root: { name: "Root" }, domains: [web] });
     state = applyDomainChildren(state, domainNodeId(1), { nodes: [sqli] });
-    return applyTopicChildren(state, topicNodeId(1, "sqli"), children(7, playbook));
+    return applyTopicChildren(state, topicNodeId(1, "sqli"), children(7, sections));
   }
 
-  it("adds a Playbook node after the three branches, with one facet per section in order", () => {
-    const state = loaded(["code_examples", "ai_cicd_skill"]);
+  it("adds Learn, Playbook and Reference after the three branches, each with its sections in order", () => {
+    const state = loaded(["references", "ai_cicd_skill", "code_examples", "overview", "career_levels"]);
     const ids = state.children[topicNodeId(1, "sqli")];
-    expect(ids.map((id) => state.nodes[id].type)).toEqual(["branch", "branch", "branch", "playbook"]);
-    expect(state.children[playbookNodeId(1, "sqli")]).toEqual([facetNodeId(1, "sqli", "code_examples"), facetNodeId(1, "sqli", "ai_cicd_skill")]);
-    expect(opensTopicPanel(state.nodes[facetNodeId(1, "sqli", "ai_cicd_skill")])).toBe(true);
-    expect(opensTopicPanel(state.nodes[playbookNodeId(1, "sqli")])).toBe(false);
+    expect(ids.map((id) => state.nodes[id].type)).toEqual(["branch", "branch", "branch", "section-group", "section-group", "section-group"]);
+    expect(ids.slice(3).map((id) => state.nodes[id].label)).toEqual(["Learn", "Playbook", "Reference"]);
+    expect(state.children[sectionGroupNodeId(1, "sqli", "playbook")]).toEqual([facetNodeId(1, "sqli", "code_examples"), facetNodeId(1, "sqli", "ai_cicd_skill")]);
+    expect(state.children[sectionGroupNodeId(1, "sqli", "reference")].map((id) => state.nodes[id].label)).toEqual(["Career Levels", "References"]);
+    expect(opensTopicPanel(state.nodes[facetNodeId(1, "sqli", "overview")])).toBe(true);
+    expect(opensTopicPanel(state.nodes[sectionGroupNodeId(1, "sqli", "learn")])).toBe(false);
   });
 
-  it("adds nothing when the topic has no playbook sections, and ignores unknown ones", () => {
-    expect(loaded([]).nodes[playbookNodeId(1, "sqli")]).toBeUndefined();
-    expect(loaded(["future_section"]).nodes[playbookNodeId(1, "sqli")]).toBeUndefined();
+  it("adds only the groups that have content, and ignores unknown sections", () => {
+    const state = loaded(["overview", "future_section"]);
+    expect(state.nodes[sectionGroupNodeId(1, "sqli", "learn")].sectionCount).toBe(1);
+    expect(state.nodes[sectionGroupNodeId(1, "sqli", "playbook")]).toBeUndefined();
+    expect(loaded([]).children[topicNodeId(1, "sqli")]).toHaveLength(3);
+    expect(groupOfSection("future_section")).toBeNull();
+  });
+
+  it("lays every section out as a graph node when its group is open", () => {
+    const sections = ["overview", "how_it_works", "attack_surfaces", "architecture", "real_world_examples", "code_examples", "mitigations", "source_review", "dynamic_review", "information_gathering", "ai_cicd_skill", "ai_dynamic_skill", "career_levels", "related", "references"];
+    const topicId = topicNodeId(1, "sqli");
+    const state = expand(loaded(sections), [domainNodeId(1), topicId, ...["learn", "playbook", "reference"].map((group) => sectionGroupNodeId(1, "sqli", group))]);
+    const { positions, edges } = layoutTree(visibleTree(state));
+    const facets = positions.filter((item) => item.node.type === "facet");
+    expect(facets.map((item) => item.node.section).sort()).toEqual([...sections].sort());
+    expect(edges.filter((edge) => edge.target.startsWith("facet:"))).toHaveLength(sections.length);
   });
 });
 
 describe("playbook on the map", () => {
-  it("shows Playbook only on topics that have one", async () => {
+  it("shows section groups only on topics that have content", async () => {
     render(<KnowledgeMapPage />);
     press(await findItem("Web Application Security"), "ArrowRight");
     const other = await findItem("Cross-Site Scripting");
@@ -128,6 +143,7 @@ describe("playbook on the map", () => {
     fireEvent.click(row(await findItem("Source Review")));
     fireEvent.click(await screen.findByRole("tab", { name: "Dynamic Review" }));
     await waitFor(() => expect(screen.getByRole("treeitem", { name: /^Dynamic Review/ }).getAttribute("aria-selected")).toBe("true"));
+    // Learn is closed, so a tab from that group selects the topic instead of a hidden node.
     fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
     await waitFor(() => expect(screen.getByRole("treeitem", { name: /^SQL Injection/ }).getAttribute("aria-selected")).toBe("true"));
     expect(screen.getByText("Input becomes SQL.")).toBeTruthy();
@@ -137,10 +153,28 @@ describe("playbook on the map", () => {
     const playbook = await openPlaybook();
     fireEvent.click(row(playbook));
     const details = screen.getByRole("complementary", { name: "Selected node details" });
-    expect(await within(details).findByText("3 published sections for reviewing this vulnerability.")).toBeTruthy();
+    expect(await within(details).findByText("3 published sections. Select one to open it in the topic panel.")).toBeTruthy();
     expect(document.querySelector(".km-workspace").className).not.toContain("topic-open");
     fireEvent.click(within(details).getByRole("button", { name: "Dynamic Review" }));
     await waitFor(() => expect(screen.getByRole("tab", { name: "Dynamic Review" }).getAttribute("aria-selected")).toBe("true"));
+  });
+
+  it("opens Learn and Reference sections from their nodes too", async () => {
+    await openPlaybook();
+    press(await findItem("Learn"), "ArrowRight");
+    fireEvent.click(row(await findItem("Attack Surface")));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Attack Surface" }).getAttribute("aria-selected")).toBe("true"));
+    expect(await screen.findByText("Input reaches the query.")).toBeTruthy();
+    press(await findItem("Reference"), "ArrowRight");
+    fireEvent.click(row(await findItem("References")));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "References" }).getAttribute("aria-selected")).toBe("true"));
+    expect(window.location.hash).toBe("#knowledge-map?topic=sqli&section=references");
+  });
+
+  it("opens the right group from a deep link to a Learn section", async () => {
+    window.location.hash = "#knowledge-map?topic=sqli&section=attack_surfaces";
+    render(<KnowledgeMapPage />);
+    await waitFor(() => expect(screen.getByRole("treeitem", { name: /^Attack Surface/ }).getAttribute("aria-selected")).toBe("true"));
   });
 
   it("supports keyboard navigation through the facets", async () => {

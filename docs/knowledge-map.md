@@ -418,29 +418,29 @@ No RAG engine is built. A future retrieval service submits content the same way 
 | `backend/tests/test_knowledge_map_examples_ai.py` | Example script and AI suggestion tests (mocked provider) |
 | `frontend/src/KnowledgeMapSuggestions.jsx` | AI map suggestions panel in Knowledge Map Management |
 
-## Vulnerability playbook (KM-6)
+## Topic section nodes (KM-6)
 
-A vulnerability stays a normal topic. Its review material lives in sections, and the map shows them under a **Playbook** node. There is no separate page and no new table. A sample prototype is linked from the [plan README](knowledge-map-plan/README.md).
+A vulnerability stays a normal topic. Its content lives in sections, and the map shows every section as a node, grouped under the topic. There is no separate page and no new table. A sample prototype is linked from the [plan README](knowledge-map-plan/README.md).
 
 ```text
 Topic
 ├── Foundations
 ├── Security
 ├── Common Vulnerabilities
-└── Playbook                  (only when a review section is published)
-    ├── Example Code          (code_examples)
-    ├── Mitigations           (mitigations)
-    ├── Source Review         (source_review)
-    ├── Dynamic Review        (dynamic_review)
-    ├── Information Gathering (information_gathering)
-    ├── CI/CD Scan            (ai_cicd_skill)
-    └── Dynamic Analysis      (ai_dynamic_skill)
+├── Learn                     (blue)
+│   ├── Overview, How It Works, Attack Surface
+│   └── Architecture, Real-World CVEs
+├── Playbook                  (violet)
+│   ├── Example Code, Mitigations, Source Review, Dynamic Review
+│   └── Information Gathering, CI/CD Scan, Dynamic Analysis
+└── Reference                 (amber)
+    └── Career Levels, Related Topics, References
 ```
 
-- **When Playbook appears.** A topic shows the node once at least one of the five review sections (`source_review` to `ai_dynamic_skill`) is published, wherever the topic sits. The branch is not the test, because a topic directly under a domain has no branch. A topic with only `code_examples` and `mitigations` keeps those as tabs.
-- **Selecting a section.** It opens the existing topic panel on that tab, in Graph and List views. Choosing a panel tab moves the map selection to the matching node when the Playbook is open. Links take the form `#knowledge-map?topic=<key>&section=<section_type>`; `?topic=` links still work, and an unknown section falls back to the topic.
+- **When a group appears.** A group appears once it has at least one item to open, wherever the topic sits. Groups start collapsed, so the map stays readable.
+- **Selecting a section.** It opens the existing topic panel on that tab, in Graph and List views. Choosing a panel tab moves the map selection to the matching node when its group is open, and otherwise to the topic. Links take the form `#knowledge-map?topic=<key>&section=<tab id>` and open the right group; `?topic=` links still work, and a section the topic does not have falls back to the topic.
 - **Publishing.** The five sections go through the knowledge contract like other sections. They accept only `ADD_SECTION` and `UPDATE_SECTION`, and strict schemas in `knowledge_content_schemas.py` reject unknown keys at proposal, review and publish. A stored section that no longer validates is returned as `{"content_hidden": true}`, and the page shows a notice.
-- **API.** `GET /knowledge-map/domains/{domain_id}/topics/{topic_id}/children` returns `playbook_sections`, the published sections in display order, or `[]` when the topic has no Playbook node. Coverage responses gain `playbook_items`; `items` and `complete` are unchanged.
+- **API.** `GET /knowledge-map/domains/{domain_id}/topics/{topic_id}/children` returns `sections`: what the topic's nodes can open, in display order. It lists published sections, `career_levels` when the topic has expectations for an active level or a legacy guidance section, and `related` when it has a published related topic. An architecture section with no diagrams is left out, because the panel has nothing to show. Coverage responses gain `playbook_items`; `items` and `complete` are unchanged.
 - **Management.** In Knowledge Map Management, a selected topic lists all seven sections as Published, In review, Draft or Missing. Each row opens the existing section editor on that section. The new sections use the JSON editor.
 
 | Section | Content |

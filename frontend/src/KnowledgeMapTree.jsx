@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { BRANCHES, PLAYBOOK_SECTIONS, isExpandable } from "./knowledgeMapModel";
+import { BRANCHES, isExpandable, sectionInfo } from "./knowledgeMapModel";
 
 const INERT_TYPES = new Set(["empty", "loading"]);
 
 export function nodeIcon(node) {
   if (node.type === "branch") return BRANCHES[node.branch]?.icon;
-  if (node.type === "facet") return PLAYBOOK_SECTIONS[node.section]?.icon;
-  return { root: "◎", playbook: "▣", domain: "◈", "child-domain": "↳", topic: "•", error: "!", empty: "◌", loading: "…" }[node.type];
+  if (node.type === "facet") return sectionInfo(node.section)?.icon;
+  return { root: "◎", "section-group": "▣", domain: "◈", "child-domain": "↳", topic: "•", error: "!", empty: "◌", loading: "…" }[node.type];
 }
 
 export function nodeClassName(node, selected) {
-  return ["km-node", `km-node-${node.type}`, node.branch ? `km-branch-${node.branch}` : "", node.palette !== undefined ? `km-palette-${node.palette}` : "", selected ? "selected" : ""].filter(Boolean).join(" ");
+  return ["km-node", `km-node-${node.type}`, node.branch ? `km-branch-${node.branch}` : "", node.group ? `km-group-${node.group}` : "", node.palette !== undefined ? `km-palette-${node.palette}` : "", selected ? "selected" : ""].filter(Boolean).join(" ");
 }
 
 // WAI-ARIA tree view of the visible map. One row holds focus at a time (roving tabindex).
@@ -58,7 +58,7 @@ export default function KnowledgeMapTree({ treeRoot, rows, expanded, selectedId,
         <span className="km-node-icon" aria-hidden="true">{nodeIcon(node)}</span>
         <span className="km-tree-label">{node.label}</span>
         {node.type === "branch" && <small>{node.topicCount}</small>}
-        {node.type === "playbook" && <small>{node.sectionCount}</small>}
+        {node.type === "section-group" && <small>{node.sectionCount}</small>}
         {(node.type === "domain" || node.type === "child-domain") && <small>{node.topicCount} topics</small>}
         {node.type === "topic" && node.placementCount > 1 && <small>{node.placementCount} domains</small>}
         {badgeFor?.(node) && <span className="km-pending-badge">{badgeFor(node)}</span>}
