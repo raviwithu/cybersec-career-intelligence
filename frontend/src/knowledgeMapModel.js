@@ -20,8 +20,8 @@ export const PLAYBOOK_SECTIONS = {
   source_review: { label: "Source Review", icon: "⌕" },
   dynamic_review: { label: "Dynamic Review", icon: "⇄" },
   information_gathering: { label: "Information Gathering", icon: "◇" },
-  ai_cicd_skill: { label: "AI CI/CD Scan", icon: "⚙" },
-  ai_dynamic_skill: { label: "AI Dynamic Analysis", icon: "◉" },
+  ai_cicd_skill: { label: "CI/CD Scan", icon: "⚙" },
+  ai_dynamic_skill: { label: "Dynamic Analysis", icon: "◉" },
 };
 export const NODE_WIDTH = 260;
 const NODE_ROW_GAP = 52;

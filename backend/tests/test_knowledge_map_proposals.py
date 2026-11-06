@@ -166,6 +166,44 @@ def test_move_is_atomic_when_publication_fails_part_way(client, monkeypatch):
     assert proposal["status"] == "approved"
 
 
+def test_stale_approved_proposal_can_be_rejected_but_not_published(client):
+    domain = make_domain()
+    topic = make_topic()
+    first = propose(client, "PLACE_TOPIC", topic["id"], {"domain_id": domain}).json()
+    second = propose(client, "PLACE_TOPIC", topic["id"], {"domain_id": domain}, reason="The same placement, proposed twice.").json()
+    approved_first, approved_second = review(client, first, "approve"), review(client, second, "approve")
+    publish(client, approved_first)
+    publish(client, approved_second, expected=409)
+    rejected = review(client, approved_second, "reject")
+    assert rejected["status"] == "rejected"
+    publish(client, rejected, expected=409)
+    assert placement(topic["id"], domain) is not None
+
+
+@pytest.mark.parametrize("action", ["approve", "defer", "modify"])
+def test_approved_proposal_only_accepts_reject(client, action):
+    domain = make_domain()
+    approved = review(client, propose(client, "PLACE_TOPIC", make_topic()["id"], {"domain_id": domain}).json(), "approve")
+    extra = {"proposed_content": {"domain_id": domain}} if action == "modify" else {}
+    response = client.post(f"/api/v1/knowledge/admin/proposals/{approved['id']}/review", headers=ADMIN, json={"expected_version": approved["version"], "action": action, "reviewer_note": "Too late.", **extra})
+    assert response.status_code == 409
+
+
+def test_published_proposal_cannot_be_rejected(client):
+    published = create_and_publish(client, "PLACE_TOPIC", make_topic()["id"], {"domain_id": make_domain()})
+    response = client.post(f"/api/v1/knowledge/admin/proposals/{published['id']}/review", headers=ADMIN, json={"expected_version": published["version"], "action": "reject", "reviewer_note": "Too late."})
+    assert response.status_code == 409
+
+
+def test_draft_can_be_approved_and_published(client):
+    domain = make_domain()
+    topic = make_topic()
+    draft = propose(client, "PLACE_TOPIC", topic["id"], {"domain_id": domain}, submit_for_review=False).json()
+    assert draft["status"] == "draft"
+    publish(client, review(client, draft, "approve"))
+    assert placement(topic["id"], domain) is not None
+
+
 def test_reject_and_defer_leave_live_data_unchanged(client):
     domain = make_domain()
     topic = make_topic()

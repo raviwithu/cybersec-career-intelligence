@@ -4,7 +4,7 @@ import { createKnowledgeProposal, fetchKnowledgeAdminTopic, fetchLevels } from "
 import { Badge, ErrorState, Loading } from "./components";
 import { ArchitectureEditor, CodeExamplesEditor } from "./KnowledgeSectionForms";
 
-const sectionLabels = { overview: "Overview", how_it_works: "How It Works", attack_surfaces: "Attack Surfaces", mitigations: "Mitigations", real_world_examples: "Real-World Examples", references: "References", career_level_guidance: "Career-Level Guidance", code_examples: "Code Examples", architecture: "Architecture Diagrams", source_review: "Source Review", dynamic_review: "Dynamic Review", information_gathering: "Information Gathering", ai_cicd_skill: "AI CI/CD Scan", ai_dynamic_skill: "AI Dynamic Analysis" };
+const sectionLabels = { overview: "Overview", how_it_works: "How It Works", attack_surfaces: "Attack Surfaces", mitigations: "Mitigations", real_world_examples: "Real-World Examples", references: "References", career_level_guidance: "Career-Level Guidance", code_examples: "Code Examples", architecture: "Architecture Diagrams", source_review: "Source Review", dynamic_review: "Dynamic Review", information_gathering: "Information Gathering", ai_cicd_skill: "CI/CD Scan", ai_dynamic_skill: "Dynamic Analysis" };
 const defaults = {
   overview: { short_description: "", technical_explanation: "", key_concepts: [], related_technologies: [] },
   how_it_works: { workflow: "", architecture_explanation: "", diagram: { nodes: [], edges: [] }, steps: [] },

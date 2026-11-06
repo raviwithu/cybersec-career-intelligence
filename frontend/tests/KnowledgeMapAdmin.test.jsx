@@ -126,7 +126,7 @@ describe("Knowledge Map Management", () => {
     expect(within(coverage).getByText("Published")).toBeTruthy();
     expect(within(coverage).getByText("In review")).toBeTruthy();
     expect(within(coverage).getByText("Missing")).toBeTruthy();
-    fireEvent.click(within(coverage).getByRole("button", { name: "Add AI CI/CD Scan" }));
+    fireEvent.click(within(coverage).getByRole("button", { name: "Add CI/CD Scan" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByLabelText("Section").value).toBe("ai_cicd_skill");
   });
@@ -387,6 +387,26 @@ describe("Knowledge Review mind map tab", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Mind Map Changes" }));
     fireEvent.click(await screen.findByRole("button", { name: "Publish approved proposal" }));
     await waitFor(() => expect(posted.some((item) => item.path === "/knowledge/admin/proposals/50/publish" && item.expected_version === 2 && item.confirm === true)).toBe(true));
+  });
+
+  const sectionProposal = (extra) => ({ ...{ id: 51, map: false, schema_version: "1.0", source_type: "manual", topic_id: 1, topic_key: "oauth-2", action: "UPDATE_SECTION", section: "overview", status: "review", version: 1, base_section_version: 1, original_content: { short_description: "old" }, proposed_content: { short_description: "new" }, change_reason: "", created_at: "2026-10-30T10:00:00Z", updated_at: "2026-10-30T10:00:00Z", references: [], review_decisions: [] }, ...extra });
+
+  it("offers the review actions on a draft, and lists drafts in the status filter", async () => {
+    proposals = [sectionProposal({ status: "draft" })];
+    render(<KnowledgeReviewPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(posted.some((item) => item.path === "/knowledge/admin/proposals/51/review" && item.action === "approve")).toBe(true));
+    expect(screen.getByRole("button", { name: "Reject" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Draft" })).toBeTruthy();
+  });
+
+  it("lets an approved proposal be rejected as well as published", async () => {
+    proposals = [sectionProposal({ status: "approved", version: 2 })];
+    render(<KnowledgeReviewPage />);
+    expect(await screen.findByRole("button", { name: "Publish approved proposal" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    await waitFor(() => expect(posted.some((item) => item.path === "/knowledge/admin/proposals/51/review" && item.action === "reject" && item.expected_version === 2)).toBe(true));
   });
 
   it("keeps the existing all-proposals view for section changes", async () => {
